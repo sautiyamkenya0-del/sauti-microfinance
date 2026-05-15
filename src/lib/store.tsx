@@ -899,6 +899,8 @@ const seedAttendance: Attendance[] = [
   { id: "A8", staffId: "S3", date: today(), status: "present", checkIn: "08:20" },
 ];
 type Store = {
+  isAuthenticated: boolean;
+  setAuthenticated: (next: boolean) => void;
   currentUser: Staff;
   setCurrentUser: (s: Staff) => void;
   staff: Staff[];
@@ -957,6 +959,8 @@ const Ctx = createContext<Store | null>(null);
 
 const STAFF_KEY = "sauti_staff_v3";
 const ATT_KEY = "sauti_attendance_v3";
+const AUTH_KEY = "sauti_auth_v1";
+const AUTH_STAFF_KEY = "sauti_auth_staff_v1";
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [staff, setStaff] = useState<Staff[]>(() => {
@@ -966,7 +970,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {}
     return seedStaff;
   });
-  const [currentUser, setCurrentUser] = useState<Staff>(() => staff[0] ?? seedStaff[0]);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(AUTH_KEY) === "1";
+    } catch {}
+    return false;
+  });
+  const [currentUser, setCurrentUserState] = useState<Staff>(() => {
+    try {
+      const savedId = localStorage.getItem(AUTH_STAFF_KEY);
+      if (savedId) {
+        const savedStaff = staff.find((member) => member.id === savedId);
+        if (savedStaff) return savedStaff;
+      }
+    } catch {}
+    return staff[0] ?? seedStaff[0];
+  });
   const [members, setMembers] = useState<Member[]>(seedMembers);
   const [loans, setLoans] = useState<Loan[]>(seedLoans);
   const [transactions, setTransactions] = useState<Transaction[]>(seedTx);
@@ -985,8 +1004,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return seedAttendance;
   });
 
+  const setAuthenticated = (next: boolean) => {
+    setIsAuthenticated(next);
+    try {
+      if (next) {
+        localStorage.setItem(AUTH_KEY, "1");
+      } else {
+        localStorage.removeItem(AUTH_KEY);
+        localStorage.removeItem(AUTH_STAFF_KEY);
+      }
+    } catch {}
+  };
+
+  const setCurrentUser = (next: Staff) => {
+    setCurrentUserState(next);
+    try {
+      localStorage.setItem(AUTH_STAFF_KEY, next.id);
+    } catch {}
+  };
+
   const value = useMemo<Store>(
     () => ({
+      isAuthenticated,
+      setAuthenticated,
       currentUser,
       setCurrentUser,
       staff,
@@ -1186,12 +1226,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
         if (found) {
           setCurrentUser(found);
+          setAuthenticated(true);
           return found;
         }
         return null;
       },
       logout: () => {
-        setCurrentUser(seedStaff[0]);
+        setAuthenticated(false);
+        setCurrentUserState(seedStaff[0]);
       },
       addStaff: (s) => {
         const id = `S${100 + staff.length + 1}`;
@@ -1538,6 +1580,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
     }),
     [
+      isAuthenticated,
       currentUser,
       staff,
       members,

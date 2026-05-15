@@ -10,11 +10,11 @@ export function SplashScreen() {
       setShown(false);
       return;
     }
-    const t1 = setTimeout(() => setFade(true), 1600);
+    const t1 = setTimeout(() => setFade(true), 2400);
     const t2 = setTimeout(() => {
       setShown(false);
       sessionStorage.setItem("sauti_splash", "1");
-    }, 2200);
+    }, 3000);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);

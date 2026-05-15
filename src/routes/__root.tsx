@@ -2,16 +2,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
   Link,
+  Navigate,
   createRootRouteWithContext,
   useRouter,
   HeadContent,
   Scripts,
+  useRouterState,
 } from "@tanstack/react-router";
 
 import appCss from "../styles.css?url";
-import { StoreProvider } from "@/lib/store";
+import { StoreProvider, useStore } from "@/lib/store";
 import { AppSidebar } from "@/components/AppSidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { SplashScreen } from "@/components/SplashScreen";
 
 function NotFoundComponent() {
   return (
@@ -123,14 +126,47 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <StoreProvider>
-        <div className="flex min-h-screen w-full bg-background">
-          <AppSidebar />
-          <div className="flex-1 flex flex-col min-w-0">
-            <Outlet />
-          </div>
-        </div>
+        <AppLayout />
         <Toaster />
       </StoreProvider>
     </QueryClientProvider>
+  );
+}
+
+function AppLayout() {
+  const { isAuthenticated } = useStore();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isLoginRoute = pathname === "/login";
+
+  if (!isAuthenticated && !isLoginRoute) {
+    return (
+      <>
+        <SplashScreen />
+        <Navigate to="/login" replace />
+      </>
+    );
+  }
+
+  if (isLoginRoute) {
+    if (isAuthenticated) {
+      return <Navigate to="/" replace />;
+    }
+
+    return (
+      <div className="min-h-screen bg-background">
+        <SplashScreen />
+        <Outlet />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen w-full bg-background">
+      <SplashScreen />
+      <AppSidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Outlet />
+      </div>
+    </div>
   );
 }
