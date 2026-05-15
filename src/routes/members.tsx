@@ -3,7 +3,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge } from "@/components/ui-bits";
 import { useStore, fmtKES, type Member } from "@/lib/store";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { MemberLoanHistory } from "@/components/loans/LoanBook";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
@@ -18,7 +18,13 @@ export const Route = createFileRoute("/members")({
 function MembersPage() {
   const { members, loans, addMember, sharePrice, currentUser } = useStore();
   const [open, setOpen] = useState(false);
-  const nextMemberNo = `SBC${String(members.length + 1).padStart(4, "0")}K`;
+  const nextMemberNo = useMemo(() => {
+    const maxNumeric = members.reduce((max, mem) => {
+      const value = Number(mem.id.replace(/^M0*/, "") || "0");
+      return Math.max(max, value);
+    }, 0);
+    return `SBC${String(Math.max(maxNumeric + 1, 101)).padStart(4, "0")}K`;
+  }, [members]);
   const emptyForm = {
     memberNo: nextMemberNo,
     firstName: "",
@@ -43,6 +49,9 @@ function MembersPage() {
     investorNotes: "",
   };
   const [form, setForm] = useState(emptyForm);
+  useEffect(() => {
+    setForm((prev) => ({ ...prev, memberNo: nextMemberNo }));
+  }, [nextMemberNo]);
   const [q, setQ] = useState("");
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [payDialog, setPayDialog] = useState<{ member: Member; mode: "member" | "officer" } | null>(
@@ -206,11 +215,7 @@ function MembersPage() {
                 <h4 className="font-display text-base font-semibold mb-3">Applicant Details</h4>
                 <div className="space-y-3">
                   <Field label="Member No.">
-                    <input
-                      className="input"
-                      value={form.memberNo}
-                      onChange={(e) => setForm({ ...form, memberNo: e.target.value })}
-                    />
+                    <input className="input" value={form.memberNo} readOnly />
                   </Field>
                   <div className="grid grid-cols-3 gap-3">
                     <Field label="First Name">

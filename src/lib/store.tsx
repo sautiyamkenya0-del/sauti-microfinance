@@ -266,8 +266,8 @@ export const SBC_TERM_RATE_PCT_BY_DAYS: Record<LoanTermDays, number> = {
   7: 10,
   14: 15,
   30: 20,
-  60: 40,
-  90: 60,
+  60: 25,
+  90: 30,
 };
 
 /**
@@ -817,23 +817,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return true;
       },
       resolveMpesaAccount: (account: string) => {
-        const norm = account.trim().toUpperCase();
-        // Convention: SBC<NNN>[suffix] — last 3+ digits = member numeric ID
-        const m = norm.match(/SBC0*(\d{1,4})/);
-        if (!m) return undefined;
-        const memberNum = m[1].padStart(3, "0");
-        return members.find((mb) => mb.id === `M${memberNum}`);
+        const memberId = parseMembershipNumber(account);
+        if (!memberId) return undefined;
+        return members.find((mb) => mb.id === memberId);
       },
       applyMpesaPayment: (account, amount, payerName, mpesaRef) => {
         const norm = account.trim().toUpperCase();
         const notes: string[] = [];
-        const m = norm.match(/SBC0*(\d{1,4})/);
-        if (!m) {
+        const memberId = parseMembershipNumber(account);
+        if (!memberId) {
           notes.push(`Account "${account}" did not match SBC member pattern.`);
           return { matched: false, account: norm, notes };
         }
-        const memberNum = m[1].padStart(3, "0");
-        const memberId = `M${memberNum}`;
         const member = members.find((mb) => mb.id === memberId);
         if (!member) {
           notes.push(`No member with ID ${memberId}. Holding as suspense.`);
@@ -1129,6 +1124,18 @@ export function termPeriodsFromDays(termDays?: number) {
 
 export function loanRateForTerm(termDays?: number) {
   return SBC_TERM_RATE_PCT_BY_DAYS[normalizeLoanTermDays(termDays)];
+}
+
+export function formatMembershipNumber(memberId: string) {
+  const digits = String(memberId).replace(/^M0*/, "") || "0";
+  return `SBC${digits.padStart(4, "0")}K`;
+}
+
+export function parseMembershipNumber(account: string) {
+  const norm = account.trim().toUpperCase();
+  const m = norm.match(/SBC0*(\d{1,4})/);
+  if (!m) return undefined;
+  return `M${m[1].padStart(3, "0")}`;
 }
 
 export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths">) {

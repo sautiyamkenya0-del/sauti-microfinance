@@ -59,7 +59,6 @@ export function FirstTimeApplication({
     kinPhone: "",
     kinRelationship: "",
     kinAddress: "",
-    loanCategory: "Normal" as "Normal" | "Premium",
     loanAmount: 5000,
     purpose: "Stock/Goods",
     repaymentPlan: "Daily" as "Daily" | "Weekly" | "Monthly",
@@ -72,7 +71,11 @@ export function FirstTimeApplication({
     dailySavingsPlan: "50" as "50" | "100",
   });
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
-  const repaymentOptions = f.loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+  const loanCategory = useMemo<"Normal" | "Premium">(
+    () => (f.loanAmount > 5000 ? "Premium" : "Normal"),
+    [f.loanAmount],
+  );
+  const repaymentOptions = loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
 
   useEffect(() => {
     if (repaymentOptions.includes(f.repaymentDays as (typeof repaymentOptions)[number])) return;
@@ -239,8 +242,8 @@ export function FirstTimeApplication({
         <div className="p-5 grid md:grid-cols-2 lg:grid-cols-3 gap-3">
           <Select
             label="Loan Category"
-            value={f.loanCategory}
-            onChange={(v) => set("loanCategory", v as "Normal" | "Premium")}
+            value={loanCategory}
+            disabled
             options={["Normal", "Premium"]}
           />
           <Input

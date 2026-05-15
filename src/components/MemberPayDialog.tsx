@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useStore, fmtKES, type Member } from "@/lib/store";
+import { useStore, fmtKES, formatMembershipNumber, type Member } from "@/lib/store";
 import { toast } from "sonner";
 import { Smartphone, X, Loader2 } from "lucide-react";
 
@@ -61,7 +61,7 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
     }
 
     setBusy(true);
-    const accountRef = `SBC${member.id.replace(/^M/, "")}`;
+    const accountRef = formatMembershipNumber(member.id);
     const purposeLabel = purposeOptions.find((p) => p.value === purpose)?.label ?? "Sauti payment";
 
     try {

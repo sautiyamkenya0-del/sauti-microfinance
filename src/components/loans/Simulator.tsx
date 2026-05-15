@@ -55,8 +55,8 @@ function simulatorRatePct(days: number) {
   if (days === 7) return 10;
   if (days === 14) return 15;
   if (days === 30) return 20;
-  if (days === 60) return 40;
-  return 60;
+  if (days === 60) return 25;
+  return 30;
 }
 
 export function Simulator() {
