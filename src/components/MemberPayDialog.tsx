@@ -8,7 +8,7 @@ type Props = { member: Member; mode?: "member" | "officer"; onClose: () => void 
 type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront";
 
 /**
- * STK Push prompt — sends a real Daraja prompt to the member's phone.
+ * STK Push prompt - sends a real Daraja prompt to the member's phone.
  * Member mode: free-form amount + purpose (no day caps).
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
@@ -17,7 +17,6 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
   const [busy, setBusy] = useState(false);
 
-  // ----- Officer mode (unchanged behavior, fees + upfront) -----
   const [stickerOn, setStickerOn] = useState(member.fees.hasShop || false);
   const fees = member.fees;
   const feeQueue = [
@@ -27,7 +26,6 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   ];
   const feesDue = feeQueue.filter((f) => f.owed).reduce((s, f) => s + f.amount, 0);
 
-  // ----- Member mode (free-form) -----
   const defaultPurpose: Purpose = member.isInvestor
     ? "investment"
     : activeLoan
@@ -56,14 +54,27 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
     return Math.max(0, Math.floor(amount || 0));
   }, [mode, purpose, amount, feesDue]);
 
+  function simulateLocalPayment(accountRef: string) {
+    const result = applyMpesaPayment(
+      accountRef,
+      previewAmount,
+      member.name,
+      `SIM${Date.now().toString().slice(-6)}`,
+    );
+    toast.success(`Processed locally - ${result.notes.join(" ")}`);
+    onClose();
+  }
+
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
     if (mode === "officer" && purpose === "upfront" && member.fees.firstUpfrontPaid) {
-      return toast.warning("First upfront already settled — STK prompt skipped.");
+      return toast.warning("First upfront already settled - STK prompt skipped.");
     }
+
     setBusy(true);
     const accountRef = `SBC${member.id.replace(/^M/, "")}`;
     const purposeLabel = purposeOptions.find((p) => p.value === purpose)?.label ?? "Sauti payment";
+
     try {
       const res = await fetch("/api/public/mpesa/stkpush", {
         method: "POST",
@@ -72,36 +83,47 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
           phone: member.phone,
           amount: previewAmount,
           accountRef,
-          description: `${purposeLabel} · ${member.name}`,
+          description: `${purposeLabel} - ${member.name}`,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        const msg = data?.error ?? data?.errorMessage ?? "STK push failed";
-        toast.error(msg, {
-          duration: 8000,
-          description: data?.daraja ? String(data.daraja).slice(0, 200) : undefined,
-        });
-        setBusy(false);
+
+      const contentType = res.headers.get("content-type") ?? "";
+      if (res.status === 404 || !contentType.includes("application/json")) {
+        toast.warning("M-Pesa server endpoint not available. Falling back to local simulation.");
+        simulateLocalPayment(accountRef);
         return;
       }
-      if (data.simulated) {
-        // Dev mode — run the in-memory allocation engine so the UI updates immediately.
-        const r = applyMpesaPayment(
-          accountRef,
-          previewAmount,
-          member.name,
-          `STK${Date.now().toString().slice(-6)}`,
-        );
-        toast.success(`Simulated STK · ${r.notes.join(" ")}`);
-      } else {
-        toast.success(
-          `STK prompt sent to ${member.phone} · CheckoutRequestID ${data.CheckoutRequestID ?? "—"}`,
-        );
+
+      const data = (await res.json()) as {
+        ok?: boolean;
+        simulated?: boolean;
+        error?: string;
+        errorMessage?: string;
+        daraja?: string;
+        CheckoutRequestID?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        const msg = data.error ?? data.errorMessage ?? "STK push failed";
+        toast.error(msg, {
+          duration: 8000,
+          description: data.daraja ? String(data.daraja).slice(0, 200) : undefined,
+        });
+        return;
       }
+
+      if (data.simulated) {
+        simulateLocalPayment(accountRef);
+        return;
+      }
+
+      toast.success(
+        `STK prompt sent to ${member.phone} - CheckoutRequestID ${data.CheckoutRequestID ?? "-"}`,
+      );
       onClose();
-    } catch (e: any) {
-      toast.error(e?.message ?? "STK push failed");
+    } catch {
+      toast.warning("M-Pesa server unavailable. Falling back to local simulation.");
+      simulateLocalPayment(accountRef);
     } finally {
       setBusy(false);
     }
@@ -113,32 +135,32 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
         className="bg-card rounded-xl border border-border w-full max-w-md p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between mb-3">
+        <div className="mb-3 flex items-start justify-between">
           <div>
             <h3 className="font-display text-lg font-semibold">
               {mode === "officer" ? "Prompt for upfront" : "Pay via M-Pesa"}
             </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {member.name} · Membership{" "}
-              <span className="font-mono">SBC{member.id.replace(/^M/, "")}</span> · {member.phone}
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {member.name} - Membership{" "}
+              <span className="font-mono">SBC{member.id.replace(/^M/, "")}</span> - {member.phone}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted"
+            className="grid h-8 w-8 place-items-center rounded-md hover:bg-muted"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {mode === "member" ? (
-          <div className="space-y-3 mb-3">
+          <div className="mb-3 space-y-3">
             <label className="block">
               <span className="text-sm font-medium">Purpose</span>
               <select
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value as Purpose)}
-                className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
               >
                 {purposeOptions.map((o) => (
                   <option key={o.value} value={o.value} disabled={o.disabled}>
@@ -156,10 +178,10 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 placeholder="e.g. 20000"
                 value={amount || ""}
                 onChange={(e) => setAmount(Number(e.target.value))}
-                className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-base font-semibold"
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-base font-semibold"
               />
-              <div className="text-xs text-muted-foreground mt-1">
-                Pay any amount you wish — no caps.
+              <div className="mt-1 text-xs text-muted-foreground">
+                Pay any amount you wish - no caps.
               </div>
             </label>
             {member.isInvestor && (
@@ -174,13 +196,21 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setPurpose("upfront")}
-                className={`py-2 rounded-md text-xs font-medium border ${purpose === "upfront" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                className={`rounded-md border py-2 text-xs font-medium ${
+                  purpose === "upfront"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border hover:bg-muted"
+                }`}
               >
                 First-time upfront
               </button>
               <button
                 onClick={() => setPurpose("fees")}
-                className={`py-2 rounded-md text-xs font-medium border ${purpose === "fees" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                className={`rounded-md border py-2 text-xs font-medium ${
+                  purpose === "fees"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border hover:bg-muted"
+                }`}
               >
                 Mandatory fees only
               </button>
@@ -193,10 +223,10 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
               />
               Member has a physical shop (sticker fee applicable)
             </label>
-            <div className="bg-muted/40 border border-border rounded-md p-3 text-xs space-y-1">
+            <div className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs">
               {feeQueue.map((f) => (
                 <div key={f.key} className="flex justify-between">
-                  <span className={f.owed ? "" : "line-through text-muted-foreground"}>
+                  <span className={f.owed ? "" : "text-muted-foreground line-through"}>
                     {f.label}
                   </span>
                   <span>
@@ -205,7 +235,7 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 </div>
               ))}
               {purpose === "upfront" && (
-                <div className="flex justify-between border-t border-border pt-1 mt-1">
+                <div className="mt-1 flex justify-between border-t border-border pt-1">
                   <span>First daily installment</span>
                   <span>{fmtKES(500)}</span>
                 </div>
@@ -213,13 +243,13 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
             </div>
             {purpose === "upfront" && member.fees.firstUpfrontPaid && (
               <p className="text-xs text-accent">
-                Member has already paid first upfront manually — prompt will be disabled.
+                Member has already paid first upfront manually - prompt will be disabled.
               </p>
             )}
           </div>
         )}
 
-        <div className="bg-primary/10 border border-primary/30 rounded-md p-3 mb-4">
+        <div className="mb-4 rounded-md border border-primary/30 bg-primary/10 p-3">
           <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
             Total to prompt
           </div>
@@ -233,10 +263,10 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
             previewAmount <= 0 ||
             (mode === "officer" && purpose === "upfront" && member.fees.firstUpfrontPaid)
           }
-          className="w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2.5 rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-40"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
-          {busy ? "Sending…" : "Send STK Prompt"}
+          {busy ? "Sending..." : "Send STK Prompt"}
         </button>
       </div>
     </div>
