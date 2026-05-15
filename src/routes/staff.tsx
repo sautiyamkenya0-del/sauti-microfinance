@@ -195,7 +195,7 @@ function StaffChat() {
                     (m.from === s.id && m.to === currentUser.id) ||
                     (m.to === s.id && m.from === currentUser.id),
                 );
-              const photo = meta[s.id]?.photo;
+              const photo = s.photo ?? meta[s.id]?.photo;
               return (
                 <button
                   key={s.id}
@@ -227,7 +227,7 @@ function StaffChat() {
             <div className="px-5 py-3 border-b border-border font-medium text-sm flex items-center gap-2">
               {(() => {
                 const o = others.find((x) => x.id === activeId);
-                const p = o && meta[o.id]?.photo;
+                const p = o?.photo ?? (o && meta[o.id]?.photo);
                 return p ? (
                   <img src={p} className="h-7 w-7 rounded-full object-cover" />
                 ) : (

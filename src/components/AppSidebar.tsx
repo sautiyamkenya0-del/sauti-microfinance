@@ -1,25 +1,23 @@
 import { useMemo, useRef } from "react";
 import { Link, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import {
-  LayoutDashboard,
   Banknote,
-  Users,
-  Sparkles,
   IdCard,
+  LayoutDashboard,
   LogOut,
   MessageSquare,
-  Wallet,
   ShieldCheck,
+  Sparkles,
+  Users,
+  Wallet,
 } from "lucide-react";
-import { useStore, navForUser, roleLabel } from "@/lib/store";
-import { useUnreadChatCount } from "@/lib/notifications";
-import { useApprovals } from "@/lib/approvals";
-import { sectionForPath } from "@/components/SectionTabs";
-import logo from "@/assets/sauti-logo.png";
 
-/** 8 flat top-level entries. Sub-pages live as in-page tabs (see SectionTabs)
- *  so the sidebar never expands. `requires` lists which legacy nav-keys the
- *  user must have access to for the entry to appear. */
+import logo from "@/assets/sauti-logo.png";
+import { sectionForPath } from "@/components/SectionTabs";
+import { useApprovals } from "@/lib/approvals";
+import { useUnreadChatCount } from "@/lib/notifications";
+import { navForUser, roleLabel, useStore } from "@/lib/store";
+
 type Entry = {
   id: string;
   to: string;
@@ -28,6 +26,7 @@ type Entry = {
   section?: string;
   requires: string[];
 };
+
 const ENTRIES: Entry[] = [
   { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, requires: ["dashboard"] },
   { id: "ai", to: "/ai", label: "SautiAI", icon: Sparkles, requires: ["ai"] },
@@ -83,57 +82,22 @@ export function AppSidebar() {
   const { pendingCount } = useApprovals();
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const activeSection = sectionForPath(path);
-  const entries = ENTRIES.filter((e) => e.requires.some((k) => allowed.has(k)));
+  const entries = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
 
-  // 🔐 Hidden door: tap the logo 5 times within 3s → /secret-keys (director-only page).
   const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
   function onLogoTap() {
     const now = Date.now();
-    const t = tapsRef.current;
-    if (now - t.first > 3000) {
-      t.count = 0;
-      t.first = now;
+    const tap = tapsRef.current;
+    if (now - tap.first > 3000) {
+      tap.count = 0;
+      tap.first = now;
     }
-    t.count += 1;
-    if (t.count >= 5) {
+    tap.count += 1;
+    if (tap.count >= 5) {
       tapsRef.current = { count: 0, first: 0 };
       if (currentUser.role === "director") navigate({ to: "/secret-keys" });
     }
   }
-
-  const renderEntry = (e: Entry) => {
-    const Icon = e.icon;
-    const active = e.section
-      ? activeSection === e.section
-      : path === e.to || (e.to !== "/" && path.startsWith(e.to + "/"));
-    // Show a subtle badge when the section contains unread chat / pending approvals.
-    const showChatBadge = e.id === "comms" && unreadChat > 0;
-    const showApprovalBadge = e.id === "lending" && pendingCount > 0;
-    return (
-      <Link
-        key={e.id}
-        to={e.to}
-        className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
-          active
-            ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium"
-            : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-        }`}
-      >
-        <Icon className="h-4 w-4" />
-        <span className="flex-1">{e.label}</span>
-        {showChatBadge && (
-          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold grid place-items-center animate-pulse">
-            {unreadChat}
-          </span>
-        )}
-        {showApprovalBadge && (
-          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-accent-foreground text-[10px] font-bold grid place-items-center">
-            {pendingCount}
-          </span>
-        )}
-      </Link>
-    );
-  };
 
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
@@ -160,17 +124,66 @@ export function AppSidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">{entries.map(renderEntry)}</nav>
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+        {entries.map((entry) => {
+          const Icon = entry.icon;
+          const active = entry.section
+            ? activeSection === entry.section
+            : path === entry.to || (entry.to !== "/" && path.startsWith(entry.to + "/"));
+          const showChatBadge = entry.id === "comms" && unreadChat > 0;
+          const showApprovalBadge = entry.id === "lending" && pendingCount > 0;
+
+          return (
+            <Link
+              key={entry.id}
+              to={entry.to}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
+                active
+                  ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium"
+                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span className="flex-1">{entry.label}</span>
+              {showChatBadge && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold grid place-items-center animate-pulse">
+                  {unreadChat}
+                </span>
+              )}
+              {showApprovalBadge && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-accent-foreground text-[10px] font-bold grid place-items-center">
+                  {pendingCount}
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
 
       <div className="border-t border-sidebar-border p-3 space-y-2">
         <div className="px-1">
           <div className="text-[10px] uppercase tracking-wider text-sidebar-foreground/50">
             Signed in
           </div>
-          <div className="text-sm font-medium truncate">{currentUser.name}</div>
-          <div className="text-[11px] text-sidebar-foreground/60">
-            {roleLabel(currentUser.role)}
-            {currentUser.canMarkAttendance ? " · Attendance" : ""}
+          <div className="mt-2 flex items-center gap-2">
+            {currentUser.photo ? (
+              <img
+                src={currentUser.photo}
+                alt={currentUser.name}
+                className="h-9 w-9 rounded-full object-cover border border-sidebar-border"
+              />
+            ) : (
+              <div className="h-9 w-9 rounded-full bg-sidebar-primary text-sidebar-primary-foreground grid place-items-center text-xs font-semibold">
+                {currentUser.name[0]}
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">{currentUser.name}</div>
+              <div className="text-[11px] text-sidebar-foreground/60">
+                {roleLabel(currentUser.role)}
+                {currentUser.canMarkAttendance ? " · Attendance" : ""}
+              </div>
+            </div>
           </div>
         </div>
         <button

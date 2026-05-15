@@ -7,12 +7,15 @@ import {
   normalizeLoanTermDays,
   sbcDeductions,
   SBC_FEES,
-  SBC_LOAN_TERMS,
+  PREMIUM_LOAN_TERMS,
+  STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+
+type ReconfirmRow = [label: string, checked: boolean, onChange: (value: boolean) => void];
 
 export function RepeatApplication({
   memberId,
@@ -44,6 +47,12 @@ export function RepeatApplication({
   const [confirmGuar, setConfirmGuar] = useState(false);
   const [confirmBiz, setConfirmBiz] = useState(false);
   const [changesSinceLast, setChangesSinceLast] = useState("");
+  const repaymentOptions = loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+
+  useEffect(() => {
+    if (repaymentOptions.includes(repaymentDays as (typeof repaymentOptions)[number])) return;
+    setRepaymentDays(repaymentOptions[repaymentOptions.length - 1]);
+  }, [repaymentDays, repaymentOptions]);
 
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDays(repaymentDays);
@@ -63,7 +72,7 @@ export function RepeatApplication({
       net: loanAmount - ded.total,
       daily: total / termDays,
     };
-  }, [loanAmount, loanCategory, repaymentDays]);
+  }, [loanAmount, repaymentDays]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
@@ -108,12 +117,14 @@ export function RepeatApplication({
           <p className="text-xs text-muted-foreground">
             Per SBC policy, repeat applications only re-confirm previously captured data.
           </p>
-          {[
-            ["KYC details on file are still accurate", confirmKYC, setConfirmKYC],
-            ["Next of Kin contact is still accurate", confirmKin, setConfirmKin],
-            ["Guarantors are still willing & active SBC members", confirmGuar, setConfirmGuar],
-            ["Business type & location are unchanged", confirmBiz, setConfirmBiz],
-          ].map(([label, v, on]: any) => (
+          {(
+            [
+              ["KYC details on file are still accurate", confirmKYC, setConfirmKYC],
+              ["Next of Kin contact is still accurate", confirmKin, setConfirmKin],
+              ["Guarantors are still willing & active SBC members", confirmGuar, setConfirmGuar],
+              ["Business type & location are unchanged", confirmBiz, setConfirmBiz],
+            ] as ReconfirmRow[]
+          ).map(([label, v, on]) => (
             <label key={label} className="flex items-start gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -143,7 +154,7 @@ export function RepeatApplication({
           <Select
             label="Loan Category"
             value={loanCategory}
-            onChange={(v) => setLoanCategory(v as any)}
+            onChange={(v) => setLoanCategory(v as "Normal" | "Premium")}
             options={["Normal", "Premium"]}
           />
           <Input
@@ -161,19 +172,19 @@ export function RepeatApplication({
           <Select
             label="Repayment Plan"
             value={repaymentPlan}
-            onChange={(v) => setRepaymentPlan(v as any)}
+            onChange={(v) => setRepaymentPlan(v as "Daily" | "Weekly" | "Monthly")}
             options={["Daily", "Weekly", "Monthly"]}
           />
           <Select
             label="Repayment Period (days)"
             value={String(calc.termDays)}
             onChange={(v) => setRepaymentDays(Number(v))}
-            options={SBC_LOAN_TERMS.map((d) => String(d))}
+            options={repaymentOptions.map((d) => String(d))}
           />
           <Select
             label="Daily Savings Plan"
             value={savingsPlan}
-            onChange={(v) => setSavingsPlan(v as any)}
+            onChange={(v) => setSavingsPlan(v as "50" | "100")}
             options={["50", "100"]}
           />
         </div>
@@ -183,7 +194,7 @@ export function RepeatApplication({
         <div className="p-5 grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
             <Row label="Loan Amount" value={fmtKES(loanAmount)} />
-            <Row label={`Interest (${calc.ratePct}%)`} value={fmtKES(calc.interest)} />
+            <Row label="Interest" value={fmtKES(calc.interest)} />
             <Row
               label={`Processing (${SBC_FEES.processingPct}%)`}
               value={fmtKES(calc.ded.processing)}

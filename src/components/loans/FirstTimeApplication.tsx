@@ -7,13 +7,15 @@ import {
   normalizeLoanTermDays,
   sbcDeductions,
   SBC_FEES,
-  SBC_LOAN_TERMS,
+  PREMIUM_LOAN_TERMS,
+  STANDARD_LOAN_TERMS,
   SBC_UPFRONT_TABLE,
   termPeriodsFromDays,
 } from "@/lib/store";
 import { Input, Select, Row, inputCss } from "./atoms";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { isValidLocalKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 const blankContact = { name: "", phone: "", relationship: "", location: "" };
 const blankGuarantor = { name: "", phone: "", membershipNo: "", guaranteedAmount: 0 };
@@ -70,6 +72,12 @@ export function FirstTimeApplication({
     dailySavingsPlan: "50" as "50" | "100",
   });
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
+  const repaymentOptions = f.loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+
+  useEffect(() => {
+    if (repaymentOptions.includes(f.repaymentDays as (typeof repaymentOptions)[number])) return;
+    setF((prev) => ({ ...prev, repaymentDays: repaymentOptions[repaymentOptions.length - 1] }));
+  }, [f.repaymentDays, repaymentOptions]);
 
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDays(f.repaymentDays);
@@ -91,16 +99,20 @@ export function FirstTimeApplication({
       netDisbursed: f.loanAmount - ded.total,
       dailyPay: total / termDays,
     };
-  }, [f.loanAmount, f.loanCategory, f.repaymentDays]);
+  }, [f.loanAmount, f.repaymentDays]);
 
-  const submit = () => {
+  const submit = async () => {
     if (!f.fullName || !f.phone || f.loanAmount <= 0)
       return toast.error("Complete name, phone and loan amount.");
-    let mid = members.find((x) => x.phone === f.phone)?.id;
+    if (!isValidLocalKenyanPhone(f.phone)) {
+      return toast.error("Use a local phone number starting with 07 or 01.");
+    }
+    const phone = toLocalKenyanPhone(f.phone);
+    let mid = members.find((x) => x.phone === phone)?.id;
     if (!mid)
-      mid = addMember({
+      mid = await addMember({
         name: f.fullName,
-        phone: f.phone,
+        phone,
         joinedAt: new Date().toISOString().slice(0, 10),
         status: "active",
         shares: 0,
@@ -228,7 +240,7 @@ export function FirstTimeApplication({
           <Select
             label="Loan Category"
             value={f.loanCategory}
-            onChange={(v) => set("loanCategory", v as any)}
+            onChange={(v) => set("loanCategory", v as "Normal" | "Premium")}
             options={["Normal", "Premium"]}
           />
           <Input
@@ -246,19 +258,19 @@ export function FirstTimeApplication({
           <Select
             label="Repayment Plan"
             value={f.repaymentPlan}
-            onChange={(v) => set("repaymentPlan", v as any)}
+            onChange={(v) => set("repaymentPlan", v as "Daily" | "Weekly" | "Monthly")}
             options={["Daily", "Weekly", "Monthly"]}
           />
           <Select
             label="Repayment Period (days)"
             value={String(calc.termDays)}
             onChange={(v) => set("repaymentDays", Number(v))}
-            options={SBC_LOAN_TERMS.map((d) => String(d))}
+            options={repaymentOptions.map((d) => String(d))}
           />
           <Select
             label="Daily Savings Plan"
             value={f.dailySavingsPlan}
-            onChange={(v) => set("dailySavingsPlan", v as any)}
+            onChange={(v) => set("dailySavingsPlan", v as "50" | "100")}
             options={["50", "100"]}
           />
         </div>
@@ -499,7 +511,7 @@ export function FirstTimeApplication({
         <div className="p-5 grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
             <Row label="Loan Amount Applied" value={fmtKES(f.loanAmount)} />
-            <Row label={`Interest (${calc.ratePct}%)`} value={fmtKES(calc.interest)} />
+            <Row label="Interest" value={fmtKES(calc.interest)} />
             <Row
               label={`Processing (${SBC_FEES.processingPct}%)`}
               value={fmtKES(calc.ded.processing)}

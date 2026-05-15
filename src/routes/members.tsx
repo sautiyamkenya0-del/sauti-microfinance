@@ -258,7 +258,7 @@ function MembersPage() {
                   <Field label="Phone">
                     <input
                       className="input"
-                      placeholder="+254…"
+                      placeholder="07XXXXXXXX or 01XXXXXXXX"
                       value={form.phone}
                       onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     />
@@ -409,7 +409,7 @@ function MembersPage() {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const fullName = [form.firstName, form.secondName, form.thirdName]
                     .filter(Boolean)
                     .join(" ")
@@ -422,37 +422,46 @@ function MembersPage() {
                     toast.error("Phone number is required");
                     return;
                   }
-                  addMember({
-                    name: fullName,
-                    phone: form.phone,
-                    status: "active",
-                    shares: form.shares,
-                    savingsBalance: form.savingsBalance,
-                    joinedAt: new Date().toISOString().slice(0, 10),
-                    firstName: form.firstName || undefined,
-                    secondName: form.secondName || undefined,
-                    thirdName: form.thirdName || undefined,
-                    dob: form.dob || undefined,
-                    gender: form.gender,
-                    email: form.email || undefined,
-                    address: form.address || undefined,
-                    city: form.city || undefined,
-                    county: form.county || undefined,
-                    village: form.village || undefined,
-                    oldSystemId:
-                      form.memberNo && form.memberNo !== nextMemberNo ? form.memberNo : undefined,
-                    businessName: form.businessName || undefined,
-                    businessType: form.businessType || undefined,
-                    businessAddress: form.businessAddress || undefined,
-                    fieldOfficerId: form.fieldOfficerId || undefined,
-                    investorContribution: form.isInvestor ? form.investorContribution : undefined,
-                    investorNotes: form.isInvestor ? form.investorNotes : undefined,
-                  });
-                  toast.success(
-                    form.isInvestor ? "Member-investor registered" : "Member registered",
-                  );
-                  setOpen(false);
-                  setForm(emptyForm);
+                  const phone = form.phone.replace(/\s+/g, "");
+                  if (!/^0(1|7)\d{8}$/.test(phone)) {
+                    toast.error("Use a local phone number starting with 07 or 01.");
+                    return;
+                  }
+                  try {
+                    await addMember({
+                      name: fullName,
+                      phone,
+                      status: "active",
+                      shares: form.shares,
+                      savingsBalance: form.savingsBalance,
+                      joinedAt: new Date().toISOString().slice(0, 10),
+                      firstName: form.firstName || undefined,
+                      secondName: form.secondName || undefined,
+                      thirdName: form.thirdName || undefined,
+                      dob: form.dob || undefined,
+                      gender: form.gender,
+                      email: form.email || undefined,
+                      address: form.address || undefined,
+                      city: form.city || undefined,
+                      county: form.county || undefined,
+                      village: form.village || undefined,
+                      oldSystemId:
+                        form.memberNo && form.memberNo !== nextMemberNo ? form.memberNo : undefined,
+                      businessName: form.businessName || undefined,
+                      businessType: form.businessType || undefined,
+                      businessAddress: form.businessAddress || undefined,
+                      fieldOfficerId: form.fieldOfficerId || undefined,
+                      investorContribution: form.isInvestor ? form.investorContribution : undefined,
+                      investorNotes: form.isInvestor ? form.investorNotes : undefined,
+                    });
+                    toast.success(
+                      form.isInvestor ? "Member-investor registered" : "Member registered",
+                    );
+                    setOpen(false);
+                    setForm(emptyForm);
+                  } catch (error: any) {
+                    toast.error(error?.message ?? "Failed to register member");
+                  }
                 }}
                 className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
               >

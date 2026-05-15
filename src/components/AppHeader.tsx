@@ -74,11 +74,6 @@ const ENTRIES: Entry[] = [
 
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   const { currentUser } = useStore();
-  const initials = currentUser.name
-    .split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("");
   const notes = useNotifications();
   const { markRead } = useReadIds();
   const [open, setOpen] = useState(false);
@@ -246,9 +241,21 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
           )}
         </div>
         <div className="flex items-center gap-2.5 pl-3 border-l border-border">
-          <div className="h-9 w-9 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs font-semibold">
-            {initials}
-          </div>
+          {currentUser.photo ? (
+            <img
+              src={currentUser.photo}
+              alt={currentUser.name}
+              className="h-9 w-9 rounded-full object-cover border border-border"
+            />
+          ) : (
+            <div className="h-9 w-9 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs font-semibold">
+              {currentUser.name
+                .split(" ")
+                .map((name) => name[0])
+                .slice(0, 2)
+                .join("")}
+            </div>
+          )}
           <div className="hidden sm:block">
             <div className="text-sm font-medium leading-tight">{currentUser.name}</div>
             <div className="text-xs text-muted-foreground">{roleLabel(currentUser.role)}</div>

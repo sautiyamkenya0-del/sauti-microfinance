@@ -53,9 +53,7 @@ export function PendingReview() {
                   <td className="px-5 py-3 font-mono text-xs">{l.id}</td>
                   <td className="px-5 py-3 font-medium">{m?.name}</td>
                   <td className="px-5 py-3 text-right">{fmtKES(l.principal)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {termDays} days @ {l.rate}%
-                  </td>
+                  <td className="px-5 py-3 text-right">{termDays} days</td>
                   <td className="px-5 py-3 text-xs text-muted-foreground">{o?.name}</td>
                   <td className="px-5 py-3">
                     {ap ? (
@@ -128,9 +126,7 @@ export function PendingReview() {
                     className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                   />
                 </label>
-                <div className="text-xs text-muted-foreground mb-3">
-                  Term: {termDays} days at {l.rate}% interest.
-                </div>
+                <div className="text-xs text-muted-foreground mb-3">Term: {termDays} days.</div>
                 <div className="bg-muted/50 rounded-md px-3 py-2 text-sm flex justify-between mb-3">
                   <span className="text-muted-foreground">New total repayable</span>
                   <span className="font-semibold">{fmtKES(total)}</span>

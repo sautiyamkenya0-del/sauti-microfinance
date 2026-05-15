@@ -1,4 +1,16 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
+
+import {
+  createMemberRecord,
+  createStaffRecord,
+  deleteStaffRecord,
+  loadAppData,
+  updateStaffRecord,
+  upsertAttendanceRecord,
+} from "@/lib/app-data.functions";
+import { toComparableKenyanPhone } from "@/lib/utils";
 
 export type Role = "director" | "manager" | "loan_officer";
 
@@ -44,7 +56,7 @@ export type Member = {
 };
 
 /** SBC policy: loan terms are fixed-day buckets, not months. */
-export type LoanTermDays = 7 | 14 | 30;
+export type LoanTermDays = 7 | 14 | 30 | 60 | 90;
 
 export type Loan = {
   id: string;
@@ -53,7 +65,7 @@ export type Loan = {
   approvedAmount?: number; // amount approved by manager/director (may be lower)
   rate: number; // % per month (legacy field — kept for old seed loans)
   termMonths: number; // legacy field, kept for back-compat
-  termDays?: LoanTermDays; // new: SBC fixed term (7/14/30)
+  termDays?: LoanTermDays; // new: SBC fixed term (7/14/30/60/90)
   startDate: string;
   status: "pending" | "active" | "closed" | "defaulted" | "rejected";
   officerId: string;
@@ -117,7 +129,7 @@ export type Attendance = {
   id: string;
   staffId: string;
   date: string;
-  status: "present" | "absent" | "late";
+  status: "present" | "absent" | "late" | "signed_out" | "permission";
   checkIn?: string;
   checkOut?: string;
 };
@@ -247,11 +259,15 @@ export type MpesaAllocation = {
 };
 
 const SHARE_PRICE = 500;
-export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
+export const STANDARD_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
+export const PREMIUM_LOAN_TERMS: LoanTermDays[] = [14, 30, 60, 90];
+export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30, 60, 90];
 export const SBC_TERM_RATE_PCT_BY_DAYS: Record<LoanTermDays, number> = {
   7: 10,
   14: 15,
   30: 20,
+  60: 40,
+  90: 60,
 };
 
 /**
@@ -325,10 +341,10 @@ type Store = {
       investorContribution?: number;
       investorNotes?: string;
     },
-  ) => string;
-  addStaff: (s: Omit<Staff, "id">) => string;
-  updateStaff: (id: string, patch: Partial<Staff>) => void;
-  removeStaff: (id: string) => void;
+  ) => Promise<string>;
+  addStaff: (s: Omit<Staff, "id">) => Promise<string>;
+  updateStaff: (id: string, patch: Partial<Staff>) => Promise<void>;
+  removeStaff: (id: string) => Promise<void>;
   addLoan: (l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] }) => string;
   approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => void;
   rejectLoan: (loanId: string, by: string, note?: string) => void;
@@ -339,7 +355,11 @@ type Store = {
   addFieldVisit: (v: Omit<FieldVisit, "id" | "date"> & { date?: string }) => void;
   addFollowup: (n: Omit<FollowupNote, "id" | "date"> & { date?: string }) => void;
   /** Mark another staff present/absent (caller must be director or canMarkAttendance). */
-  markAttendance: (staffId: string, status: Attendance["status"], when?: "in" | "out") => void;
+  markAttendance: (
+    staffId: string,
+    status: Attendance["status"],
+    when?: "in" | "out",
+  ) => Promise<void>;
   memberLoanCount: (memberId: string) => number;
   roundOffBalance: (memberId: string) => number;
   settlePenaltyFromPool: (penaltyId: string) => boolean;
@@ -381,6 +401,12 @@ function ensureStoreReset() {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
+  const load = useServerFn(loadAppData);
+  const createMember = useServerFn(createMemberRecord);
+  const createStaff = useServerFn(createStaffRecord);
+  const saveStaff = useServerFn(updateStaffRecord);
+  const deleteStaff = useServerFn(deleteStaffRecord);
+  const saveAttendance = useServerFn(upsertAttendanceRecord);
   const [staff, setStaff] = useState<Staff[]>(() => {
     try {
       ensureStoreReset();
@@ -426,6 +452,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return seedAttendance;
   });
 
+  async function refreshFromDatabase() {
+    const data = await load();
+    setStaff(data.staff);
+    setMembers(data.members);
+    setLoans(data.loans);
+    setTransactions(data.transactions);
+    setPettyCash(data.pettyCash);
+    setInvestors(data.investors);
+    setAttendance(data.attendance);
+    setAppraisals(data.appraisals);
+    setFieldVisits(data.fieldVisits);
+    setFollowups(data.followups);
+    setPenalties(data.penalties);
+    setRoundOff(data.roundOff);
+  }
+
+  useEffect(() => {
+    refreshFromDatabase().catch((error: any) => {
+      toast.error(error?.message ?? "Failed to load database state.");
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!staff.length) return;
+    setCurrentUserState((prev) => {
+      const savedId = (() => {
+        try {
+          return localStorage.getItem(AUTH_STAFF_KEY);
+        } catch {
+          return null;
+        }
+      })();
+      if (savedId) {
+        const savedStaff = staff.find((member) => member.id === savedId);
+        if (savedStaff) return savedStaff;
+      }
+      return staff.find((member) => member.id === prev.id) ?? staff[0];
+    });
+  }, [staff]);
+
   const setAuthenticated = (next: boolean) => {
     setIsAuthenticated(next);
     try {
@@ -464,40 +530,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       sharePrice: SHARE_PRICE,
       penalties,
       roundOff,
-      addMember: (m) => {
-        const id = `M${String(100 + members.length + 1).padStart(3, "0")}`;
-        let investorId: string | undefined;
-        if ((m as any).investorContribution && (m as any).investorContribution > 0) {
-          investorId = `I${investors.length + 1}`;
-          const inv: Investor = {
-            id: investorId,
+      addMember: async (m) => {
+        const result = await createMember({
+          data: {
             name: m.name,
-            contributed: (m as any).investorContribution,
-            sharePct: 0,
-            joinedAt: new Date().toISOString().slice(0, 10),
             phone: m.phone,
-            notes: (m as any).investorNotes,
-            memberId: id,
-          };
-          setInvestors((prev) => [...prev, inv]);
-          setTransactions((prev) => [
-            {
-              id: `T${prev.length + 1}`,
-              date: inv.joinedAt,
-              type: "investor_contribution",
-              amount: inv.contributed,
-              memberId: id,
-              by: currentUser.id,
-              note: `Member-investor onboarding: ${m.name}`,
-            },
-            ...prev,
-          ]);
-        }
-        setMembers((prev) => [
-          ...prev,
-          { ...m, id, fees: m.fees ?? { ...DEFAULT_FEES }, isInvestor: !!investorId, investorId },
-        ]);
-        return id;
+            joinedAt: m.joinedAt,
+            status: m.status,
+            shares: m.shares,
+            savingsBalance: m.savingsBalance,
+            firstName: m.firstName,
+            secondName: m.secondName,
+            thirdName: m.thirdName,
+            dob: m.dob,
+            gender: m.gender,
+            email: m.email,
+            address: m.address,
+            city: m.city,
+            county: m.county,
+            village: m.village,
+            oldSystemId: m.oldSystemId,
+            businessName: m.businessName,
+            businessType: m.businessType,
+            businessAddress: m.businessAddress,
+            fieldOfficerId: m.fieldOfficerId || currentUser.id,
+            investorContribution: (m as any).investorContribution,
+            investorNotes: (m as any).investorNotes,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
       },
       addLoan: (l) => {
         const id = `L${1000 + loans.length + 1}`;
@@ -633,12 +695,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const m = norm.match(/(\d{1,4})/);
         if (!m) return null;
         const memberNum = m[1].padStart(3, "0");
-        const cleanPhone = phone.replace(/\D/g, "").replace(/^0/, "254");
+        const cleanPhone = toComparableKenyanPhone(phone);
         const target = members.find((mb) => mb.id === `M${memberNum}`);
         if (!target) return null;
-        const targetPhone = target.phone.replace(/\D/g, "");
-        if (targetPhone.endsWith(cleanPhone) || cleanPhone.endsWith(targetPhone.slice(-9)))
-          return target;
+        const targetPhone = toComparableKenyanPhone(target.phone);
+        if (targetPhone && cleanPhone && targetPhone === cleanPhone) return target;
         return null;
       },
       loginStaff: (email, password) => {
@@ -660,57 +721,65 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } catch {}
         setCurrentUserState(seedStaff[0]);
       },
-      addStaff: (s) => {
-        const id = `S${100 + staff.length + 1}`;
-        const next = [...staff, { ...s, id }];
-        setStaff(next);
-        try {
-          localStorage.setItem(STAFF_KEY, JSON.stringify(next));
-        } catch {}
-        return id;
+      addStaff: async (s) => {
+        const result = await createStaff({
+          data: {
+            name: s.name,
+            role: s.role,
+            firstName: s.firstName,
+            secondName: s.secondName,
+            thirdName: s.thirdName,
+            email: s.email,
+            phone: s.phone,
+            nationalId: s.nationalId,
+            address: s.address,
+            notes: s.notes,
+            photo: s.photo,
+            tempPassword: s.tempPassword,
+            canMarkAttendance: s.canMarkAttendance,
+            fingerprintEnrolled: s.fingerprintEnrolled,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
       },
-      updateStaff: (id, patch) => {
-        const next = staff.map((s) => (s.id === id ? { ...s, ...patch } : s));
-        setStaff(next);
-        try {
-          localStorage.setItem(STAFF_KEY, JSON.stringify(next));
-        } catch {}
-        if (currentUser.id === id) setCurrentUser({ ...currentUser, ...patch });
-      },
-      removeStaff: (id) => {
-        const next = staff.filter((s) => s.id !== id);
-        setStaff(next);
-        try {
-          localStorage.setItem(STAFF_KEY, JSON.stringify(next));
-        } catch {}
-      },
-      markAttendance: (staffId, status, when = "in") => {
-        const today = new Date().toISOString().slice(0, 10);
-        const time = new Date().toTimeString().slice(0, 5);
-        const existing = attendance.find((a) => a.staffId === staffId && a.date === today);
-        let next: Attendance[];
-        if (existing) {
-          next = attendance.map((a) =>
-            a.id === existing.id
-              ? { ...a, status, ...(when === "in" ? { checkIn: time } : { checkOut: time }) }
-              : a,
-          );
-        } else {
-          next = [
-            {
-              id: `A-${today}-${staffId}`,
-              staffId,
-              date: today,
-              status,
-              ...(when === "in" ? { checkIn: time } : { checkOut: time }),
+      updateStaff: async (id, patch) => {
+        await saveStaff({
+          data: {
+            id,
+            patch: {
+              name: patch.name,
+              role: patch.role,
+              firstName: patch.firstName,
+              secondName: patch.secondName,
+              thirdName: patch.thirdName,
+              email: patch.email,
+              phone: patch.phone,
+              nationalId: patch.nationalId,
+              address: patch.address,
+              notes: patch.notes,
+              photo: patch.photo,
+              tempPassword: patch.tempPassword,
+              canMarkAttendance: patch.canMarkAttendance,
+              fingerprintEnrolled: patch.fingerprintEnrolled,
             },
-            ...attendance,
-          ];
-        }
-        setAttendance(next);
-        try {
-          localStorage.setItem(ATT_KEY, JSON.stringify(next));
-        } catch {}
+          },
+        });
+        await refreshFromDatabase();
+      },
+      removeStaff: async (id) => {
+        await deleteStaff({ data: { id } });
+        await refreshFromDatabase();
+      },
+      markAttendance: async (staffId, status, when = "in") => {
+        await saveAttendance({
+          data: {
+            staffId,
+            status: status === "late" ? "present" : (status as "present" | "signed_out" | "permission" | "absent"),
+            when,
+          },
+        });
+        await refreshFromDatabase();
       },
       memberLoanCount: (memberId: string) =>
         loans.filter((l) => l.memberId === memberId && l.status !== "rejected").length,
@@ -1045,10 +1114,13 @@ export function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
 }
 
 export function normalizeLoanTermDays(termDays?: number): LoanTermDays {
-  if (termDays === 7 || termDays === 14 || termDays === 30) return termDays;
+  if (termDays === 7 || termDays === 14 || termDays === 30 || termDays === 60 || termDays === 90)
+    return termDays;
   if ((termDays ?? 0) <= 10) return 7;
   if ((termDays ?? 0) <= 21) return 14;
-  return 30;
+  if ((termDays ?? 0) <= 45) return 30;
+  if ((termDays ?? 0) <= 75) return 60;
+  return 90;
 }
 
 export function termPeriodsFromDays(termDays?: number) {
@@ -1230,7 +1302,7 @@ export const ROLE_NAV: Record<Role, string[]> = {
 };
 
 const DIRECTOR_ONLY = new Set(["staffmgmt", "investors", "fees"]);
-const ATTENDANCE_GATED = new Set(["staff", "attendance"]);
+const ATTENDANCE_GATED = new Set(["staff"]);
 
 /** Filter ROLE_NAV based on the user's attendance capability. Without it,
  *  non-director staff cannot see other staff (chat or attendance roster). */

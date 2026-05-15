@@ -1,20 +1,20 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Upload, User as UserIcon, Eye, EyeOff, Fingerprint } from "lucide-react";
 import { useStore, type Role, type Staff } from "@/lib/store";
+import { getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 
 type Props = {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  /** When provided, the dialog edits an existing staff member instead of creating one. */
   editing?: Staff;
 };
 
@@ -43,18 +43,37 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
   const [canMarkAttendance, setCanMarkAttendance] = useState(editing?.canMarkAttendance ?? false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  function onPhoto(f: File) {
-    const r = new FileReader();
-    r.onload = () => setPhoto(r.result as string);
-    r.readAsDataURL(f);
+  useEffect(() => {
+    if (!open) return;
+    setPhoto(editing?.photo);
+    setFirstName(editing?.firstName ?? editing?.name?.split(" ")[0] ?? "");
+    setSecondName(editing?.secondName ?? editing?.name?.split(" ")[1] ?? "");
+    setThirdName(editing?.thirdName ?? editing?.name?.split(" ").slice(2).join(" ") ?? "");
+    setPhone(editing?.phone ?? "");
+    setEmail(editing?.email ?? "");
+    setNationalId(editing?.nationalId ?? "");
+    setAddress(editing?.address ?? "");
+    setRole(editing?.role ?? "loan_officer");
+    setTempPassword(editing?.tempPassword ?? "");
+    setShowPwd(false);
+    setNotes(editing?.notes ?? "");
+    setEnrolFp(false);
+    setCanMarkAttendance(editing?.canMarkAttendance ?? false);
+  }, [editing, open]);
+
+  function onPhoto(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(reader.result as string);
+    reader.readAsDataURL(file);
   }
 
-  function submit() {
+  async function submit() {
     const name = [firstName, secondName, thirdName].filter(Boolean).join(" ").trim();
     if (!firstName.trim()) return toast.error("First name is required");
     if (!email.trim()) return toast.error("Email is required");
-    if (!editing && tempPassword.length < 6)
+    if (!editing && tempPassword.length < 6) {
       return toast.error("Temporary password must be at least 6 characters");
+    }
 
     const payload = {
       name,
@@ -73,14 +92,18 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
       fingerprintEnrolled: enrolFp || editing?.fingerprintEnrolled,
     };
 
-    if (editing) {
-      updateStaff(editing.id, payload);
-      toast.success("Staff updated");
-    } else {
-      const id = addStaff(payload);
-      toast.success(`Staff created · ${id}`);
+    try {
+      if (editing) {
+        await updateStaff(editing.id, payload);
+        toast.success("Staff updated");
+      } else {
+        const id = await addStaff(payload);
+        toast.success(`Staff created - ${id}`);
+      }
+      onOpenChange(false);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, "Failed to save staff member"));
     }
-    onOpenChange(false);
   }
 
   return (
@@ -90,12 +113,11 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
           <DialogTitle>{editing ? "Edit staff member" : "Add a new staff member"}</DialogTitle>
           <DialogDescription>
             The account is created instantly with the role you choose. They can sign in straight
-            away — no email confirmation needed.
+            away with the temporary password you assign here.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5 pt-2">
-          {/* Photo */}
           <div className="flex items-center gap-4">
             <div className="h-20 w-20 rounded-full border border-primary/30 bg-primary/10 grid place-items-center overflow-hidden shrink-0">
               {photo ? (
@@ -127,7 +149,6 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
             </div>
           </div>
 
-          {/* Row: three names */}
           <div className="grid sm:grid-cols-3 gap-4">
             <Field label="First name" required>
               <input
@@ -154,6 +175,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
               />
             </Field>
           </div>
+
           <Field label="Phone">
             <input
               value={phone}
@@ -163,7 +185,6 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
             />
           </Field>
 
-          {/* Row: email + national id */}
           <div className="grid sm:grid-cols-2 gap-4">
             <Field label="Email" required>
               <input
@@ -193,7 +214,6 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
             />
           </Field>
 
-          {/* Row: role + password */}
           <div className="grid sm:grid-cols-2 gap-4">
             <Field label="Role" required>
               <select
@@ -212,12 +232,12 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
                   type={showPwd ? "text" : "password"}
                   value={tempPassword}
                   onChange={(e) => setTempPassword(e.target.value)}
-                  placeholder="≥ 6 characters"
+                  placeholder=">= 6 characters"
                   className={inputCls + " pr-10"}
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPwd((s) => !s)}
+                  onClick={() => setShowPwd((state) => !state)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -231,7 +251,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={3}
-              placeholder="Anything useful — shift, languages, emergency contact…"
+              placeholder="Anything useful - shift, languages, emergency contact"
               className={inputCls + " resize-y"}
             />
           </Field>
@@ -240,16 +260,16 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
             <label className="flex items-center gap-2 text-sm border border-border rounded-md p-3 bg-muted/30">
               <Checkbox
                 checked={canMarkAttendance}
-                onCheckedChange={(v) => setCanMarkAttendance(!!v)}
+                onCheckedChange={(value) => setCanMarkAttendance(!!value)}
               />
-              <span>Can mark attendance for other staff (e.g. loan officer at reception)</span>
+              <span>Can mark attendance for other staff (for example at reception)</span>
             </label>
           )}
 
           <label className="flex items-start gap-3 text-sm border border-border rounded-md p-3 bg-muted/30">
             <Checkbox
               checked={enrolFp}
-              onCheckedChange={(v) => setEnrolFp(!!v)}
+              onCheckedChange={(value) => setEnrolFp(!!value)}
               className="mt-0.5"
             />
             <div className="flex items-start gap-2">
@@ -257,8 +277,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
               <div>
                 <div>Enrol fingerprint on this device after creating</div>
                 <div className="text-xs text-muted-foreground">
-                  Tick this if the new staff member is here now and you're using their reception
-                  tablet / phone.
+                  Tick this if the new staff member is here now and you are using their device.
                 </div>
               </div>
             </div>

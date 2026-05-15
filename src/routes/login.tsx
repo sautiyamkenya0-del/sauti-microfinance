@@ -26,6 +26,7 @@ function LoginPage() {
     if (id.includes("@")) {
       const staff = loginStaff(id, secret);
       if (!staff) return toast.error("Invalid email or password.");
+      setAuthenticated(true);
       toast.success(`Welcome, ${staff.name}`);
       router.navigate({ to: "/" });
       return;

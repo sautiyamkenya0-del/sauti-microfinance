@@ -939,7 +939,7 @@ export type Database = {
       [_ in never]: never;
     };
     Enums: {
-      attendance_status: "present" | "absent" | "late";
+      attendance_status: "present" | "absent" | "late" | "signed_out" | "permission";
       field_visit_type: "business" | "home" | "live";
       followup_outcome: "promised" | "paid" | "no-show" | "dispute" | "other";
       loan_status: "pending" | "active" | "closed" | "defaulted" | "rejected";
@@ -1084,7 +1084,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      attendance_status: ["present", "absent", "late"],
+      attendance_status: ["present", "absent", "late", "signed_out", "permission"],
       field_visit_type: ["business", "home", "live"],
       followup_outcome: ["promised", "paid", "no-show", "dispute", "other"],
       loan_status: ["pending", "active", "closed", "defaulted", "rejected"],

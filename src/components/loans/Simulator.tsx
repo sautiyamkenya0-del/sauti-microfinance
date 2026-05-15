@@ -1,12 +1,7 @@
-import { Section } from "@/components/ui-bits";
-import {
-  fmtKES,
-  loanRateForTerm,
-  roundUpKES,
-  SBC_LOAN_TERMS,
-  SBC_UPFRONT_TABLE,
-} from "@/lib/store";
 import { useEffect, useMemo, useState } from "react";
+
+import { Section } from "@/components/ui-bits";
+import { fmtKES, roundUpKES, SBC_UPFRONT_TABLE } from "@/lib/store";
 
 type LoanType = "standard" | "premium";
 
@@ -16,16 +11,21 @@ const LOAN_TYPES: { v: LoanType; l: string; min: number; max: number; hint: stri
     l: "Standard",
     min: 1000,
     max: 5000,
-    hint: "Standard loans: KSH 1,000 – 5,000. Terms: 7 / 14 / 30 days.",
+    hint: "Standard loans: KSH 1,000 - 5,000. Terms: 7 / 14 / 30 days.",
   },
   {
     v: "premium",
     l: "Premium",
     min: 5001,
     max: 1000000,
-    hint: "Premium loans: KSH 5,001+. Terms: 7 / 14 / 30 days.",
+    hint: "Premium loans: KSH 5,001+. Terms: 14 / 30 / 60 / 90 days.",
   },
 ];
+
+const DAY_OPTIONS: Record<LoanType, number[]> = {
+  standard: [7, 14, 30],
+  premium: [14, 30, 60, 90],
+};
 
 const SAVINGS_OPTIONS = [50, 100];
 
@@ -41,6 +41,7 @@ const FEES = {
 function tierFor(amount: number) {
   return SBC_UPFRONT_TABLE.find((t) => amount >= t.min && amount <= t.max);
 }
+
 function fmtDate(d: Date) {
   return d.toLocaleDateString("en-GB", {
     weekday: "short",
@@ -48,6 +49,14 @@ function fmtDate(d: Date) {
     month: "short",
     year: "numeric",
   });
+}
+
+function simulatorRatePct(days: number) {
+  if (days === 7) return 10;
+  if (days === 14) return 15;
+  if (days === 30) return 20;
+  if (days === 60) return 40;
+  return 60;
 }
 
 export function Simulator() {
@@ -58,19 +67,17 @@ export function Simulator() {
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [stickerOn, setStickerOn] = useState(false);
 
-  const dayOptions = useMemo(() => SBC_LOAN_TERMS, []);
+  const dayOptions = useMemo(() => DAY_OPTIONS[loanType], [loanType]);
 
-  // Snap days/amount whenever loan type changes so they stay valid
   useEffect(() => {
     if (!dayOptions.includes(days)) setDays(dayOptions[dayOptions.length - 1]);
     const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
     if (amount < lt.min) setAmount(lt.min);
     if (amount > lt.max) setAmount(lt.max);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loanType]);
+  }, [amount, dayOptions, days, loanType]);
 
   const calc = useMemo(() => {
-    const ratePct = loanRateForTerm(days);
+    const ratePct = simulatorRatePct(days);
     const interest = amount * (ratePct / 100);
     const processing = amount * (FEES.processingPct / 100);
     const insurance = amount * (FEES.insurancePct / 100);
@@ -99,7 +106,6 @@ export function Simulator() {
     });
 
     return {
-      ratePct,
       interest,
       processing,
       insurance,
@@ -120,7 +126,7 @@ export function Simulator() {
       dueDates,
       tier,
     };
-  }, [loanType, amount, days, dailySavings, startDate, stickerOn]);
+  }, [amount, dailySavings, days, startDate, stickerOn]);
 
   const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
 
@@ -139,7 +145,6 @@ export function Simulator() {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Inputs */}
         <Section title="Simulation Inputs">
           <div className="p-5 space-y-4">
             <Field label="Loan Type">
@@ -157,7 +162,7 @@ export function Simulator() {
               <p className="text-xs text-muted-foreground mt-1">{lt.hint}</p>
             </Field>
 
-            <Field label={`Loan Amount (${fmtKES(lt.min)} – ${fmtKES(lt.max)})`}>
+            <Field label={`Loan Amount (${fmtKES(lt.min)} - ${fmtKES(lt.max)})`}>
               <input
                 type="number"
                 min={lt.min}
@@ -179,13 +184,10 @@ export function Simulator() {
               >
                 {dayOptions.map((d) => (
                   <option key={d} value={d}>
-                    {d} days · {loanRateForTerm(d)}% interest
+                    {d} days
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {dayOptions.map((d) => `${d}d (${loanRateForTerm(d)}%)`).join(" · ")}
-              </p>
             </Field>
 
             <Field label="Daily Savings Inclusive">
@@ -225,15 +227,10 @@ export function Simulator() {
           </div>
         </Section>
 
-        {/* Preview */}
         <Section title="Computation Preview">
           <div className="p-5 space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <Tile
-                label="Interest"
-                value={fmtKES(calc.interest)}
-                sub={`${calc.ratePct}% interest for ${days} days`}
-              />
+              <Tile label="Interest" value={fmtKES(calc.interest)} sub={`Computed for ${days} days`} />
               <Tile
                 label="Total Repayment"
                 value={fmtKES(calc.totalRepayment)}
@@ -242,12 +239,12 @@ export function Simulator() {
               <Tile
                 label="Daily Repayment Inclusive"
                 value={fmtKES(calc.dailyInclusive)}
-                sub={`${fmtKES(calc.dailyLoan)} loan + ${fmtKES(dailySavings)} savings · round-off ${calc.roundOff.toFixed(2)}`}
+                sub={`${fmtKES(calc.dailyLoan)} loan + ${fmtKES(dailySavings)} savings - round-off ${calc.roundOff.toFixed(2)}`}
               />
               <Tile
                 label="Total Savings Accrued"
                 value={fmtKES(calc.totalSavingsAccrued)}
-                sub={`${fmtKES(dailySavings)} × ${days} days`}
+                sub={`${fmtKES(dailySavings)} x ${days} days`}
               />
               <Tile
                 label="Grand Total Collected"
@@ -273,13 +270,12 @@ export function Simulator() {
             <div className="bg-muted/40 border border-border rounded-md p-4">
               <div className="text-sm font-semibold mb-2">Due Dates</div>
               <div className="text-xs text-muted-foreground mb-2">
-                Start: {fmtDate(calc.dueDates[0])} · Final:{" "}
-                {fmtDate(calc.dueDates[calc.dueDates.length - 1])}
+                Start: {fmtDate(calc.dueDates[0])} - Final: {fmtDate(calc.dueDates[calc.dueDates.length - 1])}
               </div>
               <ol className="text-xs space-y-0.5 max-h-48 overflow-y-auto">
                 {calc.dueDates.map((d, i) => (
                   <li key={i}>
-                    {i + 1}. {fmtDate(d)} — {fmtKES(calc.dailyInclusive)}
+                    {i + 1}. {fmtDate(d)} - {fmtKES(calc.dailyInclusive)}
                   </li>
                 ))}
               </ol>
@@ -299,6 +295,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
+
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="border border-border rounded-md p-3">
@@ -308,6 +305,7 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
     </div>
   );
 }
+
 function Mini({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-border rounded-md p-3">

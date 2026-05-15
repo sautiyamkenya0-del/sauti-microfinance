@@ -1,31 +1,89 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { CalendarCheck } from "lucide-react";
+import { toast } from "sonner";
+
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
-import { Section, Badge, StatCard } from "@/components/ui-bits";
-import { useStore, roleLabel } from "@/lib/store";
-import { CalendarCheck } from "lucide-react";
+import { Badge, Section, StatCard } from "@/components/ui-bits";
+import { roleLabel, useStore, type Attendance } from "@/lib/store";
+import { getErrorMessage } from "@/lib/utils";
 
 export const Route = createFileRoute("/attendance")({
-  head: () => ({ meta: [{ title: "Attendance — Sauti Microfinance" }] }),
-  component: AttPage,
+  head: () => ({ meta: [{ title: "Attendance - Sauti Microfinance" }] }),
+  component: AttendancePage,
 });
 
-function AttPage() {
-  const { attendance, staff } = useStore();
-  const dates = Array.from(new Set(attendance.map((a) => a.date)))
+const STATUS_LABEL: Record<Attendance["status"], string> = {
+  present: "Present",
+  signed_out: "Signed out",
+  permission: "Absent with permission",
+  absent: "Absent without permission",
+  late: "Late",
+};
+
+const ROLL_CALL_LABEL: Record<Attendance["status"], string> = {
+  present: "Present",
+  signed_out: "Present",
+  permission: "Absent with permission",
+  absent: "Absent without permission",
+  late: "Present",
+};
+
+const STATUS_TONE: Record<Attendance["status"], "success" | "warning" | "destructive" | "default"> =
+  {
+    present: "success",
+    signed_out: "default",
+    permission: "warning",
+    absent: "destructive",
+    late: "warning",
+  };
+
+function AttendancePage() {
+  const { attendance, currentUser, markAttendance, staff } = useStore();
+  const today = new Date().toISOString().slice(0, 10);
+  const dates = Array.from(new Set([today, ...attendance.map((row) => row.date)]))
     .sort()
     .reverse();
+  const recentDates = dates.slice(0, 7);
 
-  const today = dates[0];
-  const todayRecords = attendance.filter((a) => a.date === today);
-  const presentToday = todayRecords.filter((a) => a.status === "present").length;
+  function statusForDay(staffId: string, date: string): Attendance | undefined {
+    const record = attendance.find((row) => row.staffId === staffId && row.date === date);
+    if (record) return record;
+    if (date < today) {
+      return { id: `missing-${date}-${staffId}`, staffId, date, status: "absent" };
+    }
+    return undefined;
+  }
+
+  const todayRows = staff.map((member) => statusForDay(member.id, today));
+  const presentToday = todayRows.filter(
+    (row) => row?.status === "present" || row?.status === "signed_out",
+  ).length;
+  const permissionToday = todayRows.filter((row) => row?.status === "permission").length;
+  const actionable =
+    currentUser.role === "director" ||
+    currentUser.role === "manager" ||
+    currentUser.role === "loan_officer" ||
+    currentUser.canMarkAttendance;
+
+  async function applyStatus(staffId: string, status: Attendance["status"], when?: "in" | "out") {
+    try {
+      await markAttendance(staffId, status, when);
+      toast.success(STATUS_LABEL[status]);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, "Failed to update attendance"));
+    }
+  }
 
   return (
     <>
-      <AppHeader title="Attendance" subtitle="Daily staff check-in record." />
+      <AppHeader
+        title="Attendance"
+        subtitle="Daily roll call, sign-in/out, and absence-with-permission tracking."
+      />
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <SectionTabs section="admin" />
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             label="Staff"
             value={staff.length}
@@ -36,44 +94,45 @@ function AttPage() {
             value={`${presentToday}/${staff.length}`}
             tone="success"
           />
-          <StatCard label="Days Tracked" value={dates.length} tone="accent" />
+          <StatCard
+            label="With Permission"
+            value={permissionToday}
+            tone={permissionToday > 0 ? "accent" : "default"}
+          />
+          <StatCard label="Days Tracked" value={recentDates.length} tone="accent" />
         </div>
 
-        <Section title="Roster">
+        <Section title="Roll Call Sheet">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3 text-left">Staff</th>
                   <th className="px-5 py-3 text-left">Role</th>
-                  {dates.slice(0, 7).map((d) => (
-                    <th key={d} className="px-3 py-3 text-center text-[10px]">
-                      {d.slice(5)}
+                  {recentDates.map((date) => (
+                    <th key={date} className="px-3 py-3 text-center text-[10px]">
+                      {date.slice(5)}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {staff.map((s) => (
-                  <tr key={s.id}>
-                    <td className="px-5 py-3 font-medium">{s.name}</td>
-                    <td className="px-5 py-3 text-xs text-muted-foreground">{roleLabel(s.role)}</td>
-                    {dates.slice(0, 7).map((d) => {
-                      const a = attendance.find((x) => x.staffId === s.id && x.date === d);
-                      const tone =
-                        a?.status === "present"
-                          ? "success"
-                          : a?.status === "late"
-                            ? "warning"
-                            : "destructive";
+                {staff.map((member) => (
+                  <tr key={member.id}>
+                    <td className="px-5 py-3 font-medium">{member.name}</td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {roleLabel(member.role)}
+                    </td>
+                    {recentDates.map((date) => {
+                      const row = statusForDay(member.id, date);
                       return (
-                        <td key={d} className="px-3 py-3 text-center">
-                          {a ? (
-                            <Badge tone={tone}>
-                              {a.status === "present" ? "P" : a.status === "late" ? "L" : "A"}
+                        <td key={date} className="px-3 py-3 text-center">
+                          {row ? (
+                            <Badge tone={STATUS_TONE[row.status]}>
+                              {ROLL_CALL_LABEL[row.status]}
                             </Badge>
                           ) : (
-                            "—"
+                            <span className="text-xs text-muted-foreground">Pending</span>
                           )}
                         </td>
                       );
@@ -93,29 +152,48 @@ function AttPage() {
                 <th className="px-5 py-3 text-left">Status</th>
                 <th className="px-5 py-3 text-left">Check-in</th>
                 <th className="px-5 py-3 text-left">Check-out</th>
+                {actionable && <th className="px-5 py-3 text-left">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {todayRecords.map((a) => {
-                const s = staff.find((x) => x.id === a.staffId);
+              {staff.map((member) => {
+                const row = statusForDay(member.id, today);
                 return (
-                  <tr key={a.id}>
-                    <td className="px-5 py-3 font-medium">{s?.name}</td>
+                  <tr key={member.id}>
+                    <td className="px-5 py-3 font-medium">{member.name}</td>
                     <td className="px-5 py-3">
-                      <Badge
-                        tone={
-                          a.status === "present"
-                            ? "success"
-                            : a.status === "late"
-                              ? "warning"
-                              : "destructive"
-                        }
-                      >
-                        {a.status}
-                      </Badge>
+                      {row ? (
+                        <Badge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">Pending</span>
+                      )}
                     </td>
-                    <td className="px-5 py-3 text-muted-foreground">{a.checkIn ?? "—"}</td>
-                    <td className="px-5 py-3 text-muted-foreground">{a.checkOut ?? "—"}</td>
+                    <td className="px-5 py-3 text-muted-foreground">{row?.checkIn ?? "-"}</td>
+                    <td className="px-5 py-3 text-muted-foreground">{row?.checkOut ?? "-"}</td>
+                    {actionable && (
+                      <td className="px-5 py-3">
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => applyStatus(member.id, "present", "in")}
+                            className="px-2.5 py-1 rounded-md text-xs bg-success/15 text-success hover:bg-success/25"
+                          >
+                            Signed in
+                          </button>
+                          <button
+                            onClick={() => applyStatus(member.id, "signed_out", "out")}
+                            className="px-2.5 py-1 rounded-md text-xs bg-muted hover:bg-accent"
+                          >
+                            Signed out
+                          </button>
+                          <button
+                            onClick={() => applyStatus(member.id, "permission")}
+                            className="px-2.5 py-1 rounded-md text-xs bg-warning/15 text-warning-foreground hover:bg-warning/25"
+                          >
+                            Asked for permission
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
