@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
 
 /** Daraja STK Push trigger.
@@ -43,12 +44,14 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
             env === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";
 
           if (!consumerKey || !consumerSecret || !shortcode || !passkey) {
+            const adminEnv = getSupabaseAdminEnvStatus();
             return Response.json(
               {
                 ok: false,
                 error: "M-Pesa is not fully configured on the server.",
-                hint:
-                  "Set MPESA_ENV, MPESA_SHORTCODE, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_PASSKEY in the secret vault or hosting environment.",
+                hint: adminEnv.ok
+                  ? "Set MPESA_ENV, MPESA_SHORTCODE, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_PASSKEY in the secret vault or hosting environment."
+                  : `The runtime secret table cannot be read because ${adminEnv.missing.join(", ")} is missing on the server. Add the missing server env and restart/redeploy, or place the MPESA_* values directly in the hosting environment.`,
               },
               { status: 503 },
             );

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
 
 /** GET /api/public/mpesa/diagnose
@@ -9,6 +10,7 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
   server: {
     handlers: {
       GET: async () => {
+        const adminEnv = getSupabaseAdminEnvStatus();
         const ck = (await getSecret("MPESA_CONSUMER_KEY")) ?? "";
         const cs = (await getSecret("MPESA_CONSUMER_SECRET")) ?? "";
         const sc = (await getSecret("MPESA_SHORTCODE")) ?? "";
@@ -24,6 +26,9 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
           MPESA_SHORTCODE: sc || "MISSING",
           MPESA_PASSKEY: pk ? `set (len ${pk.length})` : "MISSING",
           base,
+          runtime_vault: adminEnv.ok
+            ? "available"
+            : `unavailable (missing ${adminEnv.missing.join(", ")})`,
         };
 
         if (!ck || !cs)

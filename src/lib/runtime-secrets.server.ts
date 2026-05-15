@@ -1,4 +1,5 @@
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
+import { readServerEnv } from "@/lib/server-env";
 
 /** Server-only: read a runtime secret value (or undefined). */
 export async function getRuntimeSecret(key: string): Promise<string | undefined> {
@@ -24,5 +25,5 @@ export async function getSecret(key: string): Promise<string | undefined> {
   const k = key.toUpperCase();
   const override = await getRuntimeSecret(k);
   if (override && override.trim().length > 0) return override;
-  return process.env[k];
+  return readServerEnv(k);
 }

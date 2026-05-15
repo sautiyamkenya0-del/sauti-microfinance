@@ -277,31 +277,6 @@ const seedStaff: Staff[] = [
     tempPassword: "Sauti1234",
     canMarkAttendance: true,
   },
-  {
-    id: "S2",
-    name: "Grace Wanjiku",
-    role: "manager",
-    email: "grace@sauti.co.ke",
-    phone: "+254722000002",
-    tempPassword: "Sauti1234",
-    canMarkAttendance: true,
-  },
-  {
-    id: "S3",
-    name: "Peter Otieno",
-    role: "loan_officer",
-    email: "peter@sauti.co.ke",
-    phone: "+254722000003",
-    tempPassword: "Sauti1234",
-  },
-  {
-    id: "S4",
-    name: "Mary Achieng",
-    role: "loan_officer",
-    email: "mary@sauti.co.ke",
-    phone: "+254722000004",
-    tempPassword: "Sauti1234",
-  },
 ];
 
 export const DEFAULT_FEES: MandatoryFees = {
@@ -312,592 +287,14 @@ export const DEFAULT_FEES: MandatoryFees = {
   firstUpfrontPaid: false,
 };
 
-const PAID_FEES: MandatoryFees = {
-  membership: true,
-  card: true,
-  hasShop: true,
-  sticker: true,
-  firstUpfrontPaid: true,
-};
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = (n: number) => {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-};
-
-const seedMembers: Member[] = [
-  {
-    id: "M101",
-    name: "John Kamau",
-    firstName: "John",
-    lastName: "Kamau",
-    phone: "+254722000101",
-    joinedAt: daysAgo(120),
-    status: "active",
-    shares: 10,
-    savingsBalance: 8500,
-    fees: PAID_FEES,
-    gender: "Male",
-    county: "Nairobi",
-    village: "Kawangware",
-    businessName: "Kamau Hardware",
-    businessType: "Retail",
-    fieldOfficerId: "S3",
-  },
-  {
-    id: "M102",
-    name: "Jane Njeri",
-    firstName: "Jane",
-    lastName: "Njeri",
-    phone: "+254722000102",
-    joinedAt: daysAgo(95),
-    status: "active",
-    shares: 6,
-    savingsBalance: 5200,
-    fees: PAID_FEES,
-    gender: "Female",
-    county: "Kiambu",
-    village: "Ruiru",
-    businessName: "Njeri Salon",
-    businessType: "Services",
-    fieldOfficerId: "S3",
-  },
-  {
-    id: "M103",
-    name: "Samuel Mwangi",
-    firstName: "Samuel",
-    lastName: "Mwangi",
-    phone: "+254722000103",
-    joinedAt: daysAgo(80),
-    status: "active",
-    shares: 4,
-    savingsBalance: 3000,
-    fees: PAID_FEES,
-    gender: "Male",
-    county: "Nakuru",
-    village: "Naka",
-    businessName: "Mwangi Boda",
-    businessType: "Transport",
-    fieldOfficerId: "S4",
-  },
-  {
-    id: "M104",
-    name: "Esther Wambui",
-    firstName: "Esther",
-    lastName: "Wambui",
-    phone: "+254722000104",
-    joinedAt: daysAgo(70),
-    status: "active",
-    shares: 8,
-    savingsBalance: 6800,
-    fees: PAID_FEES,
-    gender: "Female",
-    county: "Nyeri",
-    village: "Ruring'u",
-    businessName: "Wambui Greens",
-    businessType: "Mama Mboga",
-    fieldOfficerId: "S4",
-  },
-  {
-    id: "M105",
-    name: "Daniel Ouma",
-    firstName: "Daniel",
-    lastName: "Ouma",
-    phone: "+254722000105",
-    joinedAt: daysAgo(55),
-    status: "active",
-    shares: 5,
-    savingsBalance: 4100,
-    fees: PAID_FEES,
-    gender: "Male",
-    county: "Kisumu",
-    village: "Kondele",
-    businessName: "Ouma Electronics",
-    businessType: "Retail",
-    fieldOfficerId: "S3",
-  },
-  {
-    id: "M106",
-    name: "Lucy Akinyi",
-    firstName: "Lucy",
-    lastName: "Akinyi",
-    phone: "+254722000106",
-    joinedAt: daysAgo(40),
-    status: "active",
-    shares: 3,
-    savingsBalance: 2400,
-    fees: PAID_FEES,
-    gender: "Female",
-    county: "Mombasa",
-    village: "Likoni",
-    businessName: "Akinyi Tailoring",
-    businessType: "Services",
-    fieldOfficerId: "S4",
-  },
-  {
-    id: "M107",
-    name: "Patrick Kiprono",
-    firstName: "Patrick",
-    lastName: "Kiprono",
-    phone: "+254722000107",
-    joinedAt: daysAgo(25),
-    status: "active",
-    shares: 2,
-    savingsBalance: 1500,
-    fees: { ...PAID_FEES, firstUpfrontPaid: false },
-    gender: "Male",
-    county: "Eldoret",
-    village: "Langas",
-    businessName: "Kiprono Cyber",
-    businessType: "Services",
-    fieldOfficerId: "S3",
-  },
-  {
-    id: "M108",
-    name: "Beatrice Mutiso",
-    firstName: "Beatrice",
-    lastName: "Mutiso",
-    phone: "+254722000108",
-    joinedAt: daysAgo(10),
-    status: "active",
-    shares: 12,
-    savingsBalance: 12000,
-    fees: PAID_FEES,
-    isInvestor: true,
-    investorId: "I1",
-    gender: "Female",
-    county: "Machakos",
-    village: "Athi River",
-    businessName: "Mutiso Wholesalers",
-    businessType: "Wholesale",
-    fieldOfficerId: "S4",
-  },
-];
-
-const seedLoans: Loan[] = [
-  {
-    id: "L1001",
-    memberId: "M101",
-    principal: 20000,
-    approvedAmount: 20000,
-    rate: 20,
-    termMonths: 1,
-    termDays: 30,
-    startDate: daysAgo(60),
-    status: "active",
-    officerId: "S3",
-    paid: 12000,
-    purpose: "Stock purchase",
-    reviewedBy: "S2",
-  },
-  {
-    id: "L1002",
-    memberId: "M102",
-    principal: 10000,
-    approvedAmount: 10000,
-    rate: 15,
-    termMonths: 1,
-    termDays: 14,
-    startDate: daysAgo(40),
-    status: "closed",
-    officerId: "S3",
-    paid: 11500,
-    purpose: "Salon supplies",
-    reviewedBy: "S2",
-  },
-  {
-    id: "L1003",
-    memberId: "M103",
-    principal: 15000,
-    approvedAmount: 15000,
-    rate: 20,
-    termMonths: 1,
-    termDays: 30,
-    startDate: daysAgo(35),
-    status: "active",
-    officerId: "S4",
-    paid: 5000,
-    purpose: "Boda spares",
-    reviewedBy: "S2",
-  },
-  {
-    id: "L1004",
-    memberId: "M104",
-    principal: 8000,
-    approvedAmount: 8000,
-    rate: 10,
-    termMonths: 1,
-    termDays: 7,
-    startDate: daysAgo(20),
-    status: "defaulted",
-    officerId: "S4",
-    paid: 2000,
-    purpose: "Restocking",
-    reviewedBy: "S2",
-  },
-  {
-    id: "L1005",
-    memberId: "M105",
-    principal: 25000,
-    approvedAmount: 0,
-    rate: 20,
-    termMonths: 1,
-    termDays: 30,
-    startDate: today(),
-    status: "pending",
-    officerId: "S3",
-    paid: 0,
-    purpose: "Expansion",
-  },
-  {
-    id: "L1006",
-    memberId: "M108",
-    principal: 30000,
-    approvedAmount: 30000,
-    rate: 20,
-    termMonths: 1,
-    termDays: 30,
-    startDate: daysAgo(15),
-    status: "active",
-    officerId: "S4",
-    paid: 10000,
-    purpose: "Wholesale stock",
-    reviewedBy: "S2",
-  },
-];
-
-const seedTx: Transaction[] = [
-  {
-    id: "T1",
-    date: daysAgo(60),
-    type: "loan_disbursement",
-    amount: 20000,
-    memberId: "M101",
-    loanId: "L1001",
-    by: "S3",
-    ref: "DISB-1001",
-  },
-  {
-    id: "T2",
-    date: daysAgo(45),
-    type: "loan_repayment",
-    amount: 6000,
-    memberId: "M101",
-    loanId: "L1001",
-    by: "S3",
-    ref: "MPESA-RA1",
-  },
-  {
-    id: "T3",
-    date: daysAgo(25),
-    type: "loan_repayment",
-    amount: 6000,
-    memberId: "M101",
-    loanId: "L1001",
-    by: "S3",
-    ref: "MPESA-RA2",
-  },
-  {
-    id: "T4",
-    date: daysAgo(40),
-    type: "loan_disbursement",
-    amount: 10000,
-    memberId: "M102",
-    loanId: "L1002",
-    by: "S3",
-    ref: "DISB-1002",
-  },
-  {
-    id: "T5",
-    date: daysAgo(20),
-    type: "loan_repayment",
-    amount: 11000,
-    memberId: "M102",
-    loanId: "L1002",
-    by: "S3",
-    ref: "MPESA-RB1",
-  },
-  {
-    id: "T6",
-    date: daysAgo(35),
-    type: "loan_disbursement",
-    amount: 15000,
-    memberId: "M103",
-    loanId: "L1003",
-    by: "S4",
-    ref: "DISB-1003",
-  },
-  {
-    id: "T7",
-    date: daysAgo(10),
-    type: "loan_repayment",
-    amount: 5000,
-    memberId: "M103",
-    loanId: "L1003",
-    by: "S4",
-    ref: "MPESA-RC1",
-  },
-  {
-    id: "T8",
-    date: daysAgo(20),
-    type: "loan_disbursement",
-    amount: 8000,
-    memberId: "M104",
-    loanId: "L1004",
-    by: "S4",
-    ref: "DISB-1004",
-  },
-  {
-    id: "T9",
-    date: daysAgo(12),
-    type: "loan_repayment",
-    amount: 2000,
-    memberId: "M104",
-    loanId: "L1004",
-    by: "S4",
-    ref: "MPESA-RD1",
-  },
-  {
-    id: "T10",
-    date: daysAgo(15),
-    type: "loan_disbursement",
-    amount: 30000,
-    memberId: "M108",
-    loanId: "L1006",
-    by: "S4",
-    ref: "DISB-1006",
-  },
-  {
-    id: "T11",
-    date: daysAgo(5),
-    type: "loan_repayment",
-    amount: 10000,
-    memberId: "M108",
-    loanId: "L1006",
-    by: "S4",
-    ref: "MPESA-RE1",
-  },
-  {
-    id: "T12",
-    date: daysAgo(80),
-    type: "deposit",
-    amount: 5000,
-    memberId: "M101",
-    by: "S3",
-    note: "Savings deposit",
-  },
-  {
-    id: "T13",
-    date: daysAgo(60),
-    type: "deposit",
-    amount: 3500,
-    memberId: "M102",
-    by: "S3",
-    note: "Savings deposit",
-  },
-  {
-    id: "T14",
-    date: daysAgo(50),
-    type: "share_purchase",
-    amount: 5000,
-    memberId: "M101",
-    by: "S3",
-    note: "10 shares",
-  },
-  {
-    id: "T15",
-    date: daysAgo(70),
-    type: "share_purchase",
-    amount: 6000,
-    memberId: "M108",
-    by: "S4",
-    note: "12 shares",
-  },
-  {
-    id: "T16",
-    date: daysAgo(30),
-    type: "fee_payment",
-    amount: 1000,
-    memberId: "M106",
-    by: "S4",
-    note: "Membership + card",
-  },
-  {
-    id: "T17",
-    date: daysAgo(8),
-    type: "investor_contribution",
-    amount: 50000,
-    memberId: "M108",
-    by: "S2",
-    note: "Investor I1 top-up",
-    ref: "INV-I1",
-  },
-  {
-    id: "T18",
-    date: daysAgo(3),
-    type: "petty_cash",
-    amount: 1500,
-    by: "S2",
-    note: "Office supplies",
-  },
-];
-
-const seedPenalties: Penalty[] = [
-  {
-    id: "P1",
-    memberId: "M104",
-    loanId: "L1004",
-    date: daysAgo(8),
-    amount: 500,
-    reason: "Late repayment",
-    status: "outstanding",
-  },
-  {
-    id: "P2",
-    memberId: "M101",
-    loanId: "L1001",
-    date: daysAgo(20),
-    amount: 200,
-    reason: "Missed installment",
-    status: "paid",
-    paidFrom: "round_off_pool",
-  },
-];
-
-const seedRoundOff: RoundOffEntry[] = [
-  {
-    id: "R1",
-    memberId: "M101",
-    date: daysAgo(45),
-    amount: 4,
-    source: "loan_repayment",
-    ref: "MPESA-RA1",
-  },
-  {
-    id: "R2",
-    memberId: "M108",
-    date: daysAgo(5),
-    amount: 3,
-    source: "loan_repayment",
-    ref: "MPESA-RE1",
-  },
-];
-
-const seedPetty: PettyCashEntry[] = [
-  {
-    id: "PC1",
-    date: daysAgo(20),
-    description: "Topup from bank",
-    amount: 20000,
-    category: "topup",
-    by: "S2",
-    type: "topup",
-    mode: "bank",
-    openingBalance: 0,
-  },
-  {
-    id: "PC2",
-    date: daysAgo(15),
-    description: "Airtime",
-    amount: 500,
-    category: "office",
-    by: "S2",
-    type: "payment",
-    mode: "cash",
-    payee: "Safaricom",
-  },
-  {
-    id: "PC3",
-    date: daysAgo(7),
-    description: "Office tea",
-    amount: 350,
-    category: "office",
-    by: "S2",
-    type: "payment",
-    mode: "cash",
-    payee: "Local shop",
-  },
-  {
-    id: "PC4",
-    date: daysAgo(3),
-    description: "Office supplies",
-    amount: 1500,
-    category: "office",
-    by: "S2",
-    type: "payment",
-    mode: "cash",
-    payee: "Stationers",
-  },
-];
-
-const seedInvestors: Investor[] = [
-  {
-    id: "I1",
-    name: "Beatrice Mutiso",
-    contributed: 100000,
-    sharePct: 60,
-    joinedAt: daysAgo(90),
-    phone: "+254722000108",
-    memberId: "M108",
-    notes: "Founding investor",
-  },
-  {
-    id: "I2",
-    name: "Daniel Mbugua",
-    contributed: 75000,
-    sharePct: 40,
-    joinedAt: daysAgo(60),
-    phone: "+254722000999",
-    notes: "External investor",
-  },
-];
-
-const seedAttendance: Attendance[] = [
-  {
-    id: "A1",
-    staffId: "S2",
-    date: daysAgo(2),
-    status: "present",
-    checkIn: "08:05",
-    checkOut: "17:10",
-  },
-  {
-    id: "A2",
-    staffId: "S3",
-    date: daysAgo(2),
-    status: "present",
-    checkIn: "08:15",
-    checkOut: "17:00",
-  },
-  {
-    id: "A3",
-    staffId: "S4",
-    date: daysAgo(2),
-    status: "late",
-    checkIn: "09:20",
-    checkOut: "17:05",
-  },
-  {
-    id: "A4",
-    staffId: "S2",
-    date: daysAgo(1),
-    status: "present",
-    checkIn: "08:00",
-    checkOut: "17:00",
-  },
-  {
-    id: "A5",
-    staffId: "S3",
-    date: daysAgo(1),
-    status: "present",
-    checkIn: "08:10",
-    checkOut: "17:00",
-  },
-  { id: "A6", staffId: "S4", date: daysAgo(1), status: "absent" },
-  { id: "A7", staffId: "S2", date: today(), status: "present", checkIn: "08:02" },
-  { id: "A8", staffId: "S3", date: today(), status: "present", checkIn: "08:20" },
-];
+const seedMembers: Member[] = [];
+const seedLoans: Loan[] = [];
+const seedTx: Transaction[] = [];
+const seedPenalties: Penalty[] = [];
+const seedRoundOff: RoundOffEntry[] = [];
+const seedPetty: PettyCashEntry[] = [];
+const seedInvestors: Investor[] = [];
+const seedAttendance: Attendance[] = [];
 type Store = {
   isAuthenticated: boolean;
   setAuthenticated: (next: boolean) => void;
@@ -961,10 +358,32 @@ const STAFF_KEY = "sauti_staff_v3";
 const ATT_KEY = "sauti_attendance_v3";
 const AUTH_KEY = "sauti_auth_v1";
 const AUTH_STAFF_KEY = "sauti_auth_staff_v1";
+const STORE_RESET_KEY = "sauti_store_reset_v1";
+const STORE_RESET_VERSION = "2026-05-15-empty-seeds";
+const LEGACY_STATE_KEYS = [
+  STAFF_KEY,
+  ATT_KEY,
+  AUTH_KEY,
+  AUTH_STAFF_KEY,
+  "sauti_extra_staff_v1",
+  "sauti_staff_meta_v1",
+  "sauti_staff_chat_v2",
+  "sauti_memos_v1",
+  "sauti_portal_v1",
+];
+
+function ensureStoreReset() {
+  try {
+    if (localStorage.getItem(STORE_RESET_KEY) === STORE_RESET_VERSION) return;
+    LEGACY_STATE_KEYS.forEach((key) => localStorage.removeItem(key));
+    localStorage.setItem(STORE_RESET_KEY, STORE_RESET_VERSION);
+  } catch {}
+}
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [staff, setStaff] = useState<Staff[]>(() => {
     try {
+      ensureStoreReset();
       const s = localStorage.getItem(STAFF_KEY);
       if (s) return JSON.parse(s);
     } catch {}
@@ -972,12 +391,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   });
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
+      ensureStoreReset();
       return localStorage.getItem(AUTH_KEY) === "1";
     } catch {}
     return false;
   });
   const [currentUser, setCurrentUserState] = useState<Staff>(() => {
     try {
+      ensureStoreReset();
       const savedId = localStorage.getItem(AUTH_STAFF_KEY);
       if (savedId) {
         const savedStaff = staff.find((member) => member.id === savedId);
@@ -998,6 +419,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [roundOff, setRoundOff] = useState<RoundOffEntry[]>(seedRoundOff);
   const [attendance, setAttendance] = useState<Attendance[]>(() => {
     try {
+      ensureStoreReset();
       const s = localStorage.getItem(ATT_KEY);
       if (s) return JSON.parse(s);
     } catch {}

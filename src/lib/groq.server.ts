@@ -1,4 +1,5 @@
 import { getSecret } from "@/lib/runtime-secrets.server";
+import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -13,7 +14,11 @@ type GroqMessage = {
 async function getGroqApiKey() {
   const groqKey = await getSecret("GROQ_API_KEY");
   if (!groqKey) {
-    throw new Error("AI unavailable. Add GROQ_API_KEY in the Secret Keys page.");
+    const adminEnv = getSupabaseAdminEnvStatus();
+    const vaultNote = adminEnv.ok
+      ? "Add GROQ_API_KEY in the Secret Keys page or hosting environment."
+      : `The runtime secret vault cannot be read because ${adminEnv.missing.join(", ")} is missing on the server. Add GROQ_API_KEY to hosting env, or add the missing Supabase admin env first so saved runtime secrets can be read.`;
+    throw new Error(`AI unavailable. ${vaultNote}`);
   }
   return groqKey;
 }
