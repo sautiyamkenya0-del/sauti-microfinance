@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
 
 export type AuditEntry = {
   actor_id?: string | null;
@@ -16,6 +16,9 @@ export type AuditEntry = {
 /** Server-only: append one row to audit_log. Never throws (audit must not break flows). */
 export async function recordAudit(e: AuditEntry): Promise<void> {
   try {
+    const supabaseAdmin = getSupabaseAdminOrNull();
+    if (!supabaseAdmin) return;
+
     await supabaseAdmin.from("audit_log").insert({
       actor_id: e.actor_id ?? null,
       actor_name: e.actor_name ?? null,

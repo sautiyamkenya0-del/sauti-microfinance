@@ -13,7 +13,7 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
 export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
-  const { applyMpesaPayment, loans } = useStore();
+  const { loans } = useStore();
   const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
   const [busy, setBusy] = useState(false);
 
@@ -54,17 +54,6 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
     return Math.max(0, Math.floor(amount || 0));
   }, [mode, purpose, amount, feesDue]);
 
-  function simulateLocalPayment(accountRef: string) {
-    const result = applyMpesaPayment(
-      accountRef,
-      previewAmount,
-      member.name,
-      `SIM${Date.now().toString().slice(-6)}`,
-    );
-    toast.success(`Processed locally - ${result.notes.join(" ")}`);
-    onClose();
-  }
-
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
     if (mode === "officer" && purpose === "upfront" && member.fees.firstUpfrontPaid) {
@@ -89,41 +78,34 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
       const contentType = res.headers.get("content-type") ?? "";
       if (res.status === 404 || !contentType.includes("application/json")) {
-        toast.warning("M-Pesa server endpoint not available. Falling back to local simulation.");
-        simulateLocalPayment(accountRef);
+        toast.error("The M-Pesa server endpoint is not available.");
         return;
       }
 
       const data = (await res.json()) as {
         ok?: boolean;
-        simulated?: boolean;
         error?: string;
         errorMessage?: string;
         daraja?: string;
         CheckoutRequestID?: string;
+        hint?: string;
       };
 
       if (!res.ok || !data.ok) {
         const msg = data.error ?? data.errorMessage ?? "STK push failed";
         toast.error(msg, {
           duration: 8000,
-          description: data.daraja ? String(data.daraja).slice(0, 200) : undefined,
+          description: data.hint ?? (data.daraja ? String(data.daraja).slice(0, 200) : undefined),
         });
         return;
       }
 
-      if (data.simulated) {
-        simulateLocalPayment(accountRef);
-        return;
-      }
-
       toast.success(
-        `STK prompt sent to ${member.phone} - CheckoutRequestID ${data.CheckoutRequestID ?? "-"}`,
+        `STK prompt sent to ${member.phone}. Request ID: ${data.CheckoutRequestID ?? "-"}`,
       );
       onClose();
     } catch {
-      toast.warning("M-Pesa server unavailable. Falling back to local simulation.");
-      simulateLocalPayment(accountRef);
+      toast.error("M-Pesa request failed. Check the server configuration and try again.");
     } finally {
       setBusy(false);
     }

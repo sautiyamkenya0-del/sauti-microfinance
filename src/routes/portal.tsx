@@ -94,7 +94,7 @@ function Portal() {
         <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap items-end gap-3">
           <label className="block flex-1 min-w-[280px]">
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              {isStaffView ? "View member" : "Sign in as member (demo)"}
+              {isStaffView ? "View member" : "Member sign-in"}
             </span>
             <select
               value={memberId}

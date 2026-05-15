@@ -5,15 +5,26 @@
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "./types";
 
-function createSupabaseAdminClient() {
+export function getSupabaseAdminEnvStatus() {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const missing = [
+    ...(!SUPABASE_URL ? ["SUPABASE_URL"] : []),
+    ...(!SUPABASE_SERVICE_ROLE_KEY ? ["SUPABASE_SERVICE_ROLE_KEY"] : []),
+  ];
+
+  return {
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    missing,
+    ok: missing.length === 0,
+  };
+}
+
+function createSupabaseAdminClient() {
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, missing } = getSupabaseAdminEnvStatus();
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    const missing = [
-      ...(!SUPABASE_URL ? ["SUPABASE_URL"] : []),
-      ...(!SUPABASE_SERVICE_ROLE_KEY ? ["SUPABASE_SERVICE_ROLE_KEY"] : []),
-    ];
     const message = `Missing Supabase environment variable(s): ${missing.join(", ")}. Add them to your local env or hosting secrets.`;
     console.error(`[Supabase] ${message}`);
     throw new Error(message);
@@ -29,6 +40,12 @@ function createSupabaseAdminClient() {
 }
 
 let _supabaseAdmin: ReturnType<typeof createSupabaseAdminClient> | undefined;
+
+export function getSupabaseAdminOrNull() {
+  if (!getSupabaseAdminEnvStatus().ok) return null;
+  if (!_supabaseAdmin) _supabaseAdmin = createSupabaseAdminClient();
+  return _supabaseAdmin;
+}
 
 // Server-side Supabase client with service role - bypasses RLS
 // SECURITY: Only use this for trusted server-side operations, never expose to client code

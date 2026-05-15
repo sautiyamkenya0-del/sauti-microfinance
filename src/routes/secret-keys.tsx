@@ -122,6 +122,8 @@ function SecretKeysPage() {
   const [items, setItems] = useState<
     Array<{ key: string; preview: string; length: number; updated_at: string }>
   >([]);
+  const [vaultWritable, setVaultWritable] = useState(true);
+  const [vaultReason, setVaultReason] = useState("");
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<{ key: string; value: string }>({
     key: "GROQ_API_KEY",
@@ -141,7 +143,10 @@ function SecretKeysPage() {
   async function refresh() {
     setLoading(true);
     try {
-      setItems(await list());
+      const result = await list();
+      setItems(result.items);
+      setVaultWritable(result.writable);
+      setVaultReason(result.reason);
     } catch (e: any) {
       toast.error(e?.message ?? "Failed to load");
     } finally {
@@ -202,8 +207,8 @@ function SecretKeysPage() {
   return (
     <>
       <AppHeader
-        title="🔐 Secret Keys"
-        subtitle="Hidden vault — director only. Keys, audit log, and watchdog AI."
+        title="System Secrets"
+        subtitle="Director-only server configuration, audit review, and watchdog controls."
       />
       <main className="flex-1 p-6 lg:p-8 space-y-6 max-w-5xl">
         <div className="flex gap-1 bg-muted/40 border border-border rounded-lg p-1 w-fit">
@@ -236,6 +241,19 @@ function SecretKeysPage() {
                 </div>
               </div>
             </div>
+            {!vaultWritable && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+                <div className="font-semibold">Runtime vault unavailable</div>
+                <div className="mt-1">
+                  {vaultReason ||
+                    "SUPABASE_SERVICE_ROLE_KEY is missing on the server, so runtime secret storage is currently disabled."}
+                </div>
+                <div className="mt-1">
+                  Add `SUPABASE_SERVICE_ROLE_KEY` to your local `.env` and hosting secrets, then
+                  redeploy.
+                </div>
+              </div>
+            )}
 
             <section className="bg-card border border-border rounded-xl p-5">
               <h2 className="font-display text-lg font-semibold mb-4 flex items-center gap-2">
@@ -280,6 +298,7 @@ function SecretKeysPage() {
                 </label>
                 <button
                   onClick={onSave}
+                  disabled={!vaultWritable}
                   className="inline-flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2 rounded-md hover:bg-primary/90 h-[38px]"
                 >
                   <Save className="h-4 w-4" /> Save
@@ -336,6 +355,7 @@ function SecretKeysPage() {
                       </div>
                       <button
                         onClick={() => onDelete(it.key)}
+                        disabled={!vaultWritable}
                         className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive"
                         aria-label="Delete"
                       >

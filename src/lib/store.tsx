@@ -1233,6 +1233,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       logout: () => {
         setAuthenticated(false);
+        try {
+          sessionStorage.removeItem("sauti_splash");
+        } catch {}
         setCurrentUserState(seedStaff[0]);
       },
       addStaff: (s) => {

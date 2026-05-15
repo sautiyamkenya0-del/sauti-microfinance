@@ -1,7 +1,10 @@
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
 
 /** Server-only: read a runtime secret value (or undefined). */
 export async function getRuntimeSecret(key: string): Promise<string | undefined> {
+  const supabaseAdmin = getSupabaseAdminOrNull();
+  if (!supabaseAdmin) return undefined;
+
   const { data } = await supabaseAdmin
     .from("runtime_secrets")
     .select("value")

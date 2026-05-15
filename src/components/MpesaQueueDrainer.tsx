@@ -26,12 +26,17 @@ export function MpesaQueueDrainer() {
       } catch {}
     }
     tick();
+    const onVisible = () => {
+      if (!document.hidden && !stop) void tick();
+    };
     const id = setInterval(() => {
-      if (!stop) tick();
-    }, 20000);
+      if (!stop) void tick();
+    }, 5000);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stop = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [applyMpesaPayment]);
   return null;

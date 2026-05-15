@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
 import { recordAudit } from "@/lib/audit.server";
 
 /** Public wrapper: log an action from the client. */
@@ -38,6 +38,9 @@ export const listAudit = createServerFn({ method: "POST" })
     ) => d,
   )
   .handler(async ({ data }) => {
+    const supabaseAdmin = getSupabaseAdminOrNull();
+    if (!supabaseAdmin) return [];
+
     let q = supabaseAdmin
       .from("audit_log")
       .select("*")
@@ -54,6 +57,9 @@ export const listAudit = createServerFn({ method: "POST" })
 
 /** Distinct actors for the filter dropdown. */
 export const listAuditActors = createServerFn({ method: "GET" }).handler(async () => {
+  const supabaseAdmin = getSupabaseAdminOrNull();
+  if (!supabaseAdmin) return [];
+
   const { data, error } = await supabaseAdmin
     .from("audit_log")
     .select("actor_id, actor_name, actor_role")

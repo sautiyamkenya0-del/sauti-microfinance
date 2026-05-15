@@ -15,6 +15,7 @@ import { StoreProvider, useStore } from "@/lib/store";
 import { AppSidebar } from "@/components/AppSidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { SplashScreen } from "@/components/SplashScreen";
+import { MpesaQueueDrainer } from "@/components/MpesaQueueDrainer";
 
 function NotFoundComponent() {
   return (
@@ -163,6 +164,7 @@ function AppLayout() {
   return (
     <div className="flex min-h-screen w-full bg-background">
       <SplashScreen />
+      <MpesaQueueDrainer />
       <AppSidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Outlet />

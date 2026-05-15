@@ -4,8 +4,7 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge, DirectorOnly, StatCard } from "@/components/ui-bits";
 import { useStore, fmtKES } from "@/lib/store";
 import { useMemo, useState } from "react";
-import { toast } from "sonner";
-import { ArrowDownCircle, ArrowUpCircle, Scale, Smartphone } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, Scale } from "lucide-react";
 
 export const Route = createFileRoute("/transactions")({
   head: () => ({ meta: [{ title: "Transactions — Sauti Microfinance" }] }),
@@ -34,15 +33,11 @@ const INFLOWS: ReadonlyArray<string> = [
 const OUTFLOWS: ReadonlyArray<string> = ["withdrawal", "loan_disbursement", "petty_cash"];
 
 function TxPage() {
-  const { transactions, members, staff, applyMpesaPayment, currentUser } = useStore();
+  const { transactions, members, staff } = useStore();
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [memberFilter, setMemberFilter] = useState<string>("");
-  const [simOpen, setSimOpen] = useState(false);
-  const [simAccount, setSimAccount] = useState("SBC001");
-  const [simAmount, setSimAmount] = useState(2000);
-  const [simName, setSimName] = useState("JOSEPH KARIUKI");
 
   const list = useMemo(
     () =>
@@ -129,16 +124,7 @@ function TxPage() {
               ))}
             </select>
           </label>
-          <div className="flex items-end justify-end gap-2">
-            {(currentUser.role === "director" || currentUser.role === "manager") && (
-              <button
-                onClick={() => setSimOpen(true)}
-                className="inline-flex items-center gap-2 bg-accent/30 hover:bg-accent/50 text-accent-foreground text-sm font-medium px-3 py-2 rounded-md"
-              >
-                <Smartphone className="h-4 w-4" /> Test M-Pesa inbound
-              </button>
-            )}
-          </div>
+          <div />
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -204,76 +190,6 @@ function TxPage() {
             </table>
           </div>
         </Section>
-
-        {simOpen && (
-          <div
-            className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4"
-            onClick={() => setSimOpen(false)}
-          >
-            <div
-              className="bg-card rounded-xl border border-border w-full max-w-md p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="font-display text-lg font-semibold mb-1">Simulate M-Pesa Paybill</h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Mirrors the same allocation engine the live C2B callback will run.
-              </p>
-              <div className="space-y-3">
-                <label className="block">
-                  <span className="text-[11px] uppercase text-muted-foreground">
-                    Account number (e.g. SBC001)
-                  </span>
-                  <input
-                    value={simAccount}
-                    onChange={(e) => setSimAccount(e.target.value)}
-                    className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] uppercase text-muted-foreground">Amount (KSh)</span>
-                  <input
-                    type="number"
-                    value={simAmount}
-                    onChange={(e) => setSimAmount(Number(e.target.value))}
-                    className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] uppercase text-muted-foreground">Payer name</span>
-                  <input
-                    value={simName}
-                    onChange={(e) => setSimName(e.target.value)}
-                    className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-              <div className="flex justify-end gap-2 mt-5">
-                <button
-                  onClick={() => setSimOpen(false)}
-                  className="px-3 py-1.5 text-sm rounded-md hover:bg-muted"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    const r = applyMpesaPayment(
-                      simAccount,
-                      simAmount,
-                      simName,
-                      `SIM${Date.now().toString().slice(-6)}`,
-                    );
-                    if (!r.matched) toast.error(r.notes.join(" "));
-                    else toast.success(r.notes.join(" "));
-                    setSimOpen(false);
-                  }}
-                  className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  Run allocation
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
     </>
   );
