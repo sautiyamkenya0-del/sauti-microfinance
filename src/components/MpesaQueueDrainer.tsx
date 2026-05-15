@@ -1,0 +1,38 @@
+import { useEffect } from "react";
+import { useStore } from "@/lib/store";
+import { toast } from "sonner";
+
+/** Polls /api/mpesa/queue every 20s; runs the in-memory allocation engine for each Daraja confirmation. */
+export function MpesaQueueDrainer() {
+  const { applyMpesaPayment } = useStore();
+  useEffect(() => {
+    let stop = false;
+    async function tick() {
+      try {
+        const r = await fetch("/api/mpesa/queue");
+        if (!r.ok) return;
+        const { items } = await r.json();
+        for (const it of items as Array<{
+          txId: string;
+          amount: number;
+          account: string;
+          name: string;
+        }>) {
+          const res = applyMpesaPayment(it.account, it.amount, it.name, it.txId);
+          (res.matched ? toast.success : toast.warning)(
+            `M-Pesa ${it.txId}: ${res.notes.join(" ")}`,
+          );
+        }
+      } catch {}
+    }
+    tick();
+    const id = setInterval(() => {
+      if (!stop) tick();
+    }, 20000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [applyMpesaPayment]);
+  return null;
+}
