@@ -142,9 +142,9 @@
     letter-spacing: -0.02em;
   }
 
-  @media (max-width: 767px) {
-    .mobile-safe-top {
-      padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
-    }
+  .mobile-safe-top {
+    /* Apply safe-area padding on all viewports. Older iOS uses constant(), newer uses env(). */
+    padding-top: calc(0.75rem + constant(safe-area-inset-top));
+    padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
   }
 }
