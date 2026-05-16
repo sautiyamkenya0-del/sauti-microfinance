@@ -9,16 +9,23 @@ export function MpesaQueueDrainer() {
     let stop = false;
     async function tick() {
       try {
-        const r = await fetch("/api/mpesa/queue");
+        const r = await fetch("/api/mpesa/queue", {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        });
         if (!r.ok) return;
         const { items } = await r.json();
         for (const it of items as Array<{
+          id: string;
           txId: string;
           amount: number;
           account: string;
           name: string;
         }>) {
-          const res = applyMpesaPayment(it.account, it.amount, it.name, it.txId);
+          const res = await applyMpesaPayment(it.account, it.amount, it.name, it.txId, it.id);
           (res.matched ? toast.success : toast.warning)(
             `M-Pesa ${it.txId}: ${res.notes.join(" ")}`,
           );

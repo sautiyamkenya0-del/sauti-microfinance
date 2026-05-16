@@ -3,12 +3,21 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 
 import {
+  applyMpesaPaymentRecord,
+  createAppraisalRecord,
   createFieldVisitRecord,
+  createFollowupRecord,
+  createInvestorRecord,
+  createLoanRecord,
   createMemberRecord,
+  createPettyCashRecord,
   createStaffMessageRecord,
   createStaffRecord,
+  createTransactionRecord,
   deleteStaffRecord,
   loadAppData,
+  reviewLoanRecord,
+  settlePenaltyFromPoolRecord,
   updateStaffRecord,
   upsertAttendanceRecord,
 } from "@/lib/app-data.functions";
@@ -383,15 +392,15 @@ type Store = {
   addStaff: (s: Omit<Staff, "id">) => Promise<string>;
   updateStaff: (id: string, patch: Partial<Staff>) => Promise<void>;
   removeStaff: (id: string) => Promise<void>;
-  addLoan: (l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] }) => string;
-  approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => void;
-  rejectLoan: (loanId: string, by: string, note?: string) => void;
-  recordTransaction: (t: Omit<Transaction, "id" | "date"> & { date?: string }) => void;
-  addPetty: (p: Omit<PettyCashEntry, "id" | "date"> & { date?: string }) => void;
-  addAppraisal: (a: Omit<Appraisal, "id" | "date">) => void;
-  addInvestor: (i: Omit<Investor, "id" | "joinedAt"> & { joinedAt?: string }) => void;
+  addLoan: (l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] }) => Promise<string>;
+  approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => Promise<void>;
+  rejectLoan: (loanId: string, by: string, note?: string) => Promise<void>;
+  recordTransaction: (t: Omit<Transaction, "id" | "date"> & { date?: string }) => Promise<string>;
+  addPetty: (p: Omit<PettyCashEntry, "id" | "date"> & { date?: string }) => Promise<string>;
+  addAppraisal: (a: Omit<Appraisal, "id" | "date">) => Promise<string>;
+  addInvestor: (i: Omit<Investor, "id" | "joinedAt"> & { joinedAt?: string }) => Promise<string>;
   addFieldVisit: (v: Omit<FieldVisit, "id" | "date"> & { date?: string }) => Promise<string>;
-  addFollowup: (n: Omit<FollowupNote, "id" | "date"> & { date?: string }) => void;
+  addFollowup: (n: Omit<FollowupNote, "id" | "date"> & { date?: string }) => Promise<string>;
   addStaffMessage: (m: {
     senderId: string;
     receiverId: string;
@@ -408,97 +417,44 @@ type Store = {
   ) => Promise<void>;
   memberLoanCount: (memberId: string) => number;
   roundOffBalance: (memberId: string) => number;
-  settlePenaltyFromPool: (penaltyId: string) => boolean;
+  settlePenaltyFromPool: (penaltyId: string) => Promise<boolean>;
   resolveMpesaAccount: (account: string) => Member | undefined;
   applyMpesaPayment: (
     account: string,
     amount: number,
     payerName?: string,
     mpesaRef?: string,
-  ) => MpesaAllocation;
+    eventId?: string,
+  ) => Promise<MpesaAllocation>;
 };
 
 const Ctx = createContext<Store | null>(null);
 
-const STAFF_KEY = "sauti_staff_v3";
-const ATT_KEY = "sauti_attendance_v3";
-const AUTH_KEY = "sauti_auth_v1";
-const AUTH_STAFF_KEY = "sauti_auth_staff_v1";
-const AUTH_MODE_KEY = "sauti_auth_mode_v1";
-const PORTAL_MEMBER_KEY = "sauti_portal_member_v1";
-const STORE_RESET_KEY = "sauti_store_reset_v1";
-const STORE_RESET_VERSION = "2026-05-15-empty-seeds";
-const LEGACY_STATE_KEYS = [
-  STAFF_KEY,
-  ATT_KEY,
-  AUTH_KEY,
-  AUTH_STAFF_KEY,
-  "sauti_extra_staff_v1",
-  "sauti_staff_meta_v1",
-  "sauti_staff_chat_v2",
-  "sauti_memos_v1",
-  "sauti_portal_v1",
-];
-
-function ensureStoreReset() {
-  try {
-    if (localStorage.getItem(STORE_RESET_KEY) === STORE_RESET_VERSION) return;
-    LEGACY_STATE_KEYS.forEach((key) => localStorage.removeItem(key));
-    localStorage.setItem(STORE_RESET_KEY, STORE_RESET_VERSION);
-  } catch {}
-}
-
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
+  const applyMpesaPaymentServer = useServerFn(applyMpesaPaymentRecord);
+  const createAppraisal = useServerFn(createAppraisalRecord);
   const createMember = useServerFn(createMemberRecord);
+  const createFollowup = useServerFn(createFollowupRecord);
   const createFieldVisit = useServerFn(createFieldVisitRecord);
+  const createInvestor = useServerFn(createInvestorRecord);
+  const createLoan = useServerFn(createLoanRecord);
+  const createPetty = useServerFn(createPettyCashRecord);
   const createStaffMessage = useServerFn(createStaffMessageRecord);
   const createStaff = useServerFn(createStaffRecord);
+  const createTransaction = useServerFn(createTransactionRecord);
   const saveStaff = useServerFn(updateStaffRecord);
   const deleteStaff = useServerFn(deleteStaffRecord);
+  const reviewLoan = useServerFn(reviewLoanRecord);
   const saveAttendance = useServerFn(upsertAttendanceRecord);
+  const settlePenaltyFromPoolServer = useServerFn(settlePenaltyFromPoolRecord);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [staff, setStaff] = useState<Staff[]>(() => {
-    try {
-      ensureStoreReset();
-      const s = localStorage.getItem(STAFF_KEY);
-      if (s) return JSON.parse(s);
-    } catch {}
-    return seedStaff;
-  });
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    try {
-      ensureStoreReset();
-      return localStorage.getItem(AUTH_KEY) === "1";
-    } catch {}
-    return false;
-  });
-  const [currentUser, setCurrentUserState] = useState<Staff>(() => {
-    try {
-      ensureStoreReset();
-      const savedId = localStorage.getItem(AUTH_STAFF_KEY);
-      if (savedId) {
-        const savedStaff = staff.find((member) => member.id === savedId);
-        if (savedStaff) return savedStaff;
-      }
-    } catch {}
-    return staff[0] ?? seedStaff[0];
-  });
+  const [staff, setStaff] = useState<Staff[]>(seedStaff);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [currentUser, setCurrentUserState] = useState<Staff>(seedStaff[0]);
   const [members, setMembers] = useState<Member[]>(seedMembers);
-  const [authMode, setAuthMode] = useState<"staff" | "member">(() => {
-    try {
-      ensureStoreReset();
-      return localStorage.getItem(AUTH_MODE_KEY) === "member" ? "member" : "staff";
-    } catch {}
-    return "staff";
-  });
-  const [portalMemberId, setPortalMemberIdState] = useState<string>(() => {
-    try {
-      ensureStoreReset();
-      return localStorage.getItem(PORTAL_MEMBER_KEY) ?? "";
-    } catch {}
-    return "";
-  });
+  const [authMode, setAuthMode] = useState<"staff" | "member">("staff");
+  const [portalMemberId, setPortalMemberIdState] = useState<string>("");
   const [loans, setLoans] = useState<Loan[]>(seedLoans);
   const [transactions, setTransactions] = useState<Transaction[]>(seedTx);
   const [pettyCash, setPettyCash] = useState<PettyCashEntry[]>(seedPetty);
@@ -509,14 +465,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [penalties, setPenalties] = useState<Penalty[]>(seedPenalties);
   const [roundOff, setRoundOff] = useState<RoundOffEntry[]>(seedRoundOff);
   const [staffMessages, setStaffMessages] = useState<StaffMessage[]>([]);
-  const [attendance, setAttendance] = useState<Attendance[]>(() => {
-    try {
-      ensureStoreReset();
-      const s = localStorage.getItem(ATT_KEY);
-      if (s) return JSON.parse(s);
-    } catch {}
-    return seedAttendance;
-  });
+  const [attendance, setAttendance] = useState<Attendance[]>(seedAttendance);
 
   async function refreshFromDatabase() {
     try {
@@ -548,48 +497,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!staff.length) return;
     setCurrentUserState((prev) => {
-      const savedId = (() => {
-        try {
-          return localStorage.getItem(AUTH_STAFF_KEY);
-        } catch {
-          return null;
-        }
-      })();
-      if (savedId) {
-        const savedStaff = staff.find((member) => member.id === savedId);
-        if (savedStaff) return savedStaff;
-      }
       return staff.find((member) => member.id === prev.id) ?? staff[0];
     });
   }, [staff]);
 
   const setAuthenticated = (next: boolean) => {
     setIsAuthenticated(next);
-    try {
-      if (next) {
-        localStorage.setItem(AUTH_KEY, "1");
-        localStorage.setItem(AUTH_MODE_KEY, authMode);
-      } else {
-        localStorage.removeItem(AUTH_KEY);
-        localStorage.removeItem(AUTH_STAFF_KEY);
-        localStorage.removeItem(AUTH_MODE_KEY);
-      }
-    } catch {}
   };
 
   const setCurrentUser = (next: Staff) => {
     setCurrentUserState(next);
-    try {
-      localStorage.setItem(AUTH_STAFF_KEY, next.id);
-    } catch {}
   };
 
   const setPortalMemberId = (next: string) => {
     setPortalMemberIdState(next);
-    try {
-      if (next) localStorage.setItem(PORTAL_MEMBER_KEY, next);
-      else localStorage.removeItem(PORTAL_MEMBER_KEY);
-    } catch {}
   };
 
   const value = useMemo<Store>(
@@ -648,123 +569,110 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await refreshFromDatabase();
         return result.id;
       },
-      addLoan: (l) => {
-        const id = `L${1000 + loans.length + 1}`;
+      addLoan: async (l) => {
         const status = l.status ?? "pending";
         const termDays = normalizeLoanTermDays(l.termDays ?? (l.termMonths || 1) * 30);
         const termMonths = termPeriodsFromDays(termDays);
         const rate = l.rate > 0 ? l.rate : loanRateForTerm(termDays);
-        setLoans((prev) => [...prev, { ...l, id, rate, termDays, termMonths, paid: 0, status }]);
-        // Only record disbursement if directly active
-        if (status === "active") {
-          setTransactions((prev) => [
-            {
-              id: `T${prev.length + 1}`,
-              date: new Date().toISOString().slice(0, 10),
-              type: "loan_disbursement",
-              amount: l.principal,
-              memberId: l.memberId,
-              loanId: id,
-              by: currentUser.id,
-            },
-            ...prev,
-          ]);
-        }
-        return id;
-      },
-      approveLoan: (loanId, approvedAmount, by, note) => {
-        setLoans((prev) =>
-          prev.map((ln) => {
-            if (ln.id !== loanId) return ln;
-            return {
-              ...ln,
-              principal: approvedAmount,
-              approvedAmount,
-              status: "active",
-              reviewedBy: by,
-              reviewNote: note,
-            };
-          }),
-        );
-        const ln = loans.find((x) => x.id === loanId);
-        if (ln) {
-          setTransactions((prev) => [
-            {
-              id: `T${prev.length + 1}`,
-              date: new Date().toISOString().slice(0, 10),
-              type: "loan_disbursement",
-              amount: approvedAmount,
-              memberId: ln.memberId,
-              loanId,
-              by,
-              note: note ?? "Approved",
-            },
-            ...prev,
-          ]);
-        }
-      },
-      rejectLoan: (loanId, by, note) => {
-        setLoans((prev) =>
-          prev.map((ln) =>
-            ln.id === loanId ? { ...ln, status: "rejected", reviewedBy: by, reviewNote: note } : ln,
-          ),
-        );
-      },
-      recordTransaction: (t) => {
-        const id = `T${transactions.length + 1}`;
-        const date = t.date ?? new Date().toISOString().slice(0, 10);
-        setTransactions((prev) => [{ ...t, id, date }, ...prev]);
-        if (t.memberId) {
-          setMembers((prev) =>
-            prev.map((m) => {
-              if (m.id !== t.memberId) return m;
-              if (t.type === "deposit")
-                return { ...m, savingsBalance: m.savingsBalance + t.amount };
-              if (t.type === "withdrawal")
-                return { ...m, savingsBalance: Math.max(0, m.savingsBalance - t.amount) };
-              if (t.type === "share_purchase")
-                return { ...m, shares: m.shares + Math.floor(t.amount / SHARE_PRICE) };
-              return m;
-            }),
-          );
-        }
-        if (t.loanId && t.type === "loan_repayment") {
-          setLoans((prev) =>
-            prev.map((ln) => {
-              if (ln.id !== t.loanId) return ln;
-              const nextPaid = ln.paid + t.amount;
-              const next = { ...ln, paid: nextPaid };
-              return loanSummary(next).isSettled ? { ...next, status: "closed" } : next;
-            }),
-          );
-        }
-      },
-      addPetty: (p) => {
-        const id = `P${pettyCash.length + 1}`;
-        const date = p.date ?? new Date().toISOString().slice(0, 10);
-        setPettyCash((prev) => [{ ...p, id, date }, ...prev]);
-        // Petty cash is its own ledger — NOT linked to the paybill / transactions ledger.
-      },
-      addAppraisal: (a) => {
-        const id = `AP${appraisals.length + 1}`;
-        const date = new Date().toISOString().slice(0, 10);
-        setAppraisals((prev) => [{ ...a, id, date }, ...prev]);
-      },
-      addInvestor: (i) => {
-        const id = `I${investors.length + 1}`;
-        const joinedAt = i.joinedAt ?? new Date().toISOString().slice(0, 10);
-        setInvestors((prev) => [...prev, { ...i, id, joinedAt }]);
-        setTransactions((prev) => [
-          {
-            id: `T${prev.length + 1}`,
-            date: joinedAt,
-            type: "investor_contribution",
-            amount: i.contributed,
-            by: currentUser.id,
-            note: `Investor: ${i.name}`,
+        const result = await createLoan({
+          data: {
+            memberId: l.memberId,
+            principal: l.principal,
+            approvedAmount: l.approvedAmount,
+            rate,
+            termDays,
+            termMonths,
+            startDate: l.startDate,
+            status,
+            officerId: l.officerId,
+            purpose: l.purpose,
           },
-          ...prev,
-        ]);
+        });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      approveLoan: async (loanId, approvedAmount, by, note) => {
+        await reviewLoan({
+          data: {
+            loanId,
+            decision: "approved",
+            approvedAmount,
+            reviewedBy: by,
+            note,
+          },
+        });
+        await refreshFromDatabase();
+      },
+      rejectLoan: async (loanId, by, note) => {
+        await reviewLoan({
+          data: {
+            loanId,
+            decision: "rejected",
+            reviewedBy: by,
+            note,
+          },
+        });
+        await refreshFromDatabase();
+      },
+      recordTransaction: async (t) => {
+        const result = await createTransaction({
+          data: {
+            date: t.date,
+            type: t.type,
+            account: t.account,
+            payerName: t.payerName,
+            amount: t.amount,
+            memberId: t.memberId,
+            loanId: t.loanId,
+            ref: t.ref,
+            by: t.by,
+            note: t.note,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      addPetty: async (p) => {
+        const result = await createPetty({
+          data: {
+            date: p.date,
+            description: p.description,
+            amount: p.amount,
+            category: p.category,
+            by: p.by,
+            time: p.time,
+            type: p.type,
+            payee: p.payee,
+            contact: p.contact,
+            mode: p.mode,
+            reference: p.reference,
+            txnCost: p.txnCost,
+            openingBalance: p.openingBalance,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      addAppraisal: async (a) => {
+        const result = await createAppraisal({ data: a as any });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      addInvestor: async (i) => {
+        const result = await createInvestor({
+          data: {
+            name: i.name,
+            contributed: i.contributed,
+            sharePct: i.sharePct,
+            joinedAt: i.joinedAt,
+            phone: i.phone,
+            notes: i.notes,
+            memberId: i.memberId,
+            byStaff: currentUser.id,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
       },
       addFieldVisit: async (visit) => {
         const result = await createFieldVisit({
@@ -782,10 +690,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await refreshFromDatabase();
         return result.id;
       },
-      addFollowup: (n) => {
-        const id = `FU${followups.length + 1}`;
-        const date = n.date ?? new Date().toISOString().slice(0, 10);
-        setFollowups((prev) => [{ ...n, id, date }, ...prev]);
+      addFollowup: async (n) => {
+        const result = await createFollowup({
+          data: {
+            loanId: n.loanId,
+            memberId: n.memberId,
+            date: n.date,
+            note: n.note,
+            outcome: n.outcome,
+            by: n.by,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
       },
       addStaffMessage: async (message) => {
         const result = await createStaffMessage({
@@ -817,9 +734,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (targetPhone && cleanPhone && targetPhone === cleanPhone) {
           setAuthMode("member");
           setPortalMemberId(target.id);
-          try {
-            localStorage.setItem(AUTH_MODE_KEY, "member");
-          } catch {}
           return target;
         }
         return null;
@@ -831,9 +745,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
         if (found) {
           setAuthMode("staff");
-          try {
-            localStorage.setItem(AUTH_MODE_KEY, "staff");
-          } catch {}
           setCurrentUser(found);
           setAuthenticated(true);
           return found;
@@ -844,10 +755,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setAuthMode("staff");
         setPortalMemberId("");
         setAuthenticated(false);
-        try {
-          sessionStorage.removeItem("sauti_splash");
-        } catch {}
-        setCurrentUserState(seedStaff[0]);
+        setCurrentUserState(staff[0] ?? seedStaff[0]);
       },
       addStaff: async (s) => {
         const result = await createStaff({
@@ -926,282 +834,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           .reduce((s, p) => s + p.amount, 0);
         return Math.max(0, credits - debits);
       },
-      settlePenaltyFromPool: (penaltyId: string) => {
-        const pen = penalties.find((p) => p.id === penaltyId);
-        if (!pen || pen.status !== "outstanding") return false;
-        const credits = roundOff
-          .filter((r) => r.memberId === pen.memberId)
-          .reduce((s, r) => s + r.amount, 0);
-        const debits = penalties
-          .filter(
-            (p) =>
-              p.memberId === pen.memberId && p.status === "paid" && p.paidFrom === "round_off_pool",
-          )
-          .reduce((s, p) => s + p.amount, 0);
-        const bal = credits - debits;
-        if (bal < pen.amount) return false;
-        setPenalties((prev) =>
-          prev.map((p) =>
-            p.id === penaltyId ? { ...p, status: "paid", paidFrom: "round_off_pool" } : p,
-          ),
-        );
-        return true;
+      settlePenaltyFromPool: async (penaltyId: string) => {
+        const result = await settlePenaltyFromPoolServer({
+          data: { penaltyId },
+        });
+        if (result.ok) await refreshFromDatabase();
+        return result.ok;
       },
       resolveMpesaAccount: (account: string) => {
         const memberId = parseMembershipNumber(account);
         if (!memberId) return undefined;
         return members.find((mb) => mb.id === memberId);
       },
-      applyMpesaPayment: (account, amount, payerName, mpesaRef) => {
-        const norm = account.trim().toUpperCase();
-        const notes: string[] = [];
-        const memberId = parseMembershipNumber(account);
-        if (!memberId) {
-          notes.push(`Account "${account}" did not match SBC member pattern.`);
-          return { matched: false, account: norm, notes };
-        }
-        const member = members.find((mb) => mb.id === memberId);
-        if (!member) {
-          notes.push(`No member with ID ${memberId}. Holding as suspense.`);
-          return { matched: false, account: norm, notes };
-        }
-
-        let remaining = amount;
-        const today = new Date().toISOString().slice(0, 10);
-        const txBatch: Transaction[] = [];
-        const penaltiesCleared: { id: string; amount: number }[] = [];
-        let primary: MpesaAllocation["primary"];
-        let toRoundOff = 0;
-        const feeUpdates: Partial<MandatoryFees> = {};
-
-        // 0) Member-investor short-circuit: any payment goes straight to the investment pool.
-        if (member.isInvestor && member.investorId) {
-          setInvestors((prev) =>
-            prev.map((inv) =>
-              inv.id === member.investorId
-                ? { ...inv, contributed: inv.contributed + amount }
-                : inv,
-            ),
-          );
-          const tx: Transaction = {
-            id: "",
-            date: today,
-            type: "investor_contribution",
+      applyMpesaPayment: async (account, amount, payerName, mpesaRef, eventId) => {
+        const result = await applyMpesaPaymentServer({
+          data: {
+            eventId,
+            account,
             amount,
-            memberId,
-            by: "MPESA",
-            ref: mpesaRef,
-            account: norm,
             payerName,
-            note: `Investment top-up via Paybill ${norm}`,
-          };
-          setTransactions((prev) => [{ ...tx, id: `T${prev.length + 1}` }, ...prev]);
-          notes.push(`Routed ${amount}/= to investment pool for member-investor ${member.name}.`);
-          primary = {
-            type: "investor_contribution",
-            amount,
-            note: `Investment via Paybill ${norm}`,
-          };
-          return {
-            matched: true,
-            memberId,
-            account: norm,
-            primary,
-            toRoundOff: 0,
-            penaltiesCleared: [],
-            notes,
-          };
-        }
-
-        // 1) Mandatory fees first: membership 500, card 500, sticker 500 (only if hasShop)
-        const FEE_QUEUE: {
-          key: keyof MandatoryFees;
-          label: string;
-          amount: number;
-          required: boolean;
-        }[] = [
-          { key: "membership", label: "Membership fee", amount: 500, required: true },
-          { key: "card", label: "Membership card", amount: 500, required: true },
-          {
-            key: "sticker",
-            label: "Sticker fee",
-            amount: 500,
-            required: memberNeedsSticker(member),
+            mpesaRef,
           },
-        ];
-        for (const fee of FEE_QUEUE) {
-          if (!fee.required) continue;
-          if (member.fees[fee.key]) continue;
-          if (remaining < fee.amount) break;
-          remaining -= fee.amount;
-          (feeUpdates as any)[fee.key] = true;
-          txBatch.push({
-            id: "",
-            date: today,
-            type: "fee_payment",
-            amount: fee.amount,
-            memberId,
-            by: "MPESA",
-            ref: mpesaRef,
-            account: norm,
-            payerName,
-            note: `${fee.label} (auto)`,
-          });
-          notes.push(`Paid ${fee.label} — ${fee.amount}/=.`);
-        }
-        if (Object.keys(feeUpdates).length) {
-          setMembers((prev) =>
-            prev.map((mb) =>
-              mb.id === memberId ? { ...mb, fees: { ...mb.fees, ...feeUpdates } } : mb,
-            ),
-          );
-        }
-
-        // 2) Clear outstanding penalties
-        const outstanding = penalties.filter(
-          (p) => p.memberId === memberId && p.status === "outstanding",
-        );
-        for (const pen of outstanding) {
-          if (remaining >= pen.amount) {
-            remaining -= pen.amount;
-            penaltiesCleared.push({ id: pen.id, amount: pen.amount });
-            notes.push(`Cleared penalty ${pen.id} (${pen.reason}) — ${pen.amount}/=.`);
-          }
-        }
-        if (penaltiesCleared.length) {
-          setPenalties((prev) =>
-            prev.map((p) =>
-              penaltiesCleared.find((c) => c.id === p.id)
-                ? { ...p, status: "paid", paidFrom: "mpesa" }
-                : p,
-            ),
-          );
-        }
-
-        // 3) Active loan repayment (oldest first)
-        const activeLoan = loans
-          .filter((l) => l.memberId === memberId && l.status === "active")
-          .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
-        if (activeLoan && remaining > 0) {
-          const balance = loanSummary(activeLoan).balance;
-          const applied = Math.min(remaining, balance);
-          const rounded = roundUpKES(applied, ROUNDING_BASE);
-          const surplus = Math.max(0, rounded - applied);
-          if (remaining >= rounded) {
-            remaining -= rounded;
-            if (surplus > 0) toRoundOff += surplus;
-          } else {
-            remaining = 0;
-          }
-          primary = {
-            type: "loan_repayment",
-            amount: applied,
-            loanId: activeLoan.id,
-            note: `M-Pesa ${mpesaRef ?? ""} from ${payerName ?? "—"}`,
-          };
-          txBatch.push({
-            id: "",
-            date: today,
-            type: "loan_repayment",
-            amount: applied,
-            memberId,
-            loanId: activeLoan.id,
-            by: "MPESA",
-            ref: mpesaRef,
-            account: norm,
-            payerName,
-            note: `Paybill ${norm} · ${payerName ?? ""}`,
-          });
-          setLoans((prev) =>
-            prev.map((ln) => {
-              if (ln.id !== activeLoan.id) return ln;
-              const nextPaid = ln.paid + applied;
-              const next = { ...ln, paid: nextPaid };
-              return loanSummary(next).isSettled ? { ...next, status: "closed" } : next;
-            }),
-          );
-          if (!member.fees.firstUpfrontPaid) {
-            setMembers((prev) =>
-              prev.map((mb) =>
-                mb.id === memberId ? { ...mb, fees: { ...mb.fees, firstUpfrontPaid: true } } : mb,
-              ),
-            );
-          }
-          notes.push(
-            `Applied ${applied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= → round-off pool.`,
-          );
-        }
-
-        // 3) Anything left → savings deposit (also rounded)
-        if (remaining > 0) {
-          const rounded = roundUpKES(remaining, ROUNDING_BASE);
-          const surplus = Math.max(0, rounded - remaining);
-          const applied = remaining;
-          if (!primary)
-            primary = {
-              type: "deposit",
-              amount: applied,
-              note: `M-Pesa ${mpesaRef ?? ""} from ${payerName ?? "—"}`,
-            };
-          txBatch.push({
-            id: "",
-            date: today,
-            type: "deposit",
-            amount: applied,
-            memberId,
-            by: "MPESA",
-            ref: mpesaRef,
-            account: norm,
-            payerName,
-            note: `Paybill ${norm} · ${payerName ?? ""}`,
-          });
-          setMembers((prev) =>
-            prev.map((mb) =>
-              mb.id === memberId ? { ...mb, savingsBalance: mb.savingsBalance + applied } : mb,
-            ),
-          );
-          if (surplus > 0) toRoundOff += surplus;
-          if (member.savingsBalance + applied < MANDATORY_SAVINGS_THRESHOLD) {
-            notes.push(
-              `Member is still below the mandatory savings threshold of ${MANDATORY_SAVINGS_THRESHOLD}/=.`,
-            );
-          } else {
-            notes.push(`Member meets mandatory savings threshold.`);
-          }
-          remaining = 0;
-        }
-
-        // Persist transactions + round-off pool entries
-        if (txBatch.length) {
-          setTransactions((prev) => {
-            const out = [...prev];
-            txBatch.forEach((t, i) => out.unshift({ ...t, id: `T${prev.length + i + 1}` }));
-            return out;
-          });
-        }
-        if (toRoundOff > 0) {
-          setRoundOff((prev) => [
-            {
-              id: `RO${prev.length + 1}`,
-              memberId,
-              date: today,
-              amount: toRoundOff,
-              source: "loan_repayment",
-              ref: mpesaRef,
-            },
-            ...prev,
-          ]);
-        }
-
-        return {
-          matched: true,
-          memberId,
-          account: norm,
-          primary,
-          toRoundOff,
-          penaltiesCleared,
-          notes,
-        };
+        });
+        await refreshFromDatabase();
+        return result as MpesaAllocation;
       },
     }),
     [
@@ -1223,9 +879,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       roundOff,
       attendance,
       staffMessages,
+      applyMpesaPaymentServer,
+      createAppraisal,
       createFieldVisit,
+      createFollowup,
+      createInvestor,
+      createLoan,
+      createPetty,
       createStaffMessage,
+      createTransaction,
       load,
+      reviewLoan,
+      settlePenaltyFromPoolServer,
+      staff,
     ],
   );
 

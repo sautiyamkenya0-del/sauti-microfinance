@@ -36,6 +36,508 @@ function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const SHARE_PRICE = 500;
+const ROUNDING_BASE = 1;
+const MANDATORY_SAVINGS_THRESHOLD = 1000;
+
+function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
+  if (amount <= 0) return 0;
+  return Math.ceil(amount / step) * step;
+}
+
+function normalizeLoanTermDays(termDays?: number) {
+  if (termDays === 7 || termDays === 14 || termDays === 30 || termDays === 60 || termDays === 90)
+    return termDays;
+  if ((termDays ?? 0) <= 10) return 7;
+  if ((termDays ?? 0) <= 21) return 14;
+  if ((termDays ?? 0) <= 45) return 30;
+  if ((termDays ?? 0) <= 75) return 60;
+  return 90;
+}
+
+function termPeriodsFromDays(termDays?: number) {
+  return Math.max(1, Math.ceil(normalizeLoanTermDays(termDays) / 30));
+}
+
+function loanScheduleTotal(principal: number, monthlyRatePct: number, months: number) {
+  const periods = Number.isFinite(months) && months > 0 ? months : 1;
+  const interest = principal * (monthlyRatePct / 100) * periods;
+  const total = principal + interest;
+  return { interest, total, monthly: total / periods };
+}
+
+function loanBalanceSummary(loan: {
+  principal: number | string | null;
+  approved_amount?: number | string | null;
+  rate?: number | string | null;
+  term_days?: number | null;
+  term_months?: number | null;
+  paid?: number | string | null;
+}) {
+  const approved = Number(loan.approved_amount ?? loan.principal ?? 0);
+  const termDays = normalizeLoanTermDays(loan.term_days ?? Number(loan.term_months ?? 1) * 30);
+  const periods =
+    Number(loan.term_months ?? 0) > 0
+      ? Number(loan.term_months ?? 0)
+      : termPeriodsFromDays(termDays);
+  const total = loanScheduleTotal(approved, Number(loan.rate ?? 0), periods).total;
+  const paid = Number(loan.paid ?? 0);
+  return {
+    approved,
+    termDays,
+    total,
+    paid,
+    balance: Math.max(0, total - paid),
+  };
+}
+
+function parseMembershipNumber(account: string) {
+  const norm = account.trim().toUpperCase();
+  const match = norm.match(/SBC0*(\d{1,4})/);
+  if (!match) return undefined;
+  return `M${match[1].padStart(3, "0")}`;
+}
+
+function memberNeedsStickerRow(member: {
+  business_permanence?: string | null;
+  fee_has_shop?: boolean | null;
+}) {
+  if (member.business_permanence) return member.business_permanence === "permanent";
+  return !!member.fee_has_shop;
+}
+
+async function insertTransactionRow(
+  row: Omit<
+    Parameters<ReturnType<typeof requireSupabaseAdmin>["from"]>[0] extends never
+      ? never
+      : any,
+    never
+  > & {
+    date?: string;
+    type: string;
+    amount: number;
+    member_id?: string | null;
+    loan_id?: string | null;
+    by_staff?: string | null;
+    note?: string | null;
+    ref?: string | null;
+    account?: string | null;
+    payer_name?: string | null;
+  },
+) {
+  const supabaseAdmin = requireSupabaseAdmin();
+  const id = await nextPrefixedId("transactions", "T", 1);
+  const { error } = await supabaseAdmin.from("transactions").insert({
+    id,
+    date: row.date ?? new Date().toISOString().slice(0, 10),
+    type: row.type as never,
+    amount: row.amount,
+    member_id: row.member_id ?? null,
+    loan_id: row.loan_id ?? null,
+    by_staff: row.by_staff ?? null,
+    note: row.note ?? null,
+    ref: row.ref ?? null,
+    account: row.account ?? null,
+    payer_name: row.payer_name ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return id;
+}
+
+async function insertRoundOffRow(row: {
+  memberId: string;
+  amount: number;
+  source: "loan_repayment" | "savings_deposit" | "share_purchase" | "manual";
+  date?: string;
+  ref?: string;
+}) {
+  const supabaseAdmin = requireSupabaseAdmin();
+  const id = await nextPrefixedId("round_off", "RO", 1);
+  const { error } = await supabaseAdmin.from("round_off").insert({
+    id,
+    member_id: row.memberId,
+    amount: row.amount,
+    source: row.source as never,
+    date: row.date ?? new Date().toISOString().slice(0, 10),
+    ref: row.ref ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return id;
+}
+
+async function markMpesaEventProcessed(eventId?: string, transactionId?: string | null) {
+  if (!eventId) return;
+  const supabaseAdmin = requireSupabaseAdmin();
+  const { error } = await supabaseAdmin
+    .from("mpesa_events")
+    .update({
+      processed: true,
+      transaction_id: transactionId ?? null,
+    })
+    .eq("id", eventId);
+  if (error) throw new Error(error.message);
+}
+
+export async function recordMpesaConfirmationEvent(args: {
+  raw: Record<string, unknown>;
+  account: string;
+  amount: number;
+  mpesaRef?: string;
+  payerName?: string;
+  phone?: string;
+}) {
+  const supabaseAdmin = requireSupabaseAdmin();
+  const ref = args.mpesaRef?.trim() || undefined;
+
+  if (ref) {
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("id, processed, transaction_id")
+      .eq("kind", "confirmation")
+      .eq("mpesa_ref", ref)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (existing) return existing;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("mpesa_events")
+    .insert({
+      kind: "confirmation",
+      account: args.account || null,
+      amount: args.amount || null,
+      mpesa_ref: ref ?? null,
+      payer_name: args.payerName ?? null,
+      phone: args.phone ?? null,
+      raw: args.raw as any,
+      processed: false,
+    })
+    .select("id, processed, transaction_id")
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function applyMpesaPaymentToDatabase(args: {
+  account: string;
+  amount: number;
+  payerName?: string;
+  mpesaRef?: string;
+  eventId?: string;
+}) {
+  const supabaseAdmin = requireSupabaseAdmin();
+  const norm = args.account.trim().toUpperCase();
+  const notes: string[] = [];
+
+  if (args.eventId) {
+    const { data: event, error: eventError } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("processed, transaction_id")
+      .eq("id", args.eventId)
+      .maybeSingle();
+    if (eventError) throw new Error(eventError.message);
+    if (event?.processed) {
+      return {
+        matched: true,
+        account: norm,
+        notes: ["M-Pesa event already processed."],
+      };
+    }
+  }
+
+  const memberId = parseMembershipNumber(norm);
+  if (!memberId) {
+    notes.push(`Account "${args.account}" did not match SBC member pattern.`);
+    await markMpesaEventProcessed(args.eventId, null);
+    return { matched: false, account: norm, notes };
+  }
+
+  const { data: member, error: memberError } = await supabaseAdmin
+    .from("members")
+    .select("*")
+    .eq("id", memberId)
+    .maybeSingle();
+  if (memberError) throw new Error(memberError.message);
+  if (!member) {
+    notes.push(`No member with ID ${memberId}. Holding as suspense.`);
+    await markMpesaEventProcessed(args.eventId, null);
+    return { matched: false, account: norm, notes };
+  }
+
+  let remaining = Number(args.amount ?? 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const txBatch: Array<{
+    date?: string;
+    type: string;
+    amount: number;
+    member_id?: string | null;
+    loan_id?: string | null;
+    by_staff?: string | null;
+    note?: string | null;
+    ref?: string | null;
+    account?: string | null;
+    payer_name?: string | null;
+  }> = [];
+  const penaltiesCleared: { id: string; amount: number }[] = [];
+  let primary:
+    | {
+        type: string;
+        amount: number;
+        loanId?: string;
+        note?: string;
+      }
+    | undefined;
+  let toRoundOff = 0;
+  let primaryTransactionId: string | undefined;
+
+  if (member.is_investor && member.investor_id) {
+    const { data: investor, error: investorError } = await supabaseAdmin
+      .from("investors")
+      .select("contributed")
+      .eq("id", member.investor_id)
+      .maybeSingle();
+    if (investorError) throw new Error(investorError.message);
+    if (investor) {
+      const { error: updateInvestorError } = await supabaseAdmin
+        .from("investors")
+        .update({
+          contributed: Number(investor.contributed ?? 0) + remaining,
+        })
+        .eq("id", member.investor_id);
+      if (updateInvestorError) throw new Error(updateInvestorError.message);
+    }
+
+    primary = {
+      type: "investor_contribution",
+      amount: remaining,
+      note: `Investment via Paybill ${norm}`,
+    };
+    primaryTransactionId = await insertTransactionRow({
+      date: today,
+      type: "investor_contribution",
+      amount: remaining,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Investment top-up via Paybill ${norm}`,
+    });
+    notes.push(`Routed ${remaining}/= to investment pool for member-investor ${member.name}.`);
+    await markMpesaEventProcessed(args.eventId, primaryTransactionId);
+    return {
+      matched: true,
+      memberId,
+      account: norm,
+      primary,
+      toRoundOff: 0,
+      penaltiesCleared: [],
+      notes,
+    };
+  }
+
+  const memberPatch: Record<string, unknown> = {};
+  const feeQueue: Array<{
+    key: "fee_membership" | "fee_card" | "fee_sticker";
+    label: string;
+    amount: number;
+    required: boolean;
+  }> = [
+    { key: "fee_membership", label: "Membership fee", amount: 500, required: true },
+    { key: "fee_card", label: "Membership card", amount: 500, required: true },
+    {
+      key: "fee_sticker",
+      label: "Sticker fee",
+      amount: 500,
+      required: memberNeedsStickerRow(member),
+    },
+  ];
+
+  for (const fee of feeQueue) {
+    if (!fee.required) continue;
+    if (member[fee.key]) continue;
+    if (remaining < fee.amount) break;
+    remaining -= fee.amount;
+    memberPatch[fee.key] = true;
+    txBatch.push({
+      date: today,
+      type: "fee_payment",
+      amount: fee.amount,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `${fee.label} (auto)`,
+    });
+    notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
+  }
+
+  const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
+    .from("penalties")
+    .select("*")
+    .eq("member_id", memberId)
+    .eq("status", "outstanding")
+    .order("date", { ascending: true });
+  if (penaltiesError) throw new Error(penaltiesError.message);
+
+  for (const penalty of outstandingPenalties ?? []) {
+    const amount = Number(penalty.amount ?? 0);
+    if (remaining < amount) continue;
+    remaining -= amount;
+    penaltiesCleared.push({ id: penalty.id, amount });
+    notes.push(`Cleared penalty ${penalty.id} (${penalty.reason}) - ${amount}/=.`);
+  }
+
+  if (penaltiesCleared.length > 0) {
+    for (const penalty of penaltiesCleared) {
+      const { error } = await supabaseAdmin
+        .from("penalties")
+        .update({ status: "paid", paid_from: "mpesa" })
+        .eq("id", penalty.id);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  const { data: activeLoan, error: activeLoanError } = await supabaseAdmin
+    .from("loans")
+    .select("*")
+    .eq("member_id", memberId)
+    .eq("status", "active")
+    .order("start_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (activeLoanError) throw new Error(activeLoanError.message);
+
+  if (activeLoan && remaining > 0) {
+    const summary = loanBalanceSummary(activeLoan);
+    const applied = Math.min(remaining, summary.balance);
+    const rounded = roundUpKES(applied, ROUNDING_BASE);
+    const surplus = Math.max(0, rounded - applied);
+    if (remaining >= rounded) {
+      remaining -= rounded;
+      if (surplus > 0) toRoundOff += surplus;
+    } else {
+      remaining = 0;
+    }
+
+    primary = {
+      type: "loan_repayment",
+      amount: applied,
+      loanId: activeLoan.id,
+      note: `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+    };
+    txBatch.push({
+      date: today,
+      type: "loan_repayment",
+      amount: applied,
+      member_id: memberId,
+      loan_id: activeLoan.id,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+    });
+
+    const nextPaid = Number(activeLoan.paid ?? 0) + applied;
+    const nextBalance = Math.max(0, summary.total - nextPaid);
+    const { error: loanUpdateError } = await supabaseAdmin
+      .from("loans")
+      .update({
+        paid: nextPaid,
+        status: nextBalance <= 0 ? "closed" : activeLoan.status,
+      })
+      .eq("id", activeLoan.id);
+    if (loanUpdateError) throw new Error(loanUpdateError.message);
+
+    if (!member.fee_first_upfront_paid) {
+      memberPatch.fee_first_upfront_paid = true;
+    }
+
+    notes.push(
+      `Applied ${applied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
+    );
+  }
+
+  if (remaining > 0) {
+    const rounded = roundUpKES(remaining, ROUNDING_BASE);
+    const surplus = Math.max(0, rounded - remaining);
+    const applied = remaining;
+    if (!primary) {
+      primary = {
+        type: "deposit",
+        amount: applied,
+        note: `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+      };
+    }
+    txBatch.push({
+      date: today,
+      type: "deposit",
+      amount: applied,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+    });
+    memberPatch.savings_balance = Number(member.savings_balance ?? 0) + applied;
+    if (surplus > 0) toRoundOff += surplus;
+    if (Number(member.savings_balance ?? 0) + applied < MANDATORY_SAVINGS_THRESHOLD) {
+      notes.push(
+        `Member is still below the mandatory savings threshold of ${MANDATORY_SAVINGS_THRESHOLD}/=.`,
+      );
+    } else {
+      notes.push("Member meets mandatory savings threshold.");
+    }
+    remaining = 0;
+  }
+
+  if (Object.keys(memberPatch).length > 0) {
+    const { error: memberUpdateError } = await supabaseAdmin
+      .from("members")
+      .update(memberPatch)
+      .eq("id", memberId);
+    if (memberUpdateError) throw new Error(memberUpdateError.message);
+  }
+
+  for (const tx of txBatch) {
+    const txId = await insertTransactionRow(tx);
+    if (
+      !primaryTransactionId &&
+      primary &&
+      tx.type === primary.type &&
+      Number(tx.amount) === Number(primary.amount) &&
+      (primary.loanId ? tx.loan_id === primary.loanId : true)
+    ) {
+      primaryTransactionId = txId;
+    }
+    if (!primaryTransactionId) primaryTransactionId = txId;
+  }
+
+  if (toRoundOff > 0) {
+    await insertRoundOffRow({
+      memberId,
+      amount: toRoundOff,
+      source: primary?.type === "deposit" ? "savings_deposit" : "loan_repayment",
+      date: today,
+      ref: args.mpesaRef,
+    });
+  }
+
+  await markMpesaEventProcessed(args.eventId, primaryTransactionId ?? null);
+  return {
+    matched: true,
+    memberId,
+    account: norm,
+    primary,
+    toRoundOff,
+    penaltiesCleared,
+    notes,
+  };
+}
+
 async function nextPrefixedId(
   table:
     | "members"
@@ -64,7 +566,7 @@ async function nextPrefixedId(
   return `${prefix}${maxSeen + 1}`;
 }
 
-export const loadAppData = createServerFn({ method: "GET" }).handler(async () => {
+export const loadAppData = createServerFn({ method: "POST" }).handler(async () => {
   const supabaseAdmin = requireSupabaseAdmin();
   const runtimeDb = supabaseAdmin as any;
 
@@ -795,6 +1297,515 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     });
     if (error) throw new Error(error.message);
     return { id };
+  });
+
+export const createLoanRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      principal: number;
+      approvedAmount?: number;
+      rate?: number;
+      termMonths?: number;
+      termDays?: number;
+      startDate?: string;
+      status?: "pending" | "active" | "closed" | "defaulted" | "rejected";
+      officerId?: string;
+      purpose?: string;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      principal: Number(data?.principal ?? 0),
+      approvedAmount:
+        data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
+      rate: Number(data?.rate ?? 0),
+      termMonths: Number(data?.termMonths ?? 0),
+      termDays: data?.termDays == null ? undefined : Number(data.termDays),
+      startDate: data?.startDate?.trim() || new Date().toISOString().slice(0, 10),
+      status: data?.status ?? "pending",
+      officerId: data?.officerId?.trim() || undefined,
+      purpose: data?.purpose?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.memberId) throw new Error("Member is required.");
+    if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("loans", "L", 1001);
+    const approvedAmount =
+      data.status === "active" ? (data.approvedAmount ?? data.principal) : data.approvedAmount;
+    const { error } = await supabaseAdmin.from("loans").insert({
+      id,
+      member_id: data.memberId,
+      principal: data.principal,
+      approved_amount: approvedAmount ?? null,
+      rate: data.rate,
+      term_months: data.termMonths,
+      term_days: data.termDays ?? null,
+      start_date: data.startDate,
+      status: data.status as never,
+      officer_id: data.officerId ?? null,
+      paid: 0,
+      purpose: data.purpose ?? null,
+    });
+    if (error) throw new Error(error.message);
+
+    if (data.status === "active") {
+      await insertTransactionRow({
+        date: data.startDate,
+        type: "loan_disbursement",
+        amount: approvedAmount ?? data.principal,
+        member_id: data.memberId,
+        loan_id: id,
+        by_staff: data.officerId ?? null,
+        note: data.purpose ? `Disbursed for ${data.purpose}` : "Direct active loan disbursement",
+      });
+    }
+
+    return { id };
+  });
+
+export const reviewLoanRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      loanId: string;
+      decision: "approved" | "rejected";
+      approvedAmount?: number;
+      reviewedBy: string;
+      note?: string;
+    }) => ({
+      loanId: String(data?.loanId ?? "").trim(),
+      decision: data?.decision ?? "approved",
+      approvedAmount:
+        data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
+      reviewedBy: String(data?.reviewedBy ?? "").trim(),
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.loanId) throw new Error("Loan id is required.");
+    if (!data.reviewedBy) throw new Error("Reviewer is required.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const { data: loan, error: loanError } = await supabaseAdmin
+      .from("loans")
+      .select("*")
+      .eq("id", data.loanId)
+      .maybeSingle();
+    if (loanError) throw new Error(loanError.message);
+    if (!loan) throw new Error("Loan not found.");
+    if (loan.status !== "pending") throw new Error("Loan has already been reviewed.");
+
+    if (data.decision === "rejected") {
+      const { error } = await supabaseAdmin
+        .from("loans")
+        .update({
+          status: "rejected",
+          reviewed_by: data.reviewedBy,
+          review_note: data.note ?? null,
+        })
+        .eq("id", data.loanId);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    const approvedAmount = data.approvedAmount ?? Number(loan.principal ?? 0);
+    if (approvedAmount <= 0) throw new Error("Approved amount must be above zero.");
+
+    const { error } = await supabaseAdmin
+      .from("loans")
+      .update({
+        principal: approvedAmount,
+        approved_amount: approvedAmount,
+        status: "active",
+        reviewed_by: data.reviewedBy,
+        review_note: data.note ?? null,
+      })
+      .eq("id", data.loanId);
+    if (error) throw new Error(error.message);
+
+    await insertTransactionRow({
+      date: new Date().toISOString().slice(0, 10),
+      type: "loan_disbursement",
+      amount: approvedAmount,
+      member_id: loan.member_id,
+      loan_id: loan.id,
+      by_staff: data.reviewedBy,
+      note: data.note ?? "Approved",
+    });
+
+    return { ok: true };
+  });
+
+export const createTransactionRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      date?: string;
+      type:
+        | "deposit"
+        | "withdrawal"
+        | "loan_disbursement"
+        | "loan_repayment"
+        | "share_purchase"
+        | "petty_cash"
+        | "investor_contribution"
+        | "fee_payment";
+      account?: string;
+      payerName?: string;
+      amount: number;
+      memberId?: string;
+      loanId?: string;
+      ref?: string;
+      by: string;
+      note?: string;
+    }) => ({
+      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+      type: data?.type ?? "deposit",
+      account: data?.account?.trim() || undefined,
+      payerName: data?.payerName?.trim() || undefined,
+      amount: Number(data?.amount ?? 0),
+      memberId: data?.memberId?.trim() || undefined,
+      loanId: data?.loanId?.trim() || undefined,
+      ref: data?.ref?.trim() || undefined,
+      by: String(data?.by ?? "").trim(),
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (data.amount <= 0) throw new Error("Transaction amount must be above zero.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await insertTransactionRow({
+      date: data.date,
+      type: data.type,
+      amount: data.amount,
+      member_id: data.memberId ?? null,
+      loan_id: data.loanId ?? null,
+      by_staff: data.by || null,
+      note: data.note ?? null,
+      ref: data.ref ?? null,
+      account: data.account ?? null,
+      payer_name: data.payerName ?? null,
+    });
+
+    if (data.memberId) {
+      const { data: member, error: memberError } = await supabaseAdmin
+        .from("members")
+        .select("savings_balance, shares")
+        .eq("id", data.memberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      if (member) {
+        const patch: Record<string, unknown> = {};
+        if (data.type === "deposit") {
+          patch.savings_balance = Number(member.savings_balance ?? 0) + data.amount;
+        } else if (data.type === "withdrawal") {
+          patch.savings_balance = Math.max(0, Number(member.savings_balance ?? 0) - data.amount);
+        } else if (data.type === "share_purchase") {
+          patch.shares = Number(member.shares ?? 0) + Math.floor(data.amount / SHARE_PRICE);
+        }
+        if (Object.keys(patch).length > 0) {
+          const { error: updateMemberError } = await supabaseAdmin
+            .from("members")
+            .update(patch)
+            .eq("id", data.memberId);
+          if (updateMemberError) throw new Error(updateMemberError.message);
+        }
+      }
+    }
+
+    if (data.loanId && data.type === "loan_repayment") {
+      const { data: loan, error: loanError } = await supabaseAdmin
+        .from("loans")
+        .select("*")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (loanError) throw new Error(loanError.message);
+      if (loan) {
+        const summary = loanBalanceSummary(loan);
+        const nextPaid = Number(loan.paid ?? 0) + data.amount;
+        const nextBalance = Math.max(0, summary.total - nextPaid);
+        const { error: updateLoanError } = await supabaseAdmin
+          .from("loans")
+          .update({
+            paid: nextPaid,
+            status: nextBalance <= 0 ? "closed" : loan.status,
+          })
+          .eq("id", data.loanId);
+        if (updateLoanError) throw new Error(updateLoanError.message);
+      }
+    }
+
+    return { id };
+  });
+
+export const createPettyCashRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      date?: string;
+      description: string;
+      amount: number;
+      category?: string;
+      by?: string;
+      time?: string;
+      type?: "payment" | "topup";
+      payee?: string;
+      contact?: string;
+      mode?: "cash" | "mpesa" | "bank";
+      reference?: string;
+      txnCost?: number;
+      openingBalance?: number;
+    }) => ({
+      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+      description: String(data?.description ?? "").trim(),
+      amount: Number(data?.amount ?? 0),
+      category: data?.category?.trim() || undefined,
+      by: data?.by?.trim() || undefined,
+      time: data?.time?.trim() || undefined,
+      type: data?.type,
+      payee: data?.payee?.trim() || undefined,
+      contact: data?.contact?.trim() || undefined,
+      mode: data?.mode,
+      reference: data?.reference?.trim() || undefined,
+      txnCost: data?.txnCost == null ? undefined : Number(data.txnCost),
+      openingBalance:
+        data?.openingBalance == null ? undefined : Number(data.openingBalance),
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.description) throw new Error("Petty cash details are required.");
+    if (data.amount <= 0) throw new Error("Petty cash amount must be above zero.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("petty_cash", "P", 1);
+    const { error } = await supabaseAdmin.from("petty_cash").insert({
+      id,
+      date: data.date,
+      description: data.description,
+      amount: data.amount,
+      category: data.category ?? null,
+      by_staff: data.by ?? null,
+      time: data.time ?? null,
+      type: data.type ?? null,
+      payee: data.payee ?? null,
+      contact: data.contact ?? null,
+      mode: data.mode ?? null,
+      reference: data.reference ?? null,
+      txn_cost: data.txnCost ?? null,
+      opening_balance: data.openingBalance ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const createAppraisalRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: Record<string, unknown>) => data)
+  .handler(async ({ data }) => {
+    const memberId = String(data.memberId ?? "").trim();
+    if (!memberId) throw new Error("Member is required.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("appraisals", "AP", 1);
+    const { error } = await supabaseAdmin.from("appraisals").insert({
+      id,
+      member_id: memberId,
+      loan_id: data.loanId ? String(data.loanId) : null,
+      date: new Date().toISOString().slice(0, 10),
+      officer_id: data.officerId ? String(data.officerId) : null,
+      good_day: Number(data.goodDay ?? 0),
+      average_day: Number(data.averageDay ?? 0),
+      bad_day: Number(data.badDay ?? 0),
+      operating_expenses: Number(data.operatingExpenses ?? 0),
+      non_earning_days: Number(data.nonEarningDays ?? 0),
+      existing_debt: Number(data.existingDebt ?? 0),
+      monthly_debt_repayment: Number(data.monthlyDebtRepayment ?? 0),
+      crb_status: data.crbStatus ? String(data.crbStatus) : null,
+      reschedules_last_12: Number(data.reschedulesLast12 ?? 0),
+      dti: Number(data.dti ?? 0),
+      dicr: Number(data.dicr ?? 0),
+      bdsr: Number(data.bdsr ?? 0),
+      lsr: Number(data.lsr ?? 0),
+      savings_buffer: Number(data.savingsBuffer ?? 0),
+      score_dicr: Number(data.scoreDICR ?? 0),
+      score_bdsr: Number(data.scoreBDSR ?? 0),
+      score_savings: Number(data.scoreSavings ?? 0),
+      score_crb: Number(data.scoreCRB ?? 0),
+      score_burden: Number(data.scoreBurden ?? 0),
+      score_docs: Number(data.scoreDocs ?? 0),
+      score_coop: Number(data.scoreCoop ?? 0),
+      total_score: Number(data.totalScore ?? 0),
+      decision: data.decision ? String(data.decision) : null,
+      risk_level: data.riskLevel ? String(data.riskLevel) : null,
+      approved_amount: Number(data.approvedAmount ?? 0),
+      approved_term: data.approvedTerm ? String(data.approvedTerm) : null,
+      special_conditions: data.specialConditions ? String(data.specialConditions) : null,
+      notes: data.notes ? String(data.notes) : null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const createInvestorRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      name: string;
+      contributed: number;
+      sharePct?: number;
+      joinedAt?: string;
+      phone?: string;
+      notes?: string;
+      memberId?: string;
+      byStaff?: string;
+    }) => ({
+      name: String(data?.name ?? "").trim(),
+      contributed: Number(data?.contributed ?? 0),
+      sharePct: Number(data?.sharePct ?? 0),
+      joinedAt: data?.joinedAt?.trim() || new Date().toISOString().slice(0, 10),
+      phone: data?.phone?.trim() || undefined,
+      notes: data?.notes?.trim() || undefined,
+      memberId: data?.memberId?.trim() || undefined,
+      byStaff: data?.byStaff?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.name) throw new Error("Investor name is required.");
+    if (data.contributed <= 0) throw new Error("Contribution must be above zero.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("investors", "I", 1);
+    const { error } = await supabaseAdmin.from("investors").insert({
+      id,
+      name: data.name,
+      contributed: data.contributed,
+      share_pct: data.sharePct,
+      joined_at: data.joinedAt,
+      phone: data.phone ?? null,
+      notes: data.notes ?? null,
+      member_id: data.memberId ?? null,
+    });
+    if (error) throw new Error(error.message);
+
+    if (data.memberId) {
+      const { error: memberError } = await supabaseAdmin
+        .from("members")
+        .update({
+          is_investor: true,
+          investor_id: id,
+        })
+        .eq("id", data.memberId);
+      if (memberError) throw new Error(memberError.message);
+    }
+
+    await insertTransactionRow({
+      date: data.joinedAt,
+      type: "investor_contribution",
+      amount: data.contributed,
+      member_id: data.memberId ?? null,
+      by_staff: data.byStaff ?? null,
+      note: `Investor: ${data.name}`,
+    });
+
+    return { id };
+  });
+
+export const createFollowupRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      loanId: string;
+      memberId: string;
+      date?: string;
+      note: string;
+      outcome: "promised" | "paid" | "no-show" | "dispute" | "other";
+      by: string;
+    }) => ({
+      loanId: String(data?.loanId ?? "").trim(),
+      memberId: String(data?.memberId ?? "").trim(),
+      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+      note: String(data?.note ?? "").trim(),
+      outcome: data?.outcome ?? "promised",
+      by: String(data?.by ?? "").trim(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.loanId || !data.memberId || !data.note) {
+      throw new Error("Follow-up details are incomplete.");
+    }
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("followups", "FU", 1);
+    const { error } = await supabaseAdmin.from("followups").insert({
+      id,
+      loan_id: data.loanId,
+      member_id: data.memberId,
+      date: data.date,
+      note: data.note,
+      outcome: data.outcome as never,
+      by_staff: data.by || null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { penaltyId: string }) => ({ penaltyId: String(data?.penaltyId ?? "").trim() }))
+  .handler(async ({ data }) => {
+    if (!data.penaltyId) throw new Error("Penalty id is required.");
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const { data: penalty, error: penaltyError } = await supabaseAdmin
+      .from("penalties")
+      .select("*")
+      .eq("id", data.penaltyId)
+      .maybeSingle();
+    if (penaltyError) throw new Error(penaltyError.message);
+    if (!penalty || penalty.status !== "outstanding") return { ok: false };
+
+    const { data: credits, error: creditsError } = await supabaseAdmin
+      .from("round_off")
+      .select("amount")
+      .eq("member_id", penalty.member_id);
+    if (creditsError) throw new Error(creditsError.message);
+    const { data: debits, error: debitsError } = await supabaseAdmin
+      .from("penalties")
+      .select("amount")
+      .eq("member_id", penalty.member_id)
+      .eq("status", "paid")
+      .eq("paid_from", "round_off_pool");
+    if (debitsError) throw new Error(debitsError.message);
+
+    const creditAmount = (credits ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+    const debitAmount = (debits ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+    const balance = creditAmount - debitAmount;
+    if (balance < Number(penalty.amount ?? 0)) return { ok: false };
+
+    const { error } = await supabaseAdmin
+      .from("penalties")
+      .update({ status: "paid", paid_from: "round_off_pool" })
+      .eq("id", data.penaltyId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const applyMpesaPaymentRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      eventId?: string;
+      account: string;
+      amount: number;
+      payerName?: string;
+      mpesaRef?: string;
+    }) => ({
+      eventId: data?.eventId?.trim() || undefined,
+      account: String(data?.account ?? "").trim(),
+      amount: Number(data?.amount ?? 0),
+      payerName: data?.payerName?.trim() || undefined,
+      mpesaRef: data?.mpesaRef?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.account) throw new Error("M-Pesa account is required.");
+    if (data.amount <= 0) throw new Error("M-Pesa amount must be above zero.");
+    return applyMpesaPaymentToDatabase(data);
   });
 
 export const createStaffMessageRecord = createServerFn({ method: "POST" })

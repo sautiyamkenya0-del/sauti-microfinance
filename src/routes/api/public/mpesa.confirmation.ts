@@ -1,16 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
+
+import {
+  applyMpesaPaymentToDatabase,
+  recordMpesaConfirmationEvent,
+} from "@/lib/app-data.functions";
 import { getSecret } from "@/lib/runtime-secrets.server";
 
-// In-memory FIFO buffer of incoming Daraja C2B confirmations.
-// The frontend polls /api/mpesa/queue, drains, and runs applyMpesaPayment().
-// (Worker memory only — fine for single-instance preview; move to Cloud when scaling.)
-declare global {
-  // eslint-disable-next-line no-var
-  var __MPESA_QUEUE__: any[] | undefined;
-}
-function queue() {
-  return (globalThis.__MPESA_QUEUE__ ??= []);
-}
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+  Pragma: "no-cache",
+  Expires: "0",
+};
 
 export const Route = createFileRoute("/api/public/mpesa/confirmation")({
   server: {
@@ -18,29 +18,58 @@ export const Route = createFileRoute("/api/public/mpesa/confirmation")({
       POST: async ({ request }) => {
         try {
           const body = await request.json();
-          // Daraja C2B confirmation shape:
-          // { TransactionType, TransID, TransTime, TransAmount, BusinessShortCode, BillRefNumber, MSISDN, FirstName, MiddleName, LastName }
           const expected = await getSecret("MPESA_SHORTCODE");
           if (
             expected &&
             body.BusinessShortCode &&
             String(body.BusinessShortCode) !== String(expected)
           ) {
-            return Response.json({ ResultCode: 1, ResultDesc: "Wrong shortcode" }, { status: 200 });
+            return Response.json(
+              { ResultCode: 1, ResultDesc: "Wrong shortcode" },
+              { status: 200, headers: NO_STORE_HEADERS },
+            );
           }
-          queue().push({
-            txId: body.TransID,
-            amount: Number(body.TransAmount) || 0,
-            account: String(body.BillRefNumber || "").toUpperCase(),
-            phone: body.MSISDN,
-            name: [body.FirstName, body.MiddleName, body.LastName].filter(Boolean).join(" "),
-            at: new Date().toISOString(),
+
+          const mpesaRef = String(body.TransID || "").trim() || undefined;
+          const account = String(body.BillRefNumber || "").toUpperCase();
+          const amount = Number(body.TransAmount) || 0;
+          const payerName = [body.FirstName, body.MiddleName, body.LastName]
+            .filter(Boolean)
+            .join(" ");
+
+          const event = await recordMpesaConfirmationEvent({
+            raw: body,
+            account,
+            amount,
+            mpesaRef,
+            payerName,
+            phone: body.MSISDN ? String(body.MSISDN) : undefined,
           });
-          // Always 0/Success — Daraja retries otherwise.
-          return Response.json({ ResultCode: 0, ResultDesc: "Success" });
-        } catch (e) {
-          console.error("mpesa confirmation parse error", e);
-          return Response.json({ ResultCode: 0, ResultDesc: "Success" });
+
+          if (!event.processed) {
+            try {
+              await applyMpesaPaymentToDatabase({
+                eventId: event.id,
+                account,
+                amount,
+                payerName,
+                mpesaRef,
+              });
+            } catch (processingError) {
+              console.error("mpesa confirmation processing error", processingError);
+            }
+          }
+
+          return Response.json(
+            { ResultCode: 0, ResultDesc: "Success" },
+            { headers: NO_STORE_HEADERS },
+          );
+        } catch (error) {
+          console.error("mpesa confirmation parse error", error);
+          return Response.json(
+            { ResultCode: 0, ResultDesc: "Success" },
+            { headers: NO_STORE_HEADERS },
+          );
         }
       },
     },
