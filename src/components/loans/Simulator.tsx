@@ -71,10 +71,7 @@ export function Simulator() {
 
   useEffect(() => {
     if (!dayOptions.includes(days)) setDays(dayOptions[dayOptions.length - 1]);
-    const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
-    if (amount < lt.min) setAmount(lt.min);
-    if (amount > lt.max) setAmount(lt.max);
-  }, [amount, dayOptions, days, loanType]);
+  }, [dayOptions, days]);
 
   const calc = useMemo(() => {
     const ratePct = simulatorRatePct(days);
@@ -168,7 +165,20 @@ export function Simulator() {
                 min={lt.min}
                 max={lt.max}
                 value={amount}
-                onChange={(e) => setAmount(Number(e.target.value) || 0)}
+                onChange={(e) => {
+                  const v = Number(e.target.value) || 0;
+                  setAmount(v);
+                  const matched = LOAN_TYPES.find((t) => v >= t.min && v <= t.max);
+                  if (matched && matched.v !== loanType) {
+                    setLoanType(matched.v);
+                  } else if (!matched) {
+                    if (v > LOAN_TYPES[LOAN_TYPES.length - 1].max) {
+                      setLoanType(LOAN_TYPES[LOAN_TYPES.length - 1].v);
+                    } else if (v < LOAN_TYPES[0].min) {
+                      setLoanType(LOAN_TYPES[0].v);
+                    }
+                  }
+                }}
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
               />
               {(amount < lt.min || amount > lt.max) && (
