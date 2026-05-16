@@ -127,6 +127,9 @@ export function Simulator() {
 
   const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
 
+  const fmtKES2 = (n: number) =>
+    new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 2 }).format(n);
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -249,7 +252,7 @@ export function Simulator() {
               <Tile
                 label="Daily Repayment Inclusive"
                 value={fmtKES(calc.dailyInclusive)}
-                sub={`${fmtKES(calc.dailyLoan)} loan + ${fmtKES(dailySavings)} savings + round-off ${calc.roundOff.toFixed(2)}`}
+                sub={`${fmtKES2(calc.rawDaily)} loan + ${fmtKES(dailySavings)} savings + round-off ${calc.roundOff.toFixed(2)}`}
               />
               <Tile
                 label="Total Savings Accrued"
