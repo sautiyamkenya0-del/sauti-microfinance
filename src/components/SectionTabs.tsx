@@ -67,7 +67,7 @@ export function SectionTabs({ section }: { section: keyof typeof SECTION_TABS })
   const tabs = SECTION_TABS[section];
   if (!tabs) return null;
   return (
-    <div className="mb-4 flex flex-wrap gap-1 border-b border-border">
+    <div className="surface-panel mb-5 flex flex-wrap items-center gap-2 rounded-sm p-1.5">
       {tabs.map((t) => {
         const active = path === t.to || path.startsWith(t.to + "/");
         const Icon = t.icon;
@@ -75,10 +75,10 @@ export function SectionTabs({ section }: { section: keyof typeof SECTION_TABS })
           <Link
             key={t.to}
             to={t.to}
-            className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-t-md border-b-2 -mb-px transition-colors ${
+            className={`inline-flex items-center gap-2 rounded-sm border px-3.5 py-2 text-sm transition-all duration-200 ${
               active
-                ? "border-primary text-primary font-medium bg-primary/5"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted"
+                ? "border-primary/35 bg-primary/[0.08] font-medium text-primary shadow-[0_0_18px_rgba(45,212,191,0.08)]"
+                : "border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/[0.03] hover:text-foreground"
             }`}
           >
             <Icon className="h-4 w-4" /> {t.label}

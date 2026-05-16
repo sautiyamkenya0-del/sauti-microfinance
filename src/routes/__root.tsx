@@ -74,17 +74,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "Sauti Microfinance" },
       {
         name: "description",
-        content: "Sauti Microfinance — loans, savings, shares and member management.",
+        content: "Sauti Microfinance - loans, savings, shares and member management.",
       },
       { property: "og:title", content: "Sauti Microfinance" },
       { name: "twitter:title", content: "Sauti Microfinance" },
       {
         property: "og:description",
-        content: "Sauti Microfinance — loans, savings, shares and member management.",
+        content: "Sauti Microfinance - loans, savings, shares and member management.",
       },
       {
         name: "twitter:description",
-        content: "Sauti Microfinance — loans, savings, shares and member management.",
+        content: "Sauti Microfinance - loans, savings, shares and member management.",
       },
       { property: "og:image", content: "/favicon.png" },
       { name: "twitter:image", content: "/favicon.png" },
@@ -99,7 +99,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap",
+        href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap",
       },
     ],
   }),
@@ -111,11 +111,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className="bg-background text-foreground antialiased">
         {children}
         <Scripts />
       </body>
@@ -187,7 +187,7 @@ function AppLayout() {
   }
 
   return (
-    <div className="flex min-h-screen w-full bg-background">
+    <div className="app-shell flex min-h-screen w-full bg-background">
       <SplashScreen />
       <MpesaQueueDrainer />
       <AppSidebar />

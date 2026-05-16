@@ -101,31 +101,53 @@ export function AppSidebar() {
   }
 
   return (
-    <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-sidebar-border">
-        <button
-          onClick={onLogoTap}
-          className="shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
-          aria-label="Logo"
-          title=""
-        >
-          <img
-            src={logo}
-            alt="Sauti Business Community"
-            className="h-12 w-12 rounded-full bg-white/95 p-0.5 ring-1 ring-sidebar-border"
-          />
-        </button>
-        <div>
-          <div className="font-display text-base font-semibold leading-tight">
-            Sauti Microfinance
+    <aside className="hidden md:flex w-[17.5rem] shrink-0 flex-col border-r border-sidebar-border bg-[linear-gradient(180deg,rgba(255,255,255,0.03),transparent_16%),rgba(2,7,18,0.96)] text-sidebar-foreground">
+      <div className="border-b border-sidebar-border px-5 py-5">
+        <div className="surface-panel rounded-sm p-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onLogoTap}
+              className="shrink-0 rounded-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              aria-label="Logo"
+              title=""
+            >
+              <img
+                src={logo}
+                alt="Sauti Business Community"
+                className="h-12 w-12 rounded-sm bg-white/95 p-0.5 ring-1 ring-white/10"
+              />
+            </button>
+            <div className="min-w-0">
+              <div className="font-display text-base font-semibold leading-tight text-foreground">
+                Sauti Microfinance
+              </div>
+              <div className="mt-1 text-[9px] uppercase tracking-[0.24em] text-sidebar-foreground/55">
+                Operations Command
+              </div>
+            </div>
           </div>
-          <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/60">
-            Amplifying the Voice of Business
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="rounded-sm border border-white/8 bg-white/[0.02] px-3 py-2">
+              <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/45">
+                Access
+              </div>
+              <div className="mt-1 text-xs font-medium text-sidebar-foreground">
+                {roleLabel(currentUser.role)}
+              </div>
+            </div>
+            <div className="rounded-sm border border-white/8 bg-white/[0.02] px-3 py-2">
+              <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/45">
+                Mode
+              </div>
+              <div className="data-readout mt-1 text-xs text-sidebar-foreground">
+                {currentUser.canMarkAttendance ? "ATTN+" : "CORE"}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5">
         {entries.map((entry) => {
           const Icon = entry.icon;
           const active = entry.section
@@ -138,21 +160,26 @@ export function AppSidebar() {
             <Link
               key={entry.id}
               to={entry.to}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
+              className={`group relative flex items-center gap-3 rounded-sm border px-3 py-3 text-sm transition-all duration-200 ${
                 active
-                  ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium"
-                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  ? "border-primary/25 bg-white/[0.035] font-medium text-foreground shadow-[inset_0_0_0_1px_rgba(45,212,191,0.08)]"
+                  : "border-transparent text-sidebar-foreground/60 hover:border-white/10 hover:bg-white/[0.03] hover:text-sidebar-accent-foreground"
               }`}
             >
-              <Icon className="h-4 w-4" />
+              <span
+                className={`absolute inset-y-2 left-0 w-px transition-opacity ${active ? "bg-primary opacity-100 shadow-[0_0_14px_rgba(45,212,191,0.55)]" : "bg-white/20 opacity-0 group-hover:opacity-100"}`}
+              />
+              <Icon
+                className={`h-4 w-4 transition-colors ${active ? "text-primary" : "text-sidebar-foreground/45 group-hover:text-sidebar-foreground/80"}`}
+              />
               <span className="flex-1">{entry.label}</span>
               {showChatBadge && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold grid place-items-center animate-pulse">
+                <span className="data-readout grid h-[18px] min-w-[18px] place-items-center rounded-sm border border-destructive/30 bg-destructive/[0.08] px-1 text-[10px] text-destructive animate-pulse">
                   {unreadComms}
                 </span>
               )}
               {showApprovalBadge && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-accent-foreground text-[10px] font-bold grid place-items-center">
+                <span className="data-readout grid h-[18px] min-w-[18px] place-items-center rounded-sm border border-warning/30 bg-warning/[0.08] px-1 text-[10px] text-warning">
                   {pendingCount}
                 </span>
               )}
@@ -161,41 +188,45 @@ export function AppSidebar() {
         })}
       </nav>
 
-      <div className="border-t border-sidebar-border p-3 space-y-2">
-        <div className="px-1">
-          <div className="text-[10px] uppercase tracking-wider text-sidebar-foreground/50">
-            Signed in
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            {currentUser.photo ? (
-              <img
-                src={currentUser.photo}
-                alt={currentUser.name}
-                className="h-9 w-9 rounded-full object-cover border border-sidebar-border"
-              />
-            ) : (
-              <div className="h-9 w-9 rounded-full bg-sidebar-primary text-sidebar-primary-foreground grid place-items-center text-xs font-semibold">
-                {currentUser.name[0]}
-              </div>
-            )}
-            <div className="min-w-0">
-              <div className="text-sm font-medium truncate">{currentUser.name}</div>
-              <div className="text-[11px] text-sidebar-foreground/60">
-                {roleLabel(currentUser.role)}
-                {currentUser.canMarkAttendance ? " · Attendance" : ""}
+      <div className="border-t border-sidebar-border p-3">
+        <div className="surface-panel rounded-sm p-3">
+          <div className="px-1">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/45">
+              Signed in
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              {currentUser.photo ? (
+                <img
+                  src={currentUser.photo}
+                  alt={currentUser.name}
+                  className="h-10 w-10 rounded-sm border border-sidebar-border object-cover"
+                />
+              ) : (
+                <div className="grid h-10 w-10 place-items-center rounded-sm border border-primary/25 bg-primary/[0.08] text-xs font-semibold text-primary">
+                  {currentUser.name[0]}
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {currentUser.name}
+                </div>
+                <div className="text-[11px] text-sidebar-foreground/58">
+                  {roleLabel(currentUser.role)}
+                  {currentUser.canMarkAttendance ? " / Attendance" : ""}
+                </div>
               </div>
             </div>
           </div>
+          <button
+            onClick={() => {
+              logout();
+              router.navigate({ to: "/login" });
+            }}
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-sm border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-sidebar-foreground transition-colors hover:border-white/18 hover:bg-white/[0.05]"
+          >
+            <LogOut className="h-3.5 w-3.5" /> Sign out
+          </button>
         </div>
-        <button
-          onClick={() => {
-            logout();
-            router.navigate({ to: "/login" });
-          }}
-          className="w-full inline-flex items-center justify-center gap-2 bg-sidebar-accent text-sidebar-accent-foreground text-sm rounded-md px-2 py-2 border border-sidebar-border hover:bg-sidebar-accent/80"
-        >
-          <LogOut className="h-3.5 w-3.5" /> Sign out
-        </button>
       </div>
     </aside>
   );
