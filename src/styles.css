@@ -146,8 +146,8 @@
     padding-top: calc(1rem + env(safe-area-inset-top, 0px));
   }
   .safe-area-spacer {
-    height: constant(safe-area-inset-top);
-    height: env(safe-area-inset-top, 0px);
+    height: calc(0.75rem + constant(safe-area-inset-top));
+    height: calc(0.75rem + env(safe-area-inset-top, 0px));
     width: 100%;
     display: block;
   }

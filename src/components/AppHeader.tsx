@@ -6,7 +6,7 @@ import { useApprovals } from "@/lib/approvals";
 import { useReadIds } from "@/lib/read-state";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   LayoutDashboard,
@@ -87,6 +87,7 @@ const ENTRIES: Entry[] = [
 
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   const { currentUser } = useStore();
+  const navigate = useNavigate();
   const notes = useNotifications();
   const { markRead } = useReadIds();
   const [open, setOpen] = useState(false);
@@ -101,6 +102,24 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const entries = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
+  const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
+
+  function onLogoTap() {
+    const now = Date.now();
+    const tap = tapsRef.current;
+    if (now - tap.first > 3000) {
+      tap.count = 0;
+      tap.first = now;
+    }
+    tap.count += 1;
+    if (tap.count >= 5) {
+      tapsRef.current = { count: 0, first: 0 };
+      if (currentUser.role === "director") {
+        setMobileNavOpen(false);
+        navigate({ to: "/secret-keys" });
+      }
+    }
+  }
 
   const announceNotification = useCallback(
     ({ id, title: nextTitle, detail, urgent }: NotifyEventDetail) => {
@@ -172,9 +191,10 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
         : "text-foreground";
 
   return (
-    <header className="mobile-safe-top border-b border-border bg-card/60 backdrop-blur relative px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
+    <header className="border-b border-border bg-card/60 backdrop-blur relative px-4 pb-3 pt-0 sm:px-6 sm:pb-4 lg:px-8">
       <style>{`@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}`}</style>
-      <div className="flex w-full flex-wrap items-center justify-between gap-4 sm:gap-6">
+      <div className="safe-area-spacer md:hidden" />
+      <div className="flex w-full flex-wrap items-center justify-between gap-4 pt-3 sm:gap-6 sm:pt-4">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <button
             onClick={() => setMobileNavOpen(true)}
@@ -294,14 +314,22 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               className="md:hidden fixed inset-0 z-[100] bg-black/50"
               onClick={() => setMobileNavOpen(false)}
             />
-            <aside className="md:hidden fixed left-0 top-0 bottom-0 z-[101] w-72 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col animate-in slide-in-from-left mobile-safe-top">
+            <aside className="md:hidden fixed left-0 top-0 bottom-0 z-[101] w-72 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col animate-in slide-in-from-left">
+              <div className="safe-area-spacer" />
               <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
                 <div className="flex items-center gap-3">
-                  <img
-                    src={logoUrl}
-                    alt="Sauti logo"
-                    className="h-9 w-9 object-contain rounded-md"
-                  />
+                  <button
+                    onClick={onLogoTap}
+                    className="shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    aria-label="Logo"
+                    title=""
+                  >
+                    <img
+                      src={logoUrl}
+                      alt="Sauti logo"
+                      className="h-12 w-12 rounded-full bg-white/95 p-0.5 ring-1 ring-sidebar-border"
+                    />
+                  </button>
                   <div>
                     <div className="font-display text-base font-semibold leading-tight">
                       Sauti Microfinance
