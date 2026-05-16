@@ -1,5 +1,6 @@
 import { useStore, roleLabel, navForUser } from "@/lib/store";
 import { Bell, Search, Menu, X as IconX } from "lucide-react";
+import logoUrl from "@/assets/sauti-logo.png?url";
 import { useNotifications, useUnreadChatCount } from "@/lib/notifications";
 import { useApprovals } from "@/lib/approvals";
 import { useReadIds } from "@/lib/read-state";
@@ -159,6 +160,7 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
 
   return (
     <header className="mobile-safe-top flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 border-b border-border bg-card/60 backdrop-blur relative">
+      <div className="safe-area-spacer" aria-hidden />
       <style>{`@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}`}</style>
       <div className="flex items-center gap-2 min-w-0 flex-1">
         <button
@@ -280,13 +282,17 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               onClick={() => setMobileNavOpen(false)}
             />
             <aside className="md:hidden fixed left-0 top-0 bottom-0 z-[101] w-72 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col animate-in slide-in-from-left mobile-safe-top">
+              <div className="safe-area-spacer" aria-hidden />
               <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
-                <div>
-                  <div className="font-display text-base font-semibold leading-tight">
-                    Sauti Microfinance
-                  </div>
-                  <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/60">
-                    Menu
+                <div className="flex items-center gap-3">
+                  <img src={logoUrl} alt="Sauti logo" className="h-9 w-9 object-contain rounded-md" />
+                  <div>
+                    <div className="font-display text-base font-semibold leading-tight">
+                      Sauti Microfinance
+                    </div>
+                    <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/60">
+                      Menu
+                    </div>
                   </div>
                 </div>
                 <button

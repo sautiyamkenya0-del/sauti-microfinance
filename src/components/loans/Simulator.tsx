@@ -249,7 +249,7 @@ export function Simulator() {
               <Tile
                 label="Daily Repayment Inclusive"
                 value={fmtKES(calc.dailyInclusive)}
-                sub={`${fmtKES(calc.dailyLoan)} loan + ${fmtKES(dailySavings)} savings - round-off ${calc.roundOff.toFixed(2)}`}
+                sub={`${fmtKES(calc.dailyLoan)} loan + ${fmtKES(dailySavings)} savings + round-off ${calc.roundOff.toFixed(2)}`}
               />
               <Tile
                 label="Total Savings Accrued"
