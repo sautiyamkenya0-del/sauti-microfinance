@@ -1,9 +1,4 @@
 import { createServerFn } from "@tanstack/react-start";
-
-import {
-  getSupabaseAdminEnvStatus,
-  getSupabaseAdminOrNull,
-} from "@/integrations/supabase/client.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -17,7 +12,10 @@ function splitLegacyLastName(lastName: string | null | undefined) {
   };
 }
 
-function requireSupabaseAdmin() {
+async function requireSupabaseAdmin() {
+  const { getSupabaseAdminEnvStatus, getSupabaseAdminOrNull } = await import(
+    "@/integrations/supabase/client.server",
+  );
   const supabaseAdmin = getSupabaseAdminOrNull();
   if (!supabaseAdmin) {
     const missing = getSupabaseAdminEnvStatus().missing.join(", ");
@@ -125,7 +123,7 @@ async function insertTransactionRow(
     payer_name?: string | null;
   },
 ) {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const id = await nextPrefixedId("transactions", "T", 1);
   const { error } = await supabaseAdmin.from("transactions").insert({
     id,
@@ -151,7 +149,7 @@ async function insertRoundOffRow(row: {
   date?: string;
   ref?: string;
 }) {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const id = await nextPrefixedId("round_off", "RO", 1);
   const { error } = await supabaseAdmin.from("round_off").insert({
     id,
@@ -167,7 +165,7 @@ async function insertRoundOffRow(row: {
 
 async function markMpesaEventProcessed(eventId?: string, transactionId?: string | null) {
   if (!eventId) return;
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const { error } = await supabaseAdmin
     .from("mpesa_events")
     .update({
@@ -186,7 +184,7 @@ export async function recordMpesaConfirmationEvent(args: {
   payerName?: string;
   phone?: string;
 }) {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const ref = args.mpesaRef?.trim() || undefined;
 
   if (ref) {
@@ -225,7 +223,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   mpesaRef?: string;
   eventId?: string;
 }) {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const norm = args.account.trim().toUpperCase();
   const notes: string[] = [];
 
@@ -553,7 +551,7 @@ async function nextPrefixedId(
   prefix: string,
   minimum: number,
 ) {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const { data, error } = await supabaseAdmin.from(table).select("id");
   if (error) throw new Error(error.message);
 
@@ -567,7 +565,7 @@ async function nextPrefixedId(
 }
 
 export const loadAppData = createServerFn({ method: "POST" }).handler(async () => {
-  const supabaseAdmin = requireSupabaseAdmin();
+  const supabaseAdmin = await requireSupabaseAdmin();
   const runtimeDb = supabaseAdmin as any;
 
   const [
@@ -980,7 +978,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       throw new Error("Use a local phone number starting with 07 or 01.");
     }
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
 
@@ -1114,7 +1112,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       throw new Error("Temporary password must be at least 6 characters.");
     }
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const staffId = await nextPrefixedId("staff", "S", 1);
     const { error } = await supabaseAdmin.from("staff").insert({
       id: staffId,
@@ -1161,7 +1159,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     if (!data.id) throw new Error("Staff id is required.");
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const patch = data.patch;
     const { error } = await supabaseAdmin
       .from("staff")
@@ -1187,7 +1185,7 @@ export const deleteStaffRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
   .handler(async ({ data }) => {
     if (!data.id) throw new Error("Staff id is required.");
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const { error } = await supabaseAdmin.from("staff").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1209,7 +1207,7 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     if (!data.staffId) throw new Error("Staff id is required.");
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const time = new Date().toTimeString().slice(0, 5);
     const id = `A-${data.date}-${data.staffId}`;
 
@@ -1282,7 +1280,7 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       throw new Error("Longitude is invalid.");
     }
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("field_visits", "FV", 1);
     const { error } = await supabaseAdmin.from("field_visits").insert({
       id,
@@ -1330,7 +1328,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     if (!data.memberId) throw new Error("Member is required.");
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("loans", "L", 1001);
     const approvedAmount =
       data.status === "active" ? (data.approvedAmount ?? data.principal) : data.approvedAmount;
@@ -1386,7 +1384,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     if (!data.loanId) throw new Error("Loan id is required.");
     if (!data.reviewedBy) throw new Error("Reviewer is required.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const { data: loan, error: loanError } = await supabaseAdmin
       .from("loans")
       .select("*")
@@ -1474,7 +1472,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     if (data.amount <= 0) throw new Error("Transaction amount must be above zero.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await insertTransactionRow({
       date: data.date,
       type: data.type,
@@ -1576,7 +1574,7 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
     if (!data.description) throw new Error("Petty cash details are required.");
     if (data.amount <= 0) throw new Error("Petty cash amount must be above zero.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("petty_cash", "P", 1);
     const { error } = await supabaseAdmin.from("petty_cash").insert({
       id,
@@ -1604,7 +1602,7 @@ export const createAppraisalRecord = createServerFn({ method: "POST" })
     const memberId = String(data.memberId ?? "").trim();
     if (!memberId) throw new Error("Member is required.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("appraisals", "AP", 1);
     const { error } = await supabaseAdmin.from("appraisals").insert({
       id,
@@ -1671,7 +1669,7 @@ export const createInvestorRecord = createServerFn({ method: "POST" })
     if (!data.name) throw new Error("Investor name is required.");
     if (data.contributed <= 0) throw new Error("Contribution must be above zero.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("investors", "I", 1);
     const { error } = await supabaseAdmin.from("investors").insert({
       id,
@@ -1731,7 +1729,7 @@ export const createFollowupRecord = createServerFn({ method: "POST" })
       throw new Error("Follow-up details are incomplete.");
     }
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("followups", "FU", 1);
     const { error } = await supabaseAdmin.from("followups").insert({
       id,
@@ -1751,7 +1749,7 @@ export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     if (!data.penaltyId) throw new Error("Penalty id is required.");
 
-    const supabaseAdmin = requireSupabaseAdmin();
+    const supabaseAdmin = await requireSupabaseAdmin();
     const { data: penalty, error: penaltyError } = await supabaseAdmin
       .from("penalties")
       .select("*")
