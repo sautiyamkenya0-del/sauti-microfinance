@@ -32,6 +32,10 @@ function toNumber(value: number | string | null | undefined) {
   return Number(value ?? 0);
 }
 
+function makeId(prefix: string) {
+  return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 async function nextPrefixedId(
   table:
     | "members"
@@ -62,6 +66,7 @@ async function nextPrefixedId(
 
 export const loadAppData = createServerFn({ method: "GET" }).handler(async () => {
   const supabaseAdmin = requireSupabaseAdmin();
+  const runtimeDb = supabaseAdmin as any;
 
   const [
     staffResult,
@@ -76,6 +81,12 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
     followupsResult,
     penaltiesResult,
     roundOffResult,
+    staffMessagesResult,
+    memosResult,
+    approvalsResult,
+    feePoliciesResult,
+    supportThreadsResult,
+    supportMessagesResult,
   ] = await Promise.all([
     supabaseAdmin.from("staff").select("*").order("id"),
     supabaseAdmin.from("members").select("*").order("id"),
@@ -89,6 +100,12 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
     supabaseAdmin.from("followups").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("penalties").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("round_off").select("*").order("date", { ascending: false }),
+    runtimeDb.from("staff_messages").select("*").order("created_at", { ascending: true }),
+    runtimeDb.from("staff_memos").select("*").order("memo_date", { ascending: false }),
+    runtimeDb.from("approval_requests").select("*").order("created_at", { ascending: false }),
+    runtimeDb.from("fee_policies").select("*").order("updated_at", { ascending: false }),
+    runtimeDb.from("support_threads").select("*").order("updated_at", { ascending: false }),
+    runtimeDb.from("support_messages").select("*").order("created_at", { ascending: true }),
   ]);
 
   const results = [
@@ -104,9 +121,22 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
     followupsResult,
     penaltiesResult,
     roundOffResult,
+    staffMessagesResult,
+    memosResult,
+    approvalsResult,
+    feePoliciesResult,
+    supportThreadsResult,
+    supportMessagesResult,
   ];
   const failed = results.find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
+
+  const supportMessagesByThread = new Map<string, any[]>();
+  for (const row of supportMessagesResult.data ?? []) {
+    const list = supportMessagesByThread.get(row.thread_id) ?? [];
+    list.push(row);
+    supportMessagesByThread.set(row.thread_id, list);
+  }
 
   return {
     staff: (staffResult.data ?? []).map((row) => ({
@@ -307,6 +337,75 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
       amount: toNumber(row.amount),
       source: row.source,
       ref: row.ref ?? undefined,
+    })),
+    staffMessages: (staffMessagesResult.data ?? []).map((row: any) => ({
+      id: row.id,
+      senderId: row.sender_id,
+      receiverId: row.receiver_id,
+      senderName: row.sender_name,
+      content: row.content ?? undefined,
+      attachment: row.attachment
+        ? {
+            name: row.attachment.name ?? "attachment",
+            type: row.attachment.type ?? "application/octet-stream",
+            size: Number(row.attachment.size ?? 0),
+            data: row.attachment.data ?? "",
+          }
+        : undefined,
+      createdAt: row.created_at,
+    })),
+    memos: (memosResult.data ?? []).map((row: any) => ({
+      id: row.id,
+      date: row.memo_date,
+      title: row.title,
+      body: row.body,
+      by: row.by_name,
+      byStaffId: row.by_staff_id ?? undefined,
+      createdAt: row.created_at,
+    })),
+    approvals: (approvalsResult.data ?? []).map((row: any) => ({
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      detail: row.detail,
+      requestedBy: row.requested_by,
+      requestedByName: row.requested_by_name ?? undefined,
+      payload: row.payload ?? undefined,
+      status: row.status,
+      createdAt: row.created_at,
+      reviewedBy: row.reviewed_by ?? undefined,
+      reviewNote: row.review_note ?? undefined,
+      reviewedAt: row.reviewed_at ?? undefined,
+    })),
+    feePolicies: (feePoliciesResult.data ?? []).map((row: any) => ({
+      key: row.key,
+      label: row.label,
+      amount: toNumber(row.amount),
+      permanence: row.permanence,
+      durationDays: row.duration_days ?? undefined,
+      effectiveFrom: row.effective_from,
+      scope: row.scope,
+      custom: row.custom,
+      notes: row.notes ?? undefined,
+      updatedAt: row.updated_at,
+    })),
+    supportThreads: (supportThreadsResult.data ?? []).map((row: any) => ({
+      id: row.id,
+      memberId: row.member_id,
+      memberName: row.member_name,
+      assignedStaffId: row.assigned_staff_id ?? undefined,
+      status: row.status,
+      subject: row.subject,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      messages: (supportMessagesByThread.get(row.id) ?? []).map((message: any) => ({
+        id: message.id,
+        from: message.sender_kind,
+        fromName: message.sender_name,
+        fromId: message.sender_id ?? undefined,
+        text: message.text,
+        at: message.created_at,
+      })),
     })),
   };
 });
@@ -630,5 +729,315 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
     });
     if (error) throw new Error(error.message);
 
+    return { ok: true };
+  });
+
+export const createStaffMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      senderId: string;
+      receiverId: string;
+      senderName: string;
+      content?: string;
+      attachment?: Record<string, unknown>;
+    }) => ({
+      senderId: String(data?.senderId ?? "").trim(),
+      receiverId: String(data?.receiverId ?? "").trim(),
+      senderName: String(data?.senderName ?? "").trim(),
+      content: data?.content?.toString().trim() || undefined,
+      attachment: data?.attachment ?? undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.senderId || !data.receiverId) throw new Error("Both sender and receiver are required.");
+    if (!data.senderName) throw new Error("Sender name is required.");
+    if (!data.content && !data.attachment) throw new Error("Message cannot be empty.");
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const id = makeId("STM");
+    const { error } = await runtimeDb.from("staff_messages").insert({
+      id,
+      sender_id: data.senderId,
+      receiver_id: data.receiverId,
+      sender_name: data.senderName,
+      content: data.content ?? null,
+      attachment: data.attachment ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const createStaffMemoRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      title: string;
+      body: string;
+      by: string;
+      byStaffId?: string;
+      date?: string;
+    }) => ({
+      title: String(data?.title ?? "").trim(),
+      body: String(data?.body ?? "").trim(),
+      by: String(data?.by ?? "").trim(),
+      byStaffId: data?.byStaffId?.trim() || undefined,
+      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.title || !data.body || !data.by) throw new Error("Memo title, body and author are required.");
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const id = makeId("MEM");
+    const { error } = await runtimeDb.from("staff_memos").insert({
+      id,
+      memo_date: data.date,
+      title: data.title,
+      body: data.body,
+      by_staff_id: data.byStaffId ?? null,
+      by_name: data.by,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const deleteStaffMemoRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    if (!data.id) throw new Error("Memo id is required.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { error } = await runtimeDb.from("staff_memos").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const createApprovalRequestRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      kind: string;
+      title: string;
+      detail: string;
+      requestedBy: string;
+      requestedByName?: string;
+      payload?: Record<string, unknown>;
+    }) => ({
+      kind: String(data?.kind ?? "").trim(),
+      title: String(data?.title ?? "").trim(),
+      detail: String(data?.detail ?? "").trim(),
+      requestedBy: String(data?.requestedBy ?? "").trim(),
+      requestedByName: data?.requestedByName?.trim() || undefined,
+      payload: data?.payload ?? undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.kind || !data.title || !data.detail || !data.requestedBy) {
+      throw new Error("Approval request is incomplete.");
+    }
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const id = makeId("APR");
+    const { error } = await runtimeDb.from("approval_requests").insert({
+      id,
+      kind: data.kind,
+      title: data.title,
+      detail: data.detail,
+      requested_by: data.requestedBy,
+      requested_by_name: data.requestedByName ?? null,
+      payload: data.payload ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id: string;
+      decision: "approved" | "rejected";
+      reviewedBy: string;
+      note?: string;
+    }) => ({
+      id: String(data?.id ?? "").trim(),
+      decision: data?.decision ?? "approved",
+      reviewedBy: String(data?.reviewedBy ?? "").trim(),
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.id || !data.reviewedBy) throw new Error("Approval decision is incomplete.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { error } = await runtimeDb
+      .from("approval_requests")
+      .update({
+        status: data.decision,
+        reviewed_by: data.reviewedBy,
+        review_note: data.note ?? null,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      key: string;
+      label: string;
+      amount: number;
+      permanence: "permanent" | "semi";
+      durationDays?: number;
+      effectiveFrom: string;
+      scope: "all" | "new_only" | "loan_holders" | "investors";
+      custom?: boolean;
+      notes?: string;
+    }) => ({
+      key: String(data?.key ?? "").trim(),
+      label: String(data?.label ?? "").trim(),
+      amount: Number(data?.amount ?? 0),
+      permanence: data?.permanence ?? "permanent",
+      durationDays: data?.durationDays ? Number(data.durationDays) : undefined,
+      effectiveFrom: String(data?.effectiveFrom ?? "").trim() || new Date().toISOString().slice(0, 10),
+      scope: data?.scope ?? "all",
+      custom: !!data?.custom,
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.key || !data.label) throw new Error("Fee policy key and label are required.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { error } = await runtimeDb.from("fee_policies").upsert({
+      key: data.key,
+      label: data.label,
+      amount: data.amount,
+      permanence: data.permanence,
+      duration_days: data.permanence === "semi" ? (data.durationDays ?? null) : null,
+      effective_from: data.effectiveFrom,
+      scope: data.scope,
+      custom: data.custom,
+      notes: data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { key: string }) => ({ key: String(data?.key ?? "").trim() }))
+  .handler(async ({ data }) => {
+    if (!data.key) throw new Error("Fee key is required.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { error } = await runtimeDb.from("fee_policies").delete().eq("key", data.key);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const createSupportThreadRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      memberName: string;
+      subject: string;
+      assignedStaffId?: string;
+      initialMessages: Array<{
+        from: "member" | "ai" | "staff";
+        fromName: string;
+        fromId?: string;
+        text: string;
+      }>;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      memberName: String(data?.memberName ?? "").trim(),
+      subject: String(data?.subject ?? "").trim(),
+      assignedStaffId: data?.assignedStaffId?.trim() || undefined,
+      initialMessages: Array.isArray(data?.initialMessages) ? data.initialMessages : [],
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.memberId || !data.memberName || !data.subject) {
+      throw new Error("Support thread details are incomplete.");
+    }
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const id = makeId("SUP");
+    const { error: threadError } = await runtimeDb.from("support_threads").insert({
+      id,
+      member_id: data.memberId,
+      member_name: data.memberName,
+      assigned_staff_id: data.assignedStaffId ?? null,
+      status: data.assignedStaffId ? "open" : "ai",
+      subject: data.subject,
+    });
+    if (threadError) throw new Error(threadError.message);
+
+    if (data.initialMessages.length > 0) {
+      const rows = data.initialMessages.map((message, index) => ({
+        id: `${id}-MSG-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
+        thread_id: id,
+        sender_kind: message.from,
+        sender_name: message.fromName,
+        sender_id: message.fromId ?? null,
+        text: message.text,
+      }));
+      const { error: messagesError } = await runtimeDb.from("support_messages").insert(rows);
+      if (messagesError) throw new Error(messagesError.message);
+    }
+
+    return { id };
+  });
+
+export const appendSupportMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      threadId: string;
+      from: "member" | "ai" | "staff";
+      fromName: string;
+      fromId?: string;
+      text: string;
+    }) => ({
+      threadId: String(data?.threadId ?? "").trim(),
+      from: data?.from ?? "member",
+      fromName: String(data?.fromName ?? "").trim(),
+      fromId: data?.fromId?.trim() || undefined,
+      text: String(data?.text ?? "").trim(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.threadId || !data.fromName || !data.text) throw new Error("Support message is incomplete.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const id = makeId("SUM");
+    const { error } = await runtimeDb.from("support_messages").insert({
+      id,
+      thread_id: data.threadId,
+      sender_kind: data.from,
+      sender_name: data.fromName,
+      sender_id: data.fromId ?? null,
+      text: data.text,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
+  });
+
+export const updateSupportThreadRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id: string;
+      status: "ai" | "open" | "claimed" | "closed";
+      assignedStaffId?: string;
+    }) => ({
+      id: String(data?.id ?? "").trim(),
+      status: data?.status ?? "open",
+      assignedStaffId: data?.assignedStaffId?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.id) throw new Error("Support thread id is required.");
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { error } = await runtimeDb
+      .from("support_threads")
+      .update({
+        status: data.status,
+        assigned_staff_id: data.assignedStaffId ?? null,
+      })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
     return { ok: true };
   });

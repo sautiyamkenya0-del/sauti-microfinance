@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import {
   createMemberRecord,
+  createStaffMessageRecord,
   createStaffRecord,
   deleteStaffRecord,
   loadAppData,
@@ -115,6 +116,23 @@ export type PettyCashEntry = {
   reference?: string;
   txnCost?: number;
   openingBalance?: number;
+};
+
+export type StaffMessageAttachment = {
+  name: string;
+  type: string;
+  size: number;
+  data: string;
+};
+
+export type StaffMessage = {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  senderName: string;
+  content?: string;
+  attachment?: StaffMessageAttachment;
+  createdAt: string;
 };
 
 export type Investor = {
@@ -327,6 +345,10 @@ const seedInvestors: Investor[] = [];
 const seedAttendance: Attendance[] = [];
 type Store = {
   isAuthenticated: boolean;
+  isHydrated: boolean;
+  authMode: "staff" | "member";
+  portalMemberId: string;
+  setPortalMemberId: (next: string) => void;
   setAuthenticated: (next: boolean) => void;
   currentUser: Staff;
   setCurrentUser: (s: Staff) => void;
@@ -342,6 +364,7 @@ type Store = {
   followups: FollowupNote[];
   penalties: Penalty[];
   roundOff: RoundOffEntry[];
+  staffMessages: StaffMessage[];
   sharePrice: number;
   /** Member auth — membership No. + phone number. Returns the matched member or null. */
   loginMember: (memberNo: string, phone: string) => Member | null;
@@ -368,6 +391,14 @@ type Store = {
   addInvestor: (i: Omit<Investor, "id" | "joinedAt"> & { joinedAt?: string }) => void;
   addFieldVisit: (v: Omit<FieldVisit, "id" | "date"> & { date?: string }) => void;
   addFollowup: (n: Omit<FollowupNote, "id" | "date"> & { date?: string }) => void;
+  addStaffMessage: (m: {
+    senderId: string;
+    receiverId: string;
+    senderName: string;
+    content?: string;
+    attachment?: StaffMessageAttachment;
+  }) => Promise<string>;
+  reloadStaffMessages: () => Promise<void>;
   /** Mark another staff present/absent (caller must be director or canMarkAttendance). */
   markAttendance: (
     staffId: string,
@@ -392,6 +423,8 @@ const STAFF_KEY = "sauti_staff_v3";
 const ATT_KEY = "sauti_attendance_v3";
 const AUTH_KEY = "sauti_auth_v1";
 const AUTH_STAFF_KEY = "sauti_auth_staff_v1";
+const AUTH_MODE_KEY = "sauti_auth_mode_v1";
+const PORTAL_MEMBER_KEY = "sauti_portal_member_v1";
 const STORE_RESET_KEY = "sauti_store_reset_v1";
 const STORE_RESET_VERSION = "2026-05-15-empty-seeds";
 const LEGACY_STATE_KEYS = [
@@ -417,10 +450,12 @@ function ensureStoreReset() {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
   const createMember = useServerFn(createMemberRecord);
+  const createStaffMessage = useServerFn(createStaffMessageRecord);
   const createStaff = useServerFn(createStaffRecord);
   const saveStaff = useServerFn(updateStaffRecord);
   const deleteStaff = useServerFn(deleteStaffRecord);
   const saveAttendance = useServerFn(upsertAttendanceRecord);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [staff, setStaff] = useState<Staff[]>(() => {
     try {
       ensureStoreReset();
@@ -448,6 +483,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return staff[0] ?? seedStaff[0];
   });
   const [members, setMembers] = useState<Member[]>(seedMembers);
+  const [authMode, setAuthMode] = useState<"staff" | "member">(() => {
+    try {
+      ensureStoreReset();
+      return localStorage.getItem(AUTH_MODE_KEY) === "member" ? "member" : "staff";
+    } catch {}
+    return "staff";
+  });
+  const [portalMemberId, setPortalMemberIdState] = useState<string>(() => {
+    try {
+      ensureStoreReset();
+      return localStorage.getItem(PORTAL_MEMBER_KEY) ?? "";
+    } catch {}
+    return "";
+  });
   const [loans, setLoans] = useState<Loan[]>(seedLoans);
   const [transactions, setTransactions] = useState<Transaction[]>(seedTx);
   const [pettyCash, setPettyCash] = useState<PettyCashEntry[]>(seedPetty);
@@ -457,6 +506,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [followups, setFollowups] = useState<FollowupNote[]>([]);
   const [penalties, setPenalties] = useState<Penalty[]>(seedPenalties);
   const [roundOff, setRoundOff] = useState<RoundOffEntry[]>(seedRoundOff);
+  const [staffMessages, setStaffMessages] = useState<StaffMessage[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>(() => {
     try {
       ensureStoreReset();
@@ -467,19 +517,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   });
 
   async function refreshFromDatabase() {
-    const data = await load();
-    setStaff(data.staff);
-    setMembers(data.members);
-    setLoans(data.loans);
-    setTransactions(data.transactions);
-    setPettyCash(data.pettyCash);
-    setInvestors(data.investors);
-    setAttendance(data.attendance);
-    setAppraisals(data.appraisals);
-    setFieldVisits(data.fieldVisits);
-    setFollowups(data.followups);
-    setPenalties(data.penalties);
-    setRoundOff(data.roundOff);
+    try {
+      const data = await load();
+      setStaff(data.staff);
+      setMembers(data.members);
+      setLoans(data.loans);
+      setTransactions(data.transactions);
+      setPettyCash(data.pettyCash);
+      setInvestors(data.investors);
+      setAttendance(data.attendance);
+      setAppraisals(data.appraisals);
+      setFieldVisits(data.fieldVisits);
+      setFollowups(data.followups);
+      setPenalties(data.penalties);
+      setRoundOff(data.roundOff);
+      setStaffMessages(data.staffMessages ?? []);
+    } finally {
+      setIsHydrated(true);
+    }
   }
 
   useEffect(() => {
@@ -511,9 +566,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       if (next) {
         localStorage.setItem(AUTH_KEY, "1");
+        localStorage.setItem(AUTH_MODE_KEY, authMode);
       } else {
         localStorage.removeItem(AUTH_KEY);
         localStorage.removeItem(AUTH_STAFF_KEY);
+        localStorage.removeItem(AUTH_MODE_KEY);
       }
     } catch {}
   };
@@ -525,9 +582,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {}
   };
 
+  const setPortalMemberId = (next: string) => {
+    setPortalMemberIdState(next);
+    try {
+      if (next) localStorage.setItem(PORTAL_MEMBER_KEY, next);
+      else localStorage.removeItem(PORTAL_MEMBER_KEY);
+    } catch {}
+  };
+
   const value = useMemo<Store>(
     () => ({
       isAuthenticated,
+      isHydrated,
+      authMode,
+      portalMemberId,
+      setPortalMemberId,
       setAuthenticated,
       currentUser,
       setCurrentUser,
@@ -544,6 +613,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       sharePrice: SHARE_PRICE,
       penalties,
       roundOff,
+      staffMessages,
       addMember: async (m) => {
         const result = await createMember({
           data: {
@@ -704,6 +774,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const date = n.date ?? new Date().toISOString().slice(0, 10);
         setFollowups((prev) => [{ ...n, id, date }, ...prev]);
       },
+      addStaffMessage: async (message) => {
+        const result = await createStaffMessage({
+          data: {
+            senderId: message.senderId,
+            receiverId: message.receiverId,
+            senderName: message.senderName,
+            content: message.content,
+            attachment: message.attachment,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      reloadStaffMessages: async () => {
+        const data = await load();
+        setStaffMessages(data.staffMessages ?? []);
+      },
       loginMember: (memberNo, phone) => {
         const norm = memberNo.trim().toUpperCase();
         // Accept both raw IDs (M001) and SBC-prefixed (SBC0475K) — match the trailing digits
@@ -714,7 +801,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const target = members.find((mb) => mb.id === `M${memberNum}`);
         if (!target) return null;
         const targetPhone = toComparableKenyanPhone(target.phone);
-        if (targetPhone && cleanPhone && targetPhone === cleanPhone) return target;
+        if (targetPhone && cleanPhone && targetPhone === cleanPhone) {
+          setAuthMode("member");
+          setPortalMemberId(target.id);
+          try {
+            localStorage.setItem(AUTH_MODE_KEY, "member");
+          } catch {}
+          return target;
+        }
         return null;
       },
       loginStaff: (email, password) => {
@@ -723,6 +817,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           (s) => (s.email ?? "").toLowerCase() === e && (s.tempPassword ?? "") === password,
         );
         if (found) {
+          setAuthMode("staff");
+          try {
+            localStorage.setItem(AUTH_MODE_KEY, "staff");
+          } catch {}
           setCurrentUser(found);
           setAuthenticated(true);
           return found;
@@ -730,6 +828,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return null;
       },
       logout: () => {
+        setAuthMode("staff");
+        setPortalMemberId("");
         setAuthenticated(false);
         try {
           sessionStorage.removeItem("sauti_splash");
@@ -1093,6 +1193,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       isAuthenticated,
+      isHydrated,
+      authMode,
+      portalMemberId,
       currentUser,
       staff,
       members,
@@ -1106,6 +1209,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       penalties,
       roundOff,
       attendance,
+      staffMessages,
+      createStaffMessage,
+      load,
     ],
   );
 

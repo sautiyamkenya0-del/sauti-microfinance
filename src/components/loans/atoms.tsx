@@ -29,18 +29,25 @@ export function Select({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange?: (v: string) => void;
   options: string[];
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
       {label && (
         <span className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</span>
       )}
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="loan-input mt-1">
+      <select
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        className="loan-input mt-1"
+        disabled={disabled}
+      >
         {options.map((o) => (
           <option key={o} value={o}>
             {o}
