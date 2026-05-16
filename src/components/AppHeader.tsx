@@ -279,7 +279,7 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               className="md:hidden fixed inset-0 z-[100] bg-black/50"
               onClick={() => setMobileNavOpen(false)}
             />
-            <aside className="md:hidden fixed left-0 top-0 bottom-0 z-[101] w-72 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col animate-in slide-in-from-left">
+            <aside className="md:hidden fixed left-0 top-0 bottom-0 z-[101] w-72 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col animate-in slide-in-from-left mobile-safe-top">
               <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
                 <div>
                   <div className="font-display text-base font-semibold leading-tight">
