@@ -22,6 +22,8 @@ export type MandatoryFees = {
   firstUpfrontPaid: boolean; // first-installment / loan upfront already settled manually
 };
 
+export type BusinessPermanence = "permanent" | "semi";
+
 export type Member = {
   id: string;
   name: string;
@@ -51,6 +53,7 @@ export type Member = {
   // Business details
   businessName?: string;
   businessType?: string;
+  businessPermanence?: BusinessPermanence;
   businessAddress?: string;
   fieldOfficerId?: string;
 };
@@ -168,6 +171,17 @@ export function joinName(parts: {
   if (three) return three;
   const two = [parts.firstName, parts.lastName].filter(Boolean).join(" ").trim();
   return two || parts.name || "";
+}
+
+export function businessPermanenceLabel(value?: BusinessPermanence) {
+  if (value === "permanent") return "Permanent";
+  if (value === "semi") return "Semi-permanent";
+  return "";
+}
+
+export function memberNeedsSticker(member: Pick<Member, "businessPermanence" | "fees">) {
+  if (member.businessPermanence) return member.businessPermanence === "permanent";
+  return !!member.fees.hasShop;
 }
 
 export type Appraisal = {
@@ -552,6 +566,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             oldSystemId: m.oldSystemId,
             businessName: m.businessName,
             businessType: m.businessType,
+            businessPermanence: m.businessPermanence,
             businessAddress: m.businessAddress,
             fieldOfficerId: m.fieldOfficerId || currentUser.id,
             investorContribution: (m as any).investorContribution,
@@ -775,7 +790,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await saveAttendance({
           data: {
             staffId,
-            status: status === "late" ? "present" : (status as "present" | "signed_out" | "permission" | "absent"),
+            status:
+              status === "late"
+                ? "present"
+                : (status as "present" | "signed_out" | "permission" | "absent"),
             when,
           },
         });
@@ -891,7 +909,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }[] = [
           { key: "membership", label: "Membership fee", amount: 500, required: true },
           { key: "card", label: "Membership card", amount: 500, required: true },
-          { key: "sticker", label: "Sticker fee", amount: 500, required: member.fees.hasShop },
+          {
+            key: "sticker",
+            label: "Sticker fee",
+            amount: 500,
+            required: memberNeedsSticker(member),
+          },
         ];
         for (const fee of FEE_QUEUE) {
           if (!fee.required) continue;

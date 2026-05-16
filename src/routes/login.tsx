@@ -36,7 +36,6 @@ function LoginPage() {
     if (!member) return toast.error("The supplied sign-in details are not valid.");
 
     setAuthenticated(true);
-    localStorage.setItem("sauti_portal_v1", member.id);
     toast.success(`Welcome, ${member.name}`);
     router.navigate({ to: "/portal" });
   };

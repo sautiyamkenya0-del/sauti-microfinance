@@ -135,9 +135,17 @@ function RootComponent() {
 }
 
 function AppLayout() {
-  const { isAuthenticated } = useStore();
+  const { isAuthenticated, isHydrated, authMode } = useStore();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
+
+  if (!isHydrated) {
+    return (
+      <div className="min-h-screen bg-background">
+        <SplashScreen />
+      </div>
+    );
+  }
 
   if (!isAuthenticated && !isLoginRoute) {
     return (
@@ -150,12 +158,26 @@ function AppLayout() {
 
   if (isLoginRoute) {
     if (isAuthenticated) {
-      return <Navigate to="/" replace />;
+      return <Navigate to={authMode === "member" ? "/portal" : "/"} replace />;
     }
 
     return (
       <div className="min-h-screen bg-background">
         <SplashScreen />
+        <Outlet />
+      </div>
+    );
+  }
+
+  if (authMode === "member") {
+    if (pathname !== "/portal") {
+      return <Navigate to="/portal" replace />;
+    }
+
+    return (
+      <div className="min-h-screen bg-background">
+        <SplashScreen />
+        <MpesaQueueDrainer />
         <Outlet />
       </div>
     );

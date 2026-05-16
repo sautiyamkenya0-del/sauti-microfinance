@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
-import { useStore, fmtKES, formatMembershipNumber, type Member } from "@/lib/store";
+import {
+  useStore,
+  businessPermanenceLabel,
+  fmtKES,
+  formatMembershipNumber,
+  memberNeedsSticker,
+  type Member,
+} from "@/lib/store";
 import { toast } from "sonner";
 import { Smartphone, X, Loader2 } from "lucide-react";
 
@@ -17,7 +24,8 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
   const [busy, setBusy] = useState(false);
 
-  const [stickerOn, setStickerOn] = useState(member.fees.hasShop || false);
+  const [legacyStickerOn, setLegacyStickerOn] = useState(member.fees.hasShop || false);
+  const stickerOn = member.businessPermanence ? memberNeedsSticker(member) : legacyStickerOn;
   const fees = member.fees;
   const feeQueue = [
     { key: "membership", label: "Membership fee", amount: 500, owed: !fees.membership },
@@ -197,14 +205,24 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 Mandatory fees only
               </button>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={stickerOn}
-                onChange={(e) => setStickerOn(e.target.checked)}
-              />
-              Member has a physical shop (sticker fee applicable)
-            </label>
+            {member.businessPermanence ? (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Business setup:{" "}
+                <span className="font-medium text-foreground">
+                  {businessPermanenceLabel(member.businessPermanence)}
+                </span>
+                . Sticker fee {stickerOn ? "applies automatically." : "does not apply."}
+              </div>
+            ) : (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={legacyStickerOn}
+                  onChange={(e) => setLegacyStickerOn(e.target.checked)}
+                />
+                Member has a physical shop (sticker fee applicable)
+              </label>
+            )}
             <div className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs">
               {feeQueue.map((f) => (
                 <div key={f.key} className="flex justify-between">

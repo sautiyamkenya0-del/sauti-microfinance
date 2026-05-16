@@ -1,7 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, joinName, loanSummary } from "@/lib/store";
+import {
+  useStore,
+  businessPermanenceLabel,
+  fmtKES,
+  joinName,
+  loanSummary,
+  memberNeedsSticker,
+} from "@/lib/store";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -9,6 +16,7 @@ import {
   Banknote,
   Coins,
   AlertTriangle,
+  type LucideIcon,
   Smartphone,
   User,
   MessageSquare,
@@ -19,11 +27,11 @@ import {
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
-import { submitApproval } from "@/lib/approvals";
+import { useApprovals } from "@/lib/approvals";
 import { useFeesPolicy, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
-const TABS: { id: Tab; label: string; icon: any }[] = [
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Overview", icon: PiggyBank },
   { id: "profile", label: "My Profile", icon: User },
   { id: "loans", label: "My Loans", icon: Banknote },
@@ -37,20 +45,37 @@ export const Route = createFileRoute("/portal")({
   component: Portal,
 });
 
-const KEY = "sauti_portal_v1";
-
 function Portal() {
-  const { members, loans, transactions, penalties, roundOffBalance, currentUser } = useStore();
+  const {
+    members,
+    loans,
+    transactions,
+    penalties,
+    roundOffBalance,
+    currentUser,
+    authMode,
+    portalMemberId,
+    setPortalMemberId,
+  } = useStore();
   // The Member Portal route lives inside the staff app; every signed-in user here
   // is staff (director / manager / loan_officer). Render it as a staff "view-as"
   // surface, not as if the staff member were the customer.
-  const isStaffView = true;
-  const [memberId, setMemberId] = useState<string>(
-    () => localStorage.getItem(KEY) ?? members[0]?.id ?? "",
-  );
+  const isStaffView = authMode !== "member";
+  const [memberId, setMemberId] = useState<string>(() => portalMemberId || members[0]?.id || "");
   useEffect(() => {
-    if (memberId) localStorage.setItem(KEY, memberId);
-  }, [memberId]);
+    if (authMode === "member") {
+      setMemberId(portalMemberId);
+      return;
+    }
+    if (!memberId && members[0]?.id) {
+      setMemberId(members[0].id);
+      setPortalMemberId(members[0].id);
+    }
+  }, [authMode, memberId, members, portalMemberId, setPortalMemberId]);
+  useEffect(() => {
+    if (!memberId) return;
+    setPortalMemberId(memberId);
+  }, [memberId, setPortalMemberId]);
   const [tab, setTab] = useState<Tab>("overview");
 
   const member = members.find((m) => m.id === memberId);
@@ -58,6 +83,10 @@ function Portal() {
   const myTx = transactions.filter((t) => t.memberId === memberId);
   const myPen = penalties.filter((p) => p.memberId === memberId);
   const fees = useFeesPolicy().filter(isFeeActive);
+  const visibleFees = member
+    ? fees.filter((f) => f.key !== "sticker" || memberNeedsSticker(member))
+    : fees;
+  const { submit } = useApprovals();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
   const [pinOld, setPinOld] = useState("");
@@ -240,6 +269,10 @@ function Portal() {
                   </div>
                   <Field label="Business name" value={member.businessName} />
                   <Field label="Business type" value={member.businessType} />
+                  <Field
+                    label="Business setup"
+                    value={businessPermanenceLabel(member.businessPermanence)}
+                  />
                   <Field label="Business address" value={member.businessAddress} />
                   <Field label="Field officer" value={member.fieldOfficerId} />
 
@@ -254,8 +287,8 @@ function Portal() {
                         className="flex-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                       />
                       <button
-                        onClick={() => {
-                          submitApproval({
+                        onClick={async () => {
+                          await submit({
                             kind: "profile_update",
                             title: "Phone number change",
                             detail: `${member.name} requests phone update from ${member.phone} → ${phone}`,
@@ -289,9 +322,9 @@ function Portal() {
                         className="flex-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                       />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           if (pinNew.length < 4) return toast.error("PIN must be ≥4 digits");
-                          submitApproval({
+                          await submit({
                             kind: "pin_change",
                             title: "PIN reset request",
                             detail: `${member.name} requests a PIN change.`,
@@ -445,10 +478,10 @@ function Portal() {
             {tab === "fees" && (
               <Section title="Active Fees Set by Sauti">
                 <div className="p-5 space-y-2">
-                  {fees.length === 0 && (
+                  {visibleFees.length === 0 && (
                     <div className="text-sm text-muted-foreground">No active fees.</div>
                   )}
-                  {fees.map((f) => (
+                  {visibleFees.map((f) => (
                     <div
                       key={f.key}
                       className="flex items-center justify-between border-b border-border pb-2 text-sm"

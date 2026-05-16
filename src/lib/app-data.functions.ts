@@ -6,6 +6,17 @@ import {
 } from "@/integrations/supabase/client.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
+function splitLegacyLastName(lastName: string | null | undefined) {
+  const parts = String(lastName ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return {
+    secondName: parts[0] || undefined,
+    thirdName: parts.slice(1).join(" ") || undefined,
+  };
+}
+
 function requireSupabaseAdmin() {
   const supabaseAdmin = getSupabaseAdminOrNull();
   if (!supabaseAdmin) {
@@ -112,39 +123,53 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
       canMarkAttendance: row.can_mark_attendance,
       fingerprintEnrolled: row.fingerprint_enrolled,
     })),
-    members: (membersResult.data ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      phone: row.phone,
-      joinedAt: row.joined_at,
-      status: row.status,
-      shares: row.shares,
-      savingsBalance: toNumber(row.savings_balance),
-      fees: {
-        membership: row.fee_membership,
-        card: row.fee_card,
-        hasShop: row.fee_has_shop,
-        sticker: row.fee_sticker,
-        firstUpfrontPaid: row.fee_first_upfront_paid,
-      },
-      isInvestor: row.is_investor,
-      investorId: row.investor_id ?? undefined,
-      firstName: row.first_name ?? undefined,
-      lastName: row.last_name ?? undefined,
-      dob: row.dob ?? undefined,
-      gender: (row.gender as "Male" | "Female" | null) ?? undefined,
-      email: row.email ?? undefined,
-      address: row.address ?? undefined,
-      city: row.city ?? undefined,
-      county: row.county ?? undefined,
-      village: row.village ?? undefined,
-      savingsOnly: row.savings_only,
-      oldSystemId: row.old_system_id ?? undefined,
-      businessName: row.business_name ?? undefined,
-      businessType: row.business_type ?? undefined,
-      businessAddress: row.business_address ?? undefined,
-      fieldOfficerId: row.field_officer_id ?? undefined,
-    })),
+    members: (membersResult.data ?? []).map((row) => {
+      const legacyNames = splitLegacyLastName(row.last_name);
+      const businessPermanence =
+        (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
+
+      return {
+        id: row.id,
+        name: row.name,
+        phone: row.phone,
+        joinedAt: row.joined_at,
+        status: row.status,
+        shares: row.shares,
+        savingsBalance: toNumber(row.savings_balance),
+        fees: {
+          membership: row.fee_membership,
+          card: row.fee_card,
+          hasShop:
+            businessPermanence === "permanent"
+              ? true
+              : businessPermanence === "semi"
+                ? false
+                : row.fee_has_shop,
+          sticker: row.fee_sticker,
+          firstUpfrontPaid: row.fee_first_upfront_paid,
+        },
+        isInvestor: row.is_investor,
+        investorId: row.investor_id ?? undefined,
+        firstName: row.first_name ?? undefined,
+        secondName: row.second_name ?? legacyNames.secondName,
+        thirdName: row.third_name ?? legacyNames.thirdName,
+        lastName: row.last_name ?? undefined,
+        dob: row.dob ?? undefined,
+        gender: (row.gender as "Male" | "Female" | null) ?? undefined,
+        email: row.email ?? undefined,
+        address: row.address ?? undefined,
+        city: row.city ?? undefined,
+        county: row.county ?? undefined,
+        village: row.village ?? undefined,
+        savingsOnly: row.savings_only,
+        oldSystemId: row.old_system_id ?? undefined,
+        businessName: row.business_name ?? undefined,
+        businessType: row.business_type ?? undefined,
+        businessPermanence,
+        businessAddress: row.business_address ?? undefined,
+        fieldOfficerId: row.field_officer_id ?? undefined,
+      };
+    }),
     loans: (loansResult.data ?? []).map((row) => ({
       id: row.id,
       memberId: row.member_id,
@@ -308,6 +333,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       oldSystemId?: string;
       businessName?: string;
       businessType?: string;
+      businessPermanence?: "permanent" | "semi";
       businessAddress?: string;
       fieldOfficerId?: string;
       investorContribution?: number;
@@ -332,6 +358,10 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       oldSystemId: data?.oldSystemId?.trim() || undefined,
       businessName: data?.businessName?.trim() || undefined,
       businessType: data?.businessType?.trim() || undefined,
+      businessPermanence:
+        data?.businessPermanence === "permanent" || data?.businessPermanence === "semi"
+          ? data.businessPermanence
+          : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       investorContribution: Number(data?.investorContribution ?? 0),
@@ -369,6 +399,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const memberId = await nextPrefixedId("members", "M", 101);
     const lastName =
       [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || undefined;
+    const hasShop = data.businessPermanence === "permanent";
 
     const { error: memberError } = await supabaseAdmin.from("members").insert({
       id: memberId,
@@ -378,7 +409,10 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       status: data.status,
       shares: data.shares,
       savings_balance: data.savingsBalance,
+      fee_has_shop: hasShop,
       first_name: data.firstName ?? null,
+      second_name: data.secondName ?? null,
+      third_name: data.thirdName ?? null,
       last_name: lastName ?? null,
       dob: data.dob ?? null,
       gender: data.gender ?? null,
@@ -390,6 +424,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       old_system_id: data.oldSystemId ?? null,
       business_name: data.businessName ?? null,
       business_type: data.businessType ?? null,
+      business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
       field_officer_id: data.fieldOfficerId ?? null,
       is_investor: data.investorContribution > 0,

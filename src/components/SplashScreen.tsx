@@ -1,19 +1,20 @@
 import { useEffect, useState } from "react";
 import logo from "@/assets/sauti-logo.png";
 
+let splashShownThisRuntime = false;
+
 export function SplashScreen() {
-  const [shown, setShown] = useState(true);
+  const [shown, setShown] = useState(() => !splashShownThisRuntime);
   const [fade, setFade] = useState(false);
   useEffect(() => {
-    const seen = sessionStorage.getItem("sauti_splash");
-    if (seen) {
+    if (splashShownThisRuntime) {
       setShown(false);
       return;
     }
     const t1 = setTimeout(() => setFade(true), 2400);
     const t2 = setTimeout(() => {
       setShown(false);
-      sessionStorage.setItem("sauti_splash", "1");
+      splashShownThisRuntime = true;
     }, 3000);
     return () => {
       clearTimeout(t1);

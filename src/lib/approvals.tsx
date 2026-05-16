@@ -1,4 +1,11 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+
+import {
+  createApprovalRequestRecord,
+  decideApprovalRequestRecord,
+  loadAppData,
+} from "@/lib/app-data.functions";
 
 export type ApprovalKind =
   | "profile_update"
@@ -13,7 +20,7 @@ export type ApprovalRequest = {
   kind: ApprovalKind;
   title: string;
   detail: string;
-  requestedBy: string; // member or staff id
+  requestedBy: string;
   requestedByName?: string;
   payload?: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
@@ -23,75 +30,70 @@ export type ApprovalRequest = {
   reviewedAt?: string;
 };
 
-const KEY = "sauti:approvals";
-const EVT = "sauti:approvals-changed";
-
-function read(): ApprovalRequest[] {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-function write(items: ApprovalRequest[]) {
-  localStorage.setItem(KEY, JSON.stringify(items));
-  window.dispatchEvent(new Event(EVT));
-}
-
-export function submitApproval(req: Omit<ApprovalRequest, "id" | "status" | "createdAt">) {
-  const items = read();
-  const id = `AR${Date.now().toString(36)}`;
-  items.unshift({ ...req, id, status: "pending", createdAt: new Date().toISOString() });
-  write(items);
-  return id;
-}
-
-export function decideApproval(
-  id: string,
-  decision: "approved" | "rejected",
-  reviewedBy: string,
-  note?: string,
-) {
-  const items = read().map((r) =>
-    r.id === id
-      ? {
-          ...r,
-          status: decision,
-          reviewedBy,
-          reviewNote: note,
-          reviewedAt: new Date().toISOString(),
-        }
-      : r,
-  );
-  write(items);
-}
-
 export function useApprovals() {
-  const [items, setItems] = useState<ApprovalRequest[]>(() =>
-    typeof window !== "undefined" ? read() : [],
-  );
+  const load = useServerFn(loadAppData);
+  const createApproval = useServerFn(createApprovalRequestRecord);
+  const decideApproval = useServerFn(decideApprovalRequestRecord);
+  const [items, setItems] = useState<ApprovalRequest[]>([]);
+
+  const refresh = useCallback(async () => {
+    const data = await load();
+    setItems(data.approvals ?? []);
+  }, [load]);
+
   useEffect(() => {
-    const refresh = () => setItems(read());
-    window.addEventListener(EVT, refresh);
-    window.addEventListener("storage", refresh);
-    return () => {
-      window.removeEventListener(EVT, refresh);
-      window.removeEventListener("storage", refresh);
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  useEffect(() => {
+    const sync = () => {
+      refresh().catch(() => {});
     };
-  }, []);
+    const timer = window.setInterval(sync, 8000);
+    window.addEventListener("focus", sync);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", sync);
+    };
+  }, [refresh]);
+
   const submit = useCallback(
-    (req: Omit<ApprovalRequest, "id" | "status" | "createdAt">) => submitApproval(req),
-    [],
+    async (req: Omit<ApprovalRequest, "id" | "status" | "createdAt">) => {
+      const result = await createApproval({
+        data: {
+          kind: req.kind,
+          title: req.title,
+          detail: req.detail,
+          requestedBy: req.requestedBy,
+          requestedByName: req.requestedByName,
+          payload: req.payload,
+        },
+      });
+      await refresh();
+      return result.id;
+    },
+    [createApproval, refresh],
   );
+
   const decide = useCallback(
-    (id: string, decision: "approved" | "rejected", by: string, note?: string) =>
-      decideApproval(id, decision, by, note),
-    [],
+    async (id: string, decision: "approved" | "rejected", by: string, note?: string) => {
+      await decideApproval({
+        data: {
+          id,
+          decision,
+          reviewedBy: by,
+          note,
+        },
+      });
+      await refresh();
+    },
+    [decideApproval, refresh],
   );
+
   return {
     items,
     submit,
     decide,
-    pendingCount: items.filter((i) => i.status === "pending").length,
+    pendingCount: items.filter((item) => item.status === "pending").length,
   };
 }

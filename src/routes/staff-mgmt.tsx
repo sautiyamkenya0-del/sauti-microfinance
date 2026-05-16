@@ -2,98 +2,53 @@ import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section } from "@/components/ui-bits";
-import { useStore, roleLabel, type Role, type Staff } from "@/lib/store";
-import { useEffect, useState } from "react";
+import { useStore, roleLabel, type Staff } from "@/lib/store";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Camera, KeyRound, Trash2, UserPlus, Pencil } from "lucide-react";
 import { StaffFormDialog } from "@/components/StaffFormDialog";
+import { useStaffMemos } from "@/lib/memos-board";
 
 export const Route = createFileRoute("/staff-mgmt")({
   head: () => ({ meta: [{ title: "Staff Management — Sauti Microfinance" }] }),
   component: StaffMgmt,
 });
 
-type Memo = { id: string; date: string; title: string; body: string; by: string };
-type StaffMeta = { photo?: string; pin?: string; phone?: string; email?: string };
-const PHOTO_KEY = "sauti_staff_meta_v1";
-const MEMO_KEY = "sauti_memos_v1";
-const NEW_STAFF_KEY = "sauti_extra_staff_v1";
-
 function StaffMgmt() {
   const { currentUser, staff, attendance, removeStaff, updateStaff } = useStore();
+  const { memos, postMemo, removeMemo } = useStaffMemos();
   const [staffDialog, setStaffDialog] = useState<{ open: boolean; editing?: Staff }>({
     open: false,
   });
-
-  const [meta, setMeta] = useState<Record<string, StaffMeta>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(PHOTO_KEY) ?? "{}");
-    } catch {
-      return {};
-    }
-  });
-  const [memos, setMemos] = useState<Memo[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(MEMO_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
-  const [extra, setExtra] = useState<{ id: string; name: string; role: Role }[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(NEW_STAFF_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
-  useEffect(() => {
-    localStorage.setItem(PHOTO_KEY, JSON.stringify(meta));
-  }, [meta]);
-  useEffect(() => {
-    localStorage.setItem(MEMO_KEY, JSON.stringify(memos));
-  }, [memos]);
-  useEffect(() => {
-    localStorage.setItem(NEW_STAFF_KEY, JSON.stringify(extra));
-  }, [extra]);
-
-  const allStaff = [...staff, ...extra];
+  const allStaff = staff;
 
   const [memoTitle, setMemoTitle] = useState("");
   const [memoBody, setMemoBody] = useState("");
 
   if (currentUser.role !== "director") return <Navigate to="/" />;
 
-  function resetPassword(s: Staff) {
+  async function resetPassword(s: Staff) {
     const newPwd = "Sauti" + Math.floor(1000 + Math.random() * 9000);
-    updateStaff(s.id, { tempPassword: newPwd });
+    await updateStaff(s.id, { tempPassword: newPwd });
     toast.success(`New password for ${s.name}: ${newPwd}`);
   }
   function uploadPhoto(staffId: string, file: File) {
     const r = new FileReader();
     r.onload = () => {
       const dataUrl = r.result as string;
-      if (staff.find((x) => x.id === staffId)) updateStaff(staffId, { photo: dataUrl });
-      else setMeta((p) => ({ ...p, [staffId]: { ...p[staffId], photo: dataUrl } }));
+      void updateStaff(staffId, { photo: dataUrl });
     };
     r.readAsDataURL(file);
   }
-  function resetPin(staffId: string) {
-    const newPin = String(Math.floor(1000 + Math.random() * 9000));
-    setMeta((p) => ({ ...p, [staffId]: { ...p[staffId], pin: newPin } }));
-    toast.success(`New PIN for ${staffId}: ${newPin}`);
-  }
-  function postMemo() {
+  async function postTeamMemo() {
     if (!memoTitle.trim() || !memoBody.trim()) return;
-    setMemos((p) => [
-      {
-        id: `MM${Date.now()}`,
-        date: new Date().toISOString().slice(0, 10),
-        title: memoTitle,
-        body: memoBody,
-        by: currentUser.name,
-      },
-      ...p,
-    ]);
+    await postMemo({
+      title: memoTitle,
+      body: memoBody,
+      by: currentUser.name,
+      byStaffId: currentUser.id,
+      date: new Date().toISOString().slice(0, 10),
+    });
     setMemoTitle("");
     setMemoBody("");
     toast.success("Memo posted to all staff");
@@ -142,7 +97,7 @@ function StaffMgmt() {
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
               />
               <button
-                onClick={postMemo}
+                onClick={() => void postTeamMemo()}
                 className="w-full px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
               >
                 Post Memo
@@ -175,10 +130,8 @@ function StaffMgmt() {
         <Section title={`Staff Roster (${allStaff.length})`}>
           <div className="p-5 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {allStaff.map((s) => {
-              const m = meta[s.id] ?? {};
-              const photoSrc = (s as Staff).photo ?? m.photo;
-              const phoneStr = (s as Staff).phone ?? m.phone;
-              const isStoreStaff = !!staff.find((x) => x.id === s.id);
+              const photoSrc = s.photo;
+              const phoneStr = s.phone;
               return (
                 <div key={s.id} className="bg-muted/40 border border-border rounded-lg p-4">
                   <div className="flex items-center gap-3">
@@ -217,45 +170,25 @@ function StaffMgmt() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {isStoreStaff && (
-                      <button
-                        onClick={() => setStaffDialog({ open: true, editing: s as Staff })}
-                        className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-2 py-1.5 rounded-md bg-card border border-border hover:bg-muted"
-                      >
-                        <Pencil className="h-3 w-3" />
-                        Edit
-                      </button>
-                    )}
-                    {isStoreStaff ? (
-                      <button
-                        onClick={() => resetPassword(s as Staff)}
-                        className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-2 py-1.5 rounded-md bg-card border border-border hover:bg-muted"
-                      >
-                        <KeyRound className="h-3 w-3" />
-                        Reset password
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => resetPin(s.id)}
-                        className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-2 py-1.5 rounded-md bg-card border border-border hover:bg-muted"
-                      >
-                        <KeyRound className="h-3 w-3" />
-                        Reset PIN
-                      </button>
-                    )}
-                    {extra.find((x) => x.id === s.id) && (
-                      <button
-                        onClick={() => setExtra((p) => p.filter((x) => x.id !== s.id))}
-                        className="px-2 py-1.5 rounded-md bg-destructive/10 text-destructive border border-destructive/30 hover:bg-destructive/20"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    )}
-                    {isStoreStaff && s.role !== "director" && (
+                    <button
+                      onClick={() => setStaffDialog({ open: true, editing: s })}
+                      className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-2 py-1.5 rounded-md bg-card border border-border hover:bg-muted"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => void resetPassword(s)}
+                      className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-2 py-1.5 rounded-md bg-card border border-border hover:bg-muted"
+                    >
+                      <KeyRound className="h-3 w-3" />
+                      Reset password
+                    </button>
+                    {s.role !== "director" && (
                       <button
                         onClick={() => {
                           if (confirm(`Remove ${s.name}?`)) {
-                            removeStaff(s.id);
+                            void removeStaff(s.id);
                             toast.success("Staff removed");
                           }
                         }}
@@ -286,7 +219,7 @@ function StaffMgmt() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setMemos((p) => p.filter((x) => x.id !== m.id))}
+                    onClick={() => void removeMemo(m.id)}
                     className="text-xs text-muted-foreground hover:text-destructive"
                   >
                     <Trash2 className="h-3 w-3" />

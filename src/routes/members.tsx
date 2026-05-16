@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, type Member } from "@/lib/store";
+import { useStore, fmtKES, type BusinessPermanence, type Member } from "@/lib/store";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { MemberLoanHistory } from "@/components/loans/LoanBook";
@@ -40,6 +40,7 @@ function MembersPage() {
     village: "",
     businessName: "",
     businessType: "",
+    businessPermanence: "" as "" | BusinessPermanence,
     businessAddress: "",
     fieldOfficerId: "",
     shares: 0,
@@ -328,6 +329,25 @@ function MembersPage() {
                       onChange={(e) => setForm({ ...form, businessType: e.target.value })}
                     />
                   </Field>
+                  <Field label="Business Setup">
+                    <select
+                      className="input"
+                      value={form.businessPermanence}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          businessPermanence: e.target.value as "" | BusinessPermanence,
+                        })
+                      }
+                    >
+                      <option value="">Select business setup</option>
+                      <option value="permanent">Permanent</option>
+                      <option value="semi">Semi-permanent</option>
+                    </select>
+                  </Field>
+                  <p className="text-xs text-muted-foreground">
+                    Permanent businesses attract the sticker fee. Semi-permanent businesses do not.
+                  </p>
                   <Field label="Business Address">
                     <textarea
                       rows={2}
@@ -432,6 +452,13 @@ function MembersPage() {
                     toast.error("Use a local phone number starting with 07 or 01.");
                     return;
                   }
+                  if (
+                    (form.businessName || form.businessType || form.businessAddress) &&
+                    !form.businessPermanence
+                  ) {
+                    toast.error("Select whether the business is permanent or semi-permanent.");
+                    return;
+                  }
                   try {
                     await addMember({
                       name: fullName,
@@ -454,6 +481,7 @@ function MembersPage() {
                         form.memberNo && form.memberNo !== nextMemberNo ? form.memberNo : undefined,
                       businessName: form.businessName || undefined,
                       businessType: form.businessType || undefined,
+                      businessPermanence: form.businessPermanence || undefined,
                       businessAddress: form.businessAddress || undefined,
                       fieldOfficerId: form.fieldOfficerId || undefined,
                       investorContribution: form.isInvestor ? form.investorContribution : undefined,
@@ -464,8 +492,10 @@ function MembersPage() {
                     );
                     setOpen(false);
                     setForm(emptyForm);
-                  } catch (error: any) {
-                    toast.error(error?.message ?? "Failed to register member");
+                  } catch (error: unknown) {
+                    toast.error(
+                      error instanceof Error ? error.message : "Failed to register member",
+                    );
                   }
                 }}
                 className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"

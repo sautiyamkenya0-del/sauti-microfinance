@@ -2,9 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { Section, Badge } from "@/components/ui-bits";
 import { useStore } from "@/lib/store";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CommsTabs } from "./staff";
-import { useSupportThreads, appendMessage, setThreadStatus } from "@/lib/support-inbox";
+import { useSupportInboxActions } from "@/lib/support-inbox";
 import { Inbox, Send, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,7 +15,7 @@ export const Route = createFileRoute("/support-inbox")({
 
 function SupportInboxPage() {
   const { currentUser, staff } = useStore();
-  const threads = useSupportThreads();
+  const { rows: threads, appendMessage, setThreadStatus } = useSupportInboxActions();
   // Inbox: threads assigned to me + unassigned + my role-relevant
   const visible = threads.filter(
     (t) =>
@@ -29,24 +29,29 @@ function SupportInboxPage() {
   const [reply, setReply] = useState("");
   const active = threads.find((t) => t.id === activeId);
 
-  function send() {
+  useEffect(() => {
+    if (activeId && visible.some((thread) => thread.id === activeId)) return;
+    setActiveId(visible[0]?.id ?? "");
+  }, [activeId, visible]);
+
+  async function send() {
     const t = reply.trim();
     if (!t || !active) return;
-    appendMessage(active.id, {
+    await appendMessage(active.id, {
       from: "staff",
       fromName: currentUser.name,
       fromId: currentUser.id,
       text: t,
     });
     if (active.status === "open" || active.status === "ai") {
-      setThreadStatus(active.id, "claimed", currentUser.id);
+      await setThreadStatus(active.id, "claimed", currentUser.id);
     }
     setReply("");
   }
 
-  function close() {
+  async function close() {
     if (!active) return;
-    setThreadStatus(active.id, "closed");
+    await setThreadStatus(active.id, "closed");
     toast.success("Conversation closed");
   }
 
@@ -123,7 +128,7 @@ function SupportInboxPage() {
                   className="p-3 border-t border-border flex gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    send();
+                    void send();
                   }}
                 >
                   <input
@@ -138,7 +143,7 @@ function SupportInboxPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={close}
+                    onClick={() => void close()}
                     className="px-3 rounded-md border border-border text-sm inline-flex items-center gap-1 hover:bg-muted"
                   >
                     <CheckCircle2 className="h-3.5 w-3.5" />

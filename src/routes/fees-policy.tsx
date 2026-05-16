@@ -7,9 +7,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Plus, Trash2, Save, Pencil } from "lucide-react";
 import {
+  useFeePolicyActions,
   useFeesPolicy,
-  upsertFee,
-  removeFee,
   isFeeActive,
   scopeLabel,
   type FeePolicy,
@@ -27,6 +26,7 @@ const SCOPES: FeeScope[] = ["all", "new_only", "loan_holders", "investors"];
 function FeesPolicyPage() {
   const { currentUser } = useStore();
   const fees = useFeesPolicy();
+  const { upsertFee, removeFee } = useFeePolicyActions();
   const [editing, setEditing] = useState<FeePolicy | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -121,8 +121,8 @@ function FeesPolicyPage() {
                       </button>
                       {f.custom && (
                         <button
-                          onClick={() => {
-                            removeFee(f.key);
+                          onClick={async () => {
+                            await removeFee(f.key);
                             toast.success("Removed");
                           }}
                           className="ml-2 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10"
@@ -225,10 +225,10 @@ function FeesPolicyPage() {
               </label>
               <div className="sm:col-span-2 flex gap-2">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!editing.label.trim()) return toast.error("Label required");
                     if (editing.amount < 0) return toast.error("Amount must be ≥ 0");
-                    upsertFee(editing);
+                    await upsertFee(editing);
                     toast.success(creating ? "Fee created" : "Fee updated");
                     setEditing(null);
                     setCreating(false);

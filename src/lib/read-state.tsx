@@ -1,96 +1,60 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const KEY = "sauti_notif_read_v1";
+import { useStore } from "@/lib/store";
 
-function load(): Set<string> {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(KEY) ?? "[]"));
-  } catch {
-    return new Set();
-  }
+const EVT = "sauti:read-changed";
+let readIdsState = new Set<string>();
+
+function emitReadChange() {
+  window.dispatchEvent(new Event(EVT));
 }
-function save(s: Set<string>) {
-  localStorage.setItem(KEY, JSON.stringify([...s]));
-  window.dispatchEvent(new Event("sauti:read-changed"));
+
+function snapshotReadIds() {
+  return new Set(readIdsState);
 }
 
 export function useReadIds() {
-  const [ids, setIds] = useState<Set<string>>(() => load());
+  const [ids, setIds] = useState<Set<string>>(() => snapshotReadIds());
   const sigRef = useRef<string>("");
+
   useEffect(() => {
     const refresh = () => {
-      const next = load();
-      // Skip state updates when nothing actually changed — avoids cascading
-      // re-renders across header/sidebar that depend on useReadIds.
+      const next = snapshotReadIds();
       const sig = [...next].sort().join("|");
       if (sig === sigRef.current) return;
       sigRef.current = sig;
       setIds(next);
     };
     refresh();
-    window.addEventListener("sauti:read-changed", refresh);
-    window.addEventListener("storage", refresh);
-    return () => {
-      window.removeEventListener("sauti:read-changed", refresh);
-      window.removeEventListener("storage", refresh);
-    };
+    window.addEventListener(EVT, refresh);
+    return () => window.removeEventListener(EVT, refresh);
   }, []);
+
   const markRead = useCallback((id: string | string[]) => {
     const arr = Array.isArray(id) ? id : [id];
-    const next = load();
-    arr.forEach((x) => next.add(x));
-    save(next);
+    arr.forEach((item) => readIdsState.add(item));
+    emitReadChange();
   }, []);
+
   const clearAll = useCallback((all: string[]) => {
-    const n = load();
-    all.forEach((x) => n.add(x));
-    save(n);
+    all.forEach((item) => readIdsState.add(item));
+    emitReadChange();
   }, []);
+
   return { ids, markRead, clearAll };
 }
 
-const CHAT_KEY = "sauti_staff_chat_v2";
-type ChatMsg = {
-  id: string;
-  from: string;
-  fromName: string;
-  to: string;
-  text?: string;
-  att?: { name: string; type: string };
-  at: string;
-};
-
-export function useChatMessages(): ChatMsg[] {
-  const [msgs, setMsgs] = useState<ChatMsg[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(CHAT_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
-  const sigRef = useRef<string>("");
-  useEffect(() => {
-    const refresh = () => {
-      try {
-        const raw = localStorage.getItem(CHAT_KEY) ?? "[]";
-        // Cheap signature check (string compare) to avoid parsing + new array
-        // identity on every tick when nothing changed.
-        if (raw === sigRef.current) return;
-        sigRef.current = raw;
-        setMsgs(JSON.parse(raw));
-      } catch {
-        /**/
-      }
-    };
-    refresh();
-    window.addEventListener("storage", refresh);
-    window.addEventListener("sauti:chat-changed", refresh);
-    // Event-driven only — the previous 1.5s polling was forcing re-renders
-    // across the entire app every 1.5s and caused noticeable lag.
-    return () => {
-      window.removeEventListener("storage", refresh);
-      window.removeEventListener("sauti:chat-changed", refresh);
-    };
-  }, []);
-  return msgs;
+export function useChatMessages() {
+  const { staffMessages } = useStore();
+  return staffMessages.map((message) => ({
+    id: message.id,
+    from: message.senderId,
+    fromName: message.senderName,
+    to: message.receiverId,
+    text: message.content,
+    att: message.attachment
+      ? { name: message.attachment.name, type: message.attachment.type }
+      : undefined,
+    at: message.createdAt,
+  }));
 }

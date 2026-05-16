@@ -31,27 +31,20 @@ type ChatMsg = {
   att?: Att;
   at: string;
 };
-const KEY = "sauti_staff_chat_v2";
-const META_KEY = "sauti_staff_meta_v1";
 
 function StaffChat() {
-  const { staff, currentUser } = useStore();
-  const meta: Record<string, { photo?: string }> = (() => {
-    try {
-      return JSON.parse(localStorage.getItem(META_KEY) ?? "{}");
-    } catch {
-      return {};
-    }
-  })();
+  const { staff, currentUser, staffMessages, addStaffMessage, reloadStaffMessages } = useStore();
   const others = staff.filter((s) => s.id !== currentUser.id);
   const [activeId, setActiveId] = useState(others[0]?.id ?? "");
-  const [allMsgs, setAllMsgs] = useState<ChatMsg[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
+  const allMsgs: ChatMsg[] = staffMessages.map((message) => ({
+    id: message.id,
+    from: message.senderId,
+    fromName: message.senderName,
+    to: message.receiverId,
+    text: message.content,
+    att: message.attachment,
+    at: message.createdAt,
+  }));
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<{ rec: MediaRecorder; chunks: Blob[] } | null>(null);
@@ -59,9 +52,22 @@ function StaffChat() {
 
   const { markRead } = useReadIds();
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(allMsgs));
-    window.dispatchEvent(new Event("sauti:chat-changed"));
-  }, [allMsgs]);
+    if (!activeId && others[0]?.id) setActiveId(others[0].id);
+  }, [activeId, others]);
+
+  useEffect(() => {
+    const sync = () => {
+      reloadStaffMessages().catch(() => {});
+    };
+    const timer = window.setInterval(sync, 3000);
+    window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [reloadStaffMessages]);
 
   // Mark messages from the open thread as read so badges/notification count drop.
   useEffect(() => {
@@ -112,34 +118,31 @@ function StaffChat() {
       (m.from === activeId && m.to === currentUser.id),
   );
 
-  function pushMsg(m: Omit<ChatMsg, "id" | "from" | "fromName" | "to" | "at">) {
+  async function pushMsg(m: Omit<ChatMsg, "id" | "from" | "fromName" | "to" | "at">) {
     if (!activeId) return;
-    setAllMsgs((p) => [
-      ...p,
-      {
-        ...m,
-        id: `M${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        from: currentUser.id,
-        fromName: currentUser.name,
-        to: activeId,
-        at: new Date().toISOString(),
-      },
-    ]);
+    await addStaffMessage({
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      receiverId: activeId,
+      content: m.text,
+      attachment: m.att,
+    });
   }
-  function send() {
+  async function send() {
     const t = text.trim();
     if (!t) return;
-    pushMsg({ text: t });
+    await pushMsg({ text: t });
     setText("");
   }
 
   function attach(file: File) {
     if (file.size > 10 * 1024 * 1024) return toast.error("Max 10 MB");
     const r = new FileReader();
-    r.onload = () =>
-      pushMsg({
+    r.onload = () => {
+      void pushMsg({
         att: { name: file.name, type: file.type, size: file.size, data: r.result as string },
       });
+    };
     r.readAsDataURL(file);
   }
 
@@ -152,8 +155,8 @@ function StaffChat() {
       rec.onstop = () => {
         const blob = new Blob(chunks, { type: "audio/webm" });
         const r = new FileReader();
-        r.onload = () =>
-          pushMsg({
+        r.onload = () => {
+          void pushMsg({
             att: {
               name: `voice-${Date.now()}.webm`,
               type: "audio/webm",
@@ -161,6 +164,7 @@ function StaffChat() {
               data: r.result as string,
             },
           });
+        };
         r.readAsDataURL(blob);
         stream.getTracks().forEach((t) => t.stop());
       };
@@ -181,7 +185,7 @@ function StaffChat() {
     <>
       <AppHeader
         title="Staff Chat"
-        subtitle="WhatsApp-style — text, photos, files, voice notes. Stored locally."
+        subtitle="WhatsApp-style — text, photos, files and voice notes synced from the database."
       />
       <main className="flex-1 p-6 lg:p-8">
         <CommsTabs />
@@ -195,7 +199,7 @@ function StaffChat() {
                     (m.from === s.id && m.to === currentUser.id) ||
                     (m.to === s.id && m.from === currentUser.id),
                 );
-              const photo = s.photo ?? meta[s.id]?.photo;
+              const photo = s.photo;
               return (
                 <button
                   key={s.id}
@@ -227,7 +231,7 @@ function StaffChat() {
             <div className="px-5 py-3 border-b border-border font-medium text-sm flex items-center gap-2">
               {(() => {
                 const o = others.find((x) => x.id === activeId);
-                const p = o?.photo ?? (o && meta[o.id]?.photo);
+                const p = o?.photo;
                 return p ? (
                   <img src={p} className="h-7 w-7 rounded-full object-cover" />
                 ) : (

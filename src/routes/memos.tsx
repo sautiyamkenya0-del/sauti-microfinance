@@ -3,45 +3,31 @@ import { AppHeader } from "@/components/AppHeader";
 import { Section } from "@/components/ui-bits";
 import { CommsTabs } from "./staff";
 import { useStore } from "@/lib/store";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { StickyNote, Trash2, Plus } from "lucide-react";
+import { useStaffMemos } from "@/lib/memos-board";
 
 export const Route = createFileRoute("/memos")({
   head: () => ({ meta: [{ title: "Memos — Sauti Microfinance" }] }),
   component: MemosPage,
 });
 
-type Memo = { id: string; date: string; title: string; body: string; by: string };
-const MEMO_KEY = "sauti_memos_v1";
-
 function MemosPage() {
   const { currentUser } = useStore();
-  const [memos, setMemos] = useState<Memo[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(MEMO_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
+  const { memos, postMemo, removeMemo } = useStaffMemos();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  useEffect(() => {
-    localStorage.setItem(MEMO_KEY, JSON.stringify(memos));
-  }, [memos]);
 
-  function post() {
+  async function post() {
     if (!title.trim() || !body.trim()) return toast.error("Title and body required");
-    setMemos((p) => [
-      {
-        id: `MM${Date.now()}`,
-        date: new Date().toISOString().slice(0, 10),
-        title,
-        body,
-        by: currentUser.name,
-      },
-      ...p,
-    ]);
+    await postMemo({
+      title,
+      body,
+      by: currentUser.name,
+      byStaffId: currentUser.id,
+      date: new Date().toISOString().slice(0, 10),
+    });
     setTitle("");
     setBody("");
     toast.success("Memo posted");
@@ -95,7 +81,7 @@ function MemosPage() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setMemos((p) => p.filter((x) => x.id !== m.id))}
+                    onClick={() => void removeMemo(m.id)}
                     className="text-muted-foreground hover:text-destructive"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

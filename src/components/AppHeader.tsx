@@ -15,6 +15,7 @@ import {
   Sparkles,
   IdCard,
   ShieldCheck,
+  type LucideIcon,
 } from "lucide-react";
 import { sectionForPath } from "@/components/SectionTabs";
 
@@ -22,10 +23,12 @@ type Entry = {
   id: string;
   to: string;
   label: string;
-  icon: any;
+  icon: LucideIcon;
   section?: string;
   requires: string[];
 };
+
+type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
 const ENTRIES: Entry[] = [
   { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, requires: ["dashboard"] },
   { id: "ai", to: "/ai", label: "SautiAI", icon: Sparkles, requires: ["ai"] },
@@ -98,7 +101,9 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
     if (grew || newUrgent) {
       setPulse(newUrgent ? "alert" : "info");
       try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtor = window.AudioContext || (window as AudioWindow).webkitAudioContext;
+        const ctx = AudioCtor ? new AudioCtor() : null;
+        if (!ctx) throw new Error("AudioContext unavailable");
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.frequency.value = newUrgent ? 660 : 880;
@@ -125,7 +130,9 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
       const detail = (e as CustomEvent).detail as { urgent?: boolean };
       setPulse(detail.urgent ? "alert" : "info");
       try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtor = window.AudioContext || (window as AudioWindow).webkitAudioContext;
+        const ctx = AudioCtor ? new AudioCtor() : null;
+        if (!ctx) throw new Error("AudioContext unavailable");
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.frequency.value = detail.urgent ? 660 : 880;
@@ -151,7 +158,7 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
         : "text-foreground";
 
   return (
-    <header className="flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 border-b border-border bg-card/60 backdrop-blur relative">
+    <header className="mobile-safe-top flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 border-b border-border bg-card/60 backdrop-blur relative">
       <style>{`@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}`}</style>
       <div className="flex items-center gap-2 min-w-0 flex-1">
         <button

@@ -482,6 +482,7 @@ export type Database = {
           address: string | null;
           business_address: string | null;
           business_name: string | null;
+          business_permanence: Database["public"]["Enums"]["business_permanence"] | null;
           business_type: string | null;
           city: string | null;
           county: string | null;
@@ -506,8 +507,10 @@ export type Database = {
           phone: string;
           savings_balance: number;
           savings_only: boolean;
+          second_name: string | null;
           shares: number;
           status: Database["public"]["Enums"]["member_status"];
+          third_name: string | null;
           updated_at: string;
           village: string | null;
         };
@@ -515,6 +518,7 @@ export type Database = {
           address?: string | null;
           business_address?: string | null;
           business_name?: string | null;
+          business_permanence?: Database["public"]["Enums"]["business_permanence"] | null;
           business_type?: string | null;
           city?: string | null;
           county?: string | null;
@@ -539,8 +543,10 @@ export type Database = {
           phone: string;
           savings_balance?: number;
           savings_only?: boolean;
+          second_name?: string | null;
           shares?: number;
           status?: Database["public"]["Enums"]["member_status"];
+          third_name?: string | null;
           updated_at?: string;
           village?: string | null;
         };
@@ -548,6 +554,7 @@ export type Database = {
           address?: string | null;
           business_address?: string | null;
           business_name?: string | null;
+          business_permanence?: Database["public"]["Enums"]["business_permanence"] | null;
           business_type?: string | null;
           city?: string | null;
           county?: string | null;
@@ -572,8 +579,10 @@ export type Database = {
           phone?: string;
           savings_balance?: number;
           savings_only?: boolean;
+          second_name?: string | null;
           shares?: number;
           status?: Database["public"]["Enums"]["member_status"];
+          third_name?: string | null;
           updated_at?: string;
           village?: string | null;
         };
@@ -940,6 +949,7 @@ export type Database = {
     };
     Enums: {
       attendance_status: "present" | "absent" | "late" | "signed_out" | "permission";
+      business_permanence: "permanent" | "semi";
       field_visit_type: "business" | "home" | "live";
       followup_outcome: "promised" | "paid" | "no-show" | "dispute" | "other";
       loan_status: "pending" | "active" | "closed" | "defaulted" | "rejected";
@@ -1085,6 +1095,7 @@ export const Constants = {
   public: {
     Enums: {
       attendance_status: ["present", "absent", "late", "signed_out", "permission"],
+      business_permanence: ["permanent", "semi"],
       field_visit_type: ["business", "home", "live"],
       followup_outcome: ["promised", "paid", "no-show", "dispute", "other"],
       loan_status: ["pending", "active", "closed", "defaulted", "rejected"],
