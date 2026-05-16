@@ -1,3 +1,5 @@
+import "@tanstack/react-start/server-only";
+
 export function readServerEnv(key: string): string | undefined {
   const processValue = process.env[key];
   if (typeof processValue === "string" && processValue.length > 0) return processValue;

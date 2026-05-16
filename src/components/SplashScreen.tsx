@@ -3,10 +3,20 @@ import logo from "@/assets/sauti-logo.png";
 
 let splashShownThisRuntime = false;
 
-export function SplashScreen() {
-  const [shown, setShown] = useState(() => !splashShownThisRuntime);
+export function SplashScreen({ persist = false }: { persist?: boolean }) {
+  const [shown, setShown] = useState(() => (persist ? true : !splashShownThisRuntime));
   const [fade, setFade] = useState(false);
+
   useEffect(() => {
+    if (persist) {
+      // Keep the launch screen visible until app hydration completes.
+      setShown(true);
+      setFade(false);
+      return () => {
+        splashShownThisRuntime = true;
+      };
+    }
+
     if (splashShownThisRuntime) {
       setShown(false);
       return;

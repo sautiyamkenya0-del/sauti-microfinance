@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
-import { recordAudit } from "@/lib/audit.server";
+
+import { listAuditActorsFromServer, listAuditEntries, recordAudit } from "@/lib/audit.server";
 
 /** Public wrapper: log an action from the client. */
 export const logAudit = createServerFn({ method: "POST" })
@@ -37,40 +37,9 @@ export const listAudit = createServerFn({ method: "POST" })
       } = {},
     ) => d,
   )
-  .handler(async ({ data }) => {
-    const supabaseAdmin = getSupabaseAdminOrNull();
-    if (!supabaseAdmin) return [];
-
-    let q = supabaseAdmin
-      .from("audit_log")
-      .select("*")
-      .order("ts", { ascending: false })
-      .limit(Math.min(data.limit ?? 500, 2000));
-    if (data.actorId) q = q.eq("actor_id", data.actorId);
-    if (data.action) q = q.ilike("action", `%${data.action}%`);
-    if (data.targetType) q = q.eq("target_type", data.targetType);
-    if (data.q) q = q.ilike("summary", `%${data.q}%`);
-    const { data: rows, error } = await q;
-    if (error) throw new Error(error.message);
-    return rows ?? [];
-  });
+  .handler(async ({ data }) => listAuditEntries(data));
 
 /** Distinct actors for the filter dropdown. */
-export const listAuditActors = createServerFn({ method: "GET" }).handler(async () => {
-  const supabaseAdmin = getSupabaseAdminOrNull();
-  if (!supabaseAdmin) return [];
-
-  const { data, error } = await supabaseAdmin
-    .from("audit_log")
-    .select("actor_id, actor_name, actor_role")
-    .not("actor_id", "is", null)
-    .limit(2000);
-  if (error) throw new Error(error.message);
-  const seen = new Map<string, { id: string; name: string; role: string }>();
-  for (const r of data ?? []) {
-    const id = r.actor_id ?? "";
-    if (id && !seen.has(id))
-      seen.set(id, { id, name: r.actor_name ?? id, role: r.actor_role ?? "" });
-  }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-});
+export const listAuditActors = createServerFn({ method: "GET" }).handler(async () =>
+  listAuditActorsFromServer(),
+);

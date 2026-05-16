@@ -145,7 +145,7 @@ function AppLayout() {
   if (!isHydrated) {
     return (
       <div className="min-h-screen bg-background">
-        <SplashScreen />
+        <SplashScreen persist />
       </div>
     );
   }

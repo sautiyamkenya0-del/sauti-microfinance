@@ -1,3 +1,5 @@
+import "@tanstack/react-start/server-only";
+
 import { getSecret } from "@/lib/runtime-secrets.server";
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 
