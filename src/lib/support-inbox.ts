@@ -29,20 +29,29 @@ export type SupportThread = {
   messages: SupportMsg[];
 };
 
-export function useSupportThreads() {
+export function useSupportThreads(enabled = true) {
   const load = useServerFn(loadAppData);
   const [rows, setRows] = useState<SupportThread[]>([]);
 
   const refresh = useCallback(async () => {
+    if (!enabled) {
+      setRows([]);
+      return;
+    }
     const data = await load();
     setRows(data.supportThreads ?? []);
-  }, [load]);
+  }, [enabled, load]);
 
   useEffect(() => {
+    if (!enabled) {
+      setRows([]);
+      return;
+    }
     refresh().catch(() => {});
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
+    if (!enabled) return;
     const sync = () => {
       refresh().catch(() => {});
     };
@@ -52,7 +61,7 @@ export function useSupportThreads() {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return rows;
 }

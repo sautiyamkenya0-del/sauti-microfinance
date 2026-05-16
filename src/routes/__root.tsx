@@ -12,6 +12,7 @@ import {
 
 import appCss from "../styles.css?url";
 import { StoreProvider, useStore } from "@/lib/store";
+import { NotificationsProvider } from "@/lib/notifications";
 import { AppSidebar } from "@/components/AppSidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { SplashScreen } from "@/components/SplashScreen";
@@ -127,8 +128,10 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <StoreProvider>
-        <AppLayout />
-        <Toaster />
+        <NotificationsProvider>
+          <AppLayout />
+          <Toaster />
+        </NotificationsProvider>
       </StoreProvider>
     </QueryClientProvider>
   );

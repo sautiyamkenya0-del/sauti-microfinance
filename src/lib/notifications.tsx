@@ -1,6 +1,11 @@
+/* eslint-disable react-refresh/only-export-components */
+
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+
 import { useStore } from "@/lib/store";
-import { useMemo } from "react";
+import { useStaffMemos } from "@/lib/memos-board";
 import { useReadIds, useChatMessages } from "@/lib/read-state";
+import { useSupportThreads, type SupportThread } from "@/lib/support-inbox";
 
 export type Notice = {
   id: string;
@@ -10,84 +15,206 @@ export type Notice = {
   href?: string;
 };
 
-export function useNotificationsRaw(): Notice[] {
-  const { loans, members, penalties, transactions, currentUser } = useStore();
+type NotificationsContextValue = {
+  all: Notice[];
+  unread: Notice[];
+  unreadChatCount: number;
+  unreadCommunicationCount: number;
+};
+
+const NotificationsContext = createContext<NotificationsContextValue | null>(null);
+const COMMUNICATION_PATHS = new Set(["/staff", "/memos", "/support-inbox"]);
+
+function canSeeSupportThread(
+  thread: SupportThread,
+  currentUser: ReturnType<typeof useStore>["currentUser"],
+) {
+  return (
+    thread.status !== "closed" &&
+    (!thread.assignedStaffId ||
+      thread.assignedStaffId === currentUser.id ||
+      currentUser.role === "director" ||
+      currentUser.role === "manager")
+  );
+}
+
+function latestSupportMessage(thread: SupportThread) {
+  return thread.messages[thread.messages.length - 1];
+}
+
+export function NotificationsProvider({ children }: { children: ReactNode }) {
+  const { loans, members, penalties, transactions, currentUser, authMode, isAuthenticated } =
+    useStore();
+  const notificationsEnabled = isAuthenticated && authMode !== "member";
   const chat = useChatMessages();
-  return useMemo(() => {
+  const { ids } = useReadIds();
+  const { memos } = useStaffMemos(notificationsEnabled);
+  const supportThreads = useSupportThreads(notificationsEnabled);
+
+  const all = useMemo(() => {
+    if (!notificationsEnabled) return [];
     const out: Notice[] = [];
+
     loans
-      .filter((l) => l.status === "pending")
-      .forEach((l) => {
-        const m = members.find((x) => x.id === l.memberId);
+      .filter((loan) => loan.status === "pending")
+      .forEach((loan) => {
+        const member = members.find((row) => row.id === loan.memberId);
         out.push({
-          id: `pend-${l.id}`,
+          id: `pend-${loan.id}`,
           kind: "info",
-          title: `Loan ${l.id} pending review`,
-          detail: `${m?.name ?? l.memberId} · KSh ${l.principal.toLocaleString()}`,
+          title: `Loan ${loan.id} pending review`,
+          detail: `${member?.name ?? loan.memberId} · KSh ${loan.principal.toLocaleString()}`,
           href: "/loans",
         });
       });
+
     penalties
-      .filter((p) => p.status === "outstanding")
-      .forEach((p) => {
-        const m = members.find((x) => x.id === p.memberId);
+      .filter((penalty) => penalty.status === "outstanding")
+      .forEach((penalty) => {
+        const member = members.find((row) => row.id === penalty.memberId);
         out.push({
-          id: `pen-${p.id}`,
+          id: `pen-${penalty.id}`,
           kind: "warning",
-          title: `Penalty outstanding`,
-          detail: `${m?.name ?? p.memberId} · ${p.reason}`,
+          title: "Penalty outstanding",
+          detail: `${member?.name ?? penalty.memberId} · ${penalty.reason}`,
           href: "/loans",
         });
       });
+
     members
-      .filter((m) => m.status === "active" && m.savingsBalance < 1000)
-      .forEach((m) => {
+      .filter((member) => member.status === "active" && member.savingsBalance < 1000)
+      .forEach((member) => {
         out.push({
-          id: `sav-${m.id}`,
+          id: `sav-${member.id}`,
           kind: "alert",
           title: "Below mandatory savings",
-          detail: `${m.name} (${m.id}) · KSh ${m.savingsBalance.toLocaleString()}`,
+          detail: `${member.name} (${member.id}) · KSh ${member.savingsBalance.toLocaleString()}`,
           href: "/savings",
         });
       });
-    transactions.slice(0, 3).forEach((t) => {
-      if (t.type === "investor_contribution" || t.type === "loan_repayment") {
+
+    transactions.slice(0, 3).forEach((transaction) => {
+      if (transaction.type === "investor_contribution" || transaction.type === "loan_repayment") {
         out.push({
-          id: `tx-${t.id}`,
+          id: `tx-${transaction.id}`,
           kind: "info",
-          title: `Inflow: ${t.type.replace(/_/g, " ")}`,
-          detail: `KSh ${t.amount.toLocaleString()} · ${t.date}`,
+          title: `Inflow: ${transaction.type.replace(/_/g, " ")}`,
+          detail: `KSh ${transaction.amount.toLocaleString()} · ${transaction.date}`,
           href: "/transactions",
         });
       }
     });
+
     chat
-      .filter((m) => m.to === currentUser.id)
-      .forEach((m) => {
+      .filter((message) => message.to === currentUser.id)
+      .forEach((message) => {
         out.push({
-          id: `msg-${m.id}`,
+          id: `msg-${message.id}`,
           kind: "alert",
-          title: `New message from ${m.fromName}`,
-          detail: m.text ?? `📎 ${m.att?.name ?? "attachment"}`,
+          title: `New message from ${message.fromName}`,
+          detail: message.text ?? `Attachment: ${message.att?.name ?? "file"}`,
           href: "/staff",
         });
       });
+
+    memos
+      .filter(
+        (memo) =>
+          memo.byStaffId !== currentUser.id && (!memo.byStaffId || memo.by !== currentUser.name),
+      )
+      .forEach((memo) => {
+        out.push({
+          id: `memo-${memo.id}`,
+          kind: "info",
+          title: `New memo: ${memo.title}`,
+          detail: `${memo.by} · ${memo.date}`,
+          href: "/memos",
+        });
+      });
+
+    supportThreads
+      .filter((thread) => canSeeSupportThread(thread, currentUser))
+      .forEach((thread) => {
+        const latest = latestSupportMessage(thread);
+        if (!latest) return;
+        if (latest.from === "staff" && latest.fromId === currentUser.id) return;
+
+        out.push({
+          id: `support-${thread.id}-${latest.id}`,
+          kind: thread.status === "open" ? "alert" : "info",
+          title:
+            latest.from === "member"
+              ? `Support message from ${thread.memberName}`
+              : latest.from === "ai"
+                ? `AI escalated ${thread.memberName}`
+                : `Support update by ${latest.fromName}`,
+          detail: `${thread.subject} · ${latest.text}`,
+          href: "/support-inbox",
+        });
+      });
+
     return out;
-  }, [loans, members, penalties, transactions, chat, currentUser.id]);
+  }, [
+    chat,
+    currentUser,
+    loans,
+    members,
+    memos,
+    notificationsEnabled,
+    penalties,
+    supportThreads,
+    transactions,
+  ]);
+
+  const unread = useMemo(() => all.filter((notice) => !ids.has(notice.id)), [all, ids]);
+
+  const unreadChatCount = useMemo(
+    () =>
+      !notificationsEnabled
+        ? 0
+        : chat.filter((message) => message.to === currentUser.id && !ids.has(`msg-${message.id}`))
+            .length,
+    [chat, currentUser.id, ids, notificationsEnabled],
+  );
+
+  const unreadCommunicationCount = useMemo(
+    () => unread.filter((notice) => notice.href && COMMUNICATION_PATHS.has(notice.href)).length,
+    [unread],
+  );
+
+  const value = useMemo<NotificationsContextValue>(
+    () => ({
+      all,
+      unread,
+      unreadChatCount,
+      unreadCommunicationCount,
+    }),
+    [all, unread, unreadChatCount, unreadCommunicationCount],
+  );
+
+  return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
+}
+
+function useNotificationsContext() {
+  const value = useContext(NotificationsContext);
+  if (!value) {
+    throw new Error("Notification hooks must be used within NotificationsProvider.");
+  }
+  return value;
+}
+
+export function useNotificationsRaw(): Notice[] {
+  return useNotificationsContext().all;
 }
 
 export function useNotifications(): Notice[] {
-  const all = useNotificationsRaw();
-  const { ids } = useReadIds();
-  return useMemo(() => all.filter((n) => !ids.has(n.id)), [all, ids]);
+  return useNotificationsContext().unread;
 }
 
 export function useUnreadChatCount(): number {
-  const chat = useChatMessages();
-  const { currentUser } = useStore();
-  const { ids } = useReadIds();
-  return useMemo(
-    () => chat.filter((m) => m.to === currentUser.id && !ids.has(`msg-${m.id}`)).length,
-    [chat, currentUser.id, ids],
-  );
+  return useNotificationsContext().unreadChatCount;
+}
+
+export function useUnreadCommunicationCount(): number {
+  return useNotificationsContext().unreadCommunicationCount;
 }

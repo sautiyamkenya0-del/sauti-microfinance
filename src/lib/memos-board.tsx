@@ -17,22 +17,31 @@ export type StaffMemo = {
   createdAt: string;
 };
 
-export function useStaffMemos() {
+export function useStaffMemos(enabled = true) {
   const load = useServerFn(loadAppData);
   const createMemo = useServerFn(createStaffMemoRecord);
   const deleteMemoRecord = useServerFn(deleteStaffMemoRecord);
   const [memos, setMemos] = useState<StaffMemo[]>([]);
 
   const refresh = useCallback(async () => {
+    if (!enabled) {
+      setMemos([]);
+      return;
+    }
     const data = await load();
     setMemos(data.memos ?? []);
-  }, [load]);
+  }, [enabled, load]);
 
   useEffect(() => {
+    if (!enabled) {
+      setMemos([]);
+      return;
+    }
     refresh().catch(() => {});
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
+    if (!enabled) return;
     const sync = () => {
       refresh().catch(() => {});
     };
@@ -42,10 +51,16 @@ export function useStaffMemos() {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   const postMemo = useCallback(
-    async (memo: { title: string; body: string; by: string; byStaffId?: string; date?: string }) => {
+    async (memo: {
+      title: string;
+      body: string;
+      by: string;
+      byStaffId?: string;
+      date?: string;
+    }) => {
       const result = await createMemo({ data: memo });
       await refresh();
       return result.id;

@@ -32,6 +32,8 @@ type ChatMsg = {
   at: string;
 };
 
+type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+
 function StaffChat() {
   const { staff, currentUser, staffMessages, addStaffMessage, reloadStaffMessages } = useStore();
   const others = staff.filter((s) => s.id !== currentUser.id);
@@ -87,7 +89,9 @@ function StaffChat() {
     const incoming = allMsgs.slice(lastSeenRef.current).filter((m) => m.to === currentUser.id);
     if (incoming.length) {
       try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtor = window.AudioContext || (window as AudioWindow).webkitAudioContext;
+        if (!AudioCtor) throw new Error("AudioContext unavailable");
+        const ctx = new AudioCtor();
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.frequency.value = 880;
@@ -102,8 +106,10 @@ function StaffChat() {
       window.dispatchEvent(
         new CustomEvent("sauti:notify", {
           detail: {
+            id: `msg-${incoming[0].id}`,
             kind: "message",
             title: `New message from ${incoming[0].fromName}`,
+            detail: incoming[0].text ?? `Attachment: ${incoming[0].att?.name ?? "file"}`,
             urgent: false,
           },
         }),

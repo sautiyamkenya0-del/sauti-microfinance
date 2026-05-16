@@ -7,6 +7,7 @@ import { CommsTabs } from "./staff";
 import { useSupportInboxActions } from "@/lib/support-inbox";
 import { Inbox, Send, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { useReadIds } from "@/lib/read-state";
 
 export const Route = createFileRoute("/support-inbox")({
   head: () => ({ meta: [{ title: "Member Support — Sauti Microfinance" }] }),
@@ -16,6 +17,7 @@ export const Route = createFileRoute("/support-inbox")({
 function SupportInboxPage() {
   const { currentUser, staff } = useStore();
   const { rows: threads, appendMessage, setThreadStatus } = useSupportInboxActions();
+  const { markRead } = useReadIds();
   // Inbox: threads assigned to me + unassigned + my role-relevant
   const visible = threads.filter(
     (t) =>
@@ -33,6 +35,13 @@ function SupportInboxPage() {
     if (activeId && visible.some((thread) => thread.id === activeId)) return;
     setActiveId(visible[0]?.id ?? "");
   }, [activeId, visible]);
+
+  useEffect(() => {
+    const latest = active?.messages[active.messages.length - 1];
+    if (!latest) return;
+    if (latest.from === "staff" && latest.fromId === currentUser.id) return;
+    markRead(`support-${active.id}-${latest.id}`);
+  }, [active, currentUser.id, markRead]);
 
   async function send() {
     const t = reply.trim();

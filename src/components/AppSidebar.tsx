@@ -10,19 +10,20 @@ import {
   Sparkles,
   Users,
   Wallet,
+  type LucideIcon,
 } from "lucide-react";
 
 import logo from "@/assets/sauti-logo.png";
 import { sectionForPath } from "@/components/SectionTabs";
 import { useApprovals } from "@/lib/approvals";
-import { useUnreadChatCount } from "@/lib/notifications";
+import { useUnreadCommunicationCount } from "@/lib/notifications";
 import { navForUser, roleLabel, useStore } from "@/lib/store";
 
 type Entry = {
   id: string;
   to: string;
   label: string;
-  icon: any;
+  icon: LucideIcon;
   section?: string;
   requires: string[];
 };
@@ -78,7 +79,7 @@ export function AppSidebar() {
   const router = useRouter();
   const navigate = useNavigate();
   const path = useRouterState({ select: (r) => r.location.pathname });
-  const unreadChat = useUnreadChatCount();
+  const unreadComms = useUnreadCommunicationCount();
   const { pendingCount } = useApprovals();
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const activeSection = sectionForPath(path);
@@ -130,7 +131,7 @@ export function AppSidebar() {
           const active = entry.section
             ? activeSection === entry.section
             : path === entry.to || (entry.to !== "/" && path.startsWith(entry.to + "/"));
-          const showChatBadge = entry.id === "comms" && unreadChat > 0;
+          const showChatBadge = entry.id === "comms" && unreadComms > 0;
           const showApprovalBadge = entry.id === "lending" && pendingCount > 0;
 
           return (
@@ -147,7 +148,7 @@ export function AppSidebar() {
               <span className="flex-1">{entry.label}</span>
               {showChatBadge && (
                 <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold grid place-items-center animate-pulse">
-                  {unreadChat}
+                  {unreadComms}
                 </span>
               )}
               {showApprovalBadge && (

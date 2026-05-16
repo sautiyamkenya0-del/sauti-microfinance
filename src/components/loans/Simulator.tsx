@@ -85,9 +85,10 @@ export function Simulator() {
 
     const totalRepayment = amount + interest + transaction;
     const rawDaily = totalRepayment / days;
-    const dailyLoan = roundUpKES(rawDaily, 5);
-    const roundOff = dailyLoan - rawDaily;
-    const dailyInclusive = dailyLoan + dailySavings;
+    const dailyBeforeRound = rawDaily + dailySavings;
+    const dailyInclusive = roundUpKES(dailyBeforeRound, 5);
+    const roundOff = Math.max(0, dailyInclusive - dailyBeforeRound);
+    const dailyLoan = dailyInclusive - dailySavings;
     const totalSavingsAccrued = dailySavings * days;
     const grandTotalCollected = dailyInclusive * days;
 
@@ -112,6 +113,7 @@ export function Simulator() {
       sticker,
       totalRepayment,
       rawDaily,
+      dailyBeforeRound,
       dailyLoan,
       roundOff,
       dailyInclusive,
@@ -128,7 +130,11 @@ export function Simulator() {
   const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
 
   const fmtKES2 = (n: number) =>
-    new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 2 }).format(n);
+    new Intl.NumberFormat("en-KE", {
+      style: "currency",
+      currency: "KES",
+      maximumFractionDigits: 2,
+    }).format(n);
 
   return (
     <div className="space-y-6">
@@ -243,7 +249,11 @@ export function Simulator() {
         <Section title="Computation Preview">
           <div className="p-5 space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <Tile label="Interest" value={fmtKES(calc.interest)} sub={`Computed for ${days} days`} />
+              <Tile
+                label="Interest"
+                value={fmtKES(calc.interest)}
+                sub={`Computed for ${days} days`}
+              />
               <Tile
                 label="Total Repayment"
                 value={fmtKES(calc.totalRepayment)}
@@ -252,7 +262,7 @@ export function Simulator() {
               <Tile
                 label="Daily Repayment Inclusive"
                 value={fmtKES(calc.dailyInclusive)}
-                sub={`${fmtKES2(calc.rawDaily)} loan + ${fmtKES(dailySavings)} savings + round-off ${calc.roundOff.toFixed(2)}`}
+                sub={`${fmtKES2(calc.rawDaily)} loan + ${fmtKES(dailySavings)} savings = ${fmtKES2(calc.dailyBeforeRound)}; round up adds ${calc.roundOff.toFixed(2)}`}
               />
               <Tile
                 label="Total Savings Accrued"
@@ -283,7 +293,8 @@ export function Simulator() {
             <div className="bg-muted/40 border border-border rounded-md p-4">
               <div className="text-sm font-semibold mb-2">Due Dates</div>
               <div className="text-xs text-muted-foreground mb-2">
-                Start: {fmtDate(calc.dueDates[0])} - Final: {fmtDate(calc.dueDates[calc.dueDates.length - 1])}
+                Start: {fmtDate(calc.dueDates[0])} - Final:{" "}
+                {fmtDate(calc.dueDates[calc.dueDates.length - 1])}
               </div>
               <ol className="text-xs space-y-0.5 max-h-48 overflow-y-auto">
                 {calc.dueDates.map((d, i) => (

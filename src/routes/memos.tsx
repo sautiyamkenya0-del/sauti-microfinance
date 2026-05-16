@@ -3,10 +3,11 @@ import { AppHeader } from "@/components/AppHeader";
 import { Section } from "@/components/ui-bits";
 import { CommsTabs } from "./staff";
 import { useStore } from "@/lib/store";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { StickyNote, Trash2, Plus } from "lucide-react";
 import { useStaffMemos } from "@/lib/memos-board";
+import { useReadIds } from "@/lib/read-state";
 
 export const Route = createFileRoute("/memos")({
   head: () => ({ meta: [{ title: "Memos — Sauti Microfinance" }] }),
@@ -16,8 +17,19 @@ export const Route = createFileRoute("/memos")({
 function MemosPage() {
   const { currentUser } = useStore();
   const { memos, postMemo, removeMemo } = useStaffMemos();
+  const { markRead } = useReadIds();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+
+  useEffect(() => {
+    const unreadMemoIds = memos
+      .filter(
+        (memo) =>
+          memo.byStaffId !== currentUser.id && (!memo.byStaffId || memo.by !== currentUser.name),
+      )
+      .map((memo) => `memo-${memo.id}`);
+    if (unreadMemoIds.length) markRead(unreadMemoIds);
+  }, [currentUser.id, currentUser.name, markRead, memos]);
 
   async function post() {
     if (!title.trim() || !body.trim()) return toast.error("Title and body required");
