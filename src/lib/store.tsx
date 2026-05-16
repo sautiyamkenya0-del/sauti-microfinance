@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 
 import {
+  createFieldVisitRecord,
   createMemberRecord,
   createStaffMessageRecord,
   createStaffRecord,
@@ -389,7 +390,7 @@ type Store = {
   addPetty: (p: Omit<PettyCashEntry, "id" | "date"> & { date?: string }) => void;
   addAppraisal: (a: Omit<Appraisal, "id" | "date">) => void;
   addInvestor: (i: Omit<Investor, "id" | "joinedAt"> & { joinedAt?: string }) => void;
-  addFieldVisit: (v: Omit<FieldVisit, "id" | "date"> & { date?: string }) => void;
+  addFieldVisit: (v: Omit<FieldVisit, "id" | "date"> & { date?: string }) => Promise<string>;
   addFollowup: (n: Omit<FollowupNote, "id" | "date"> & { date?: string }) => void;
   addStaffMessage: (m: {
     senderId: string;
@@ -450,6 +451,7 @@ function ensureStoreReset() {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
   const createMember = useServerFn(createMemberRecord);
+  const createFieldVisit = useServerFn(createFieldVisitRecord);
   const createStaffMessage = useServerFn(createStaffMessageRecord);
   const createStaff = useServerFn(createStaffRecord);
   const saveStaff = useServerFn(updateStaffRecord);
@@ -764,10 +766,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ...prev,
         ]);
       },
-      addFieldVisit: (v) => {
-        const id = `FV${fieldVisits.length + 1}`;
-        const date = v.date ?? new Date().toISOString().slice(0, 10);
-        setFieldVisits((prev) => [{ ...v, id, date }, ...prev]);
+      addFieldVisit: async (visit) => {
+        const result = await createFieldVisit({
+          data: {
+            memberId: visit.memberId,
+            type: visit.type,
+            locationNotes: visit.locationNotes,
+            lat: visit.lat,
+            lng: visit.lng,
+            photos: visit.photos,
+            byStaff: visit.by,
+            date: visit.date,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
       },
       addFollowup: (n) => {
         const id = `FU${followups.length + 1}`;
@@ -1210,6 +1223,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       roundOff,
       attendance,
       staffMessages,
+      createFieldVisit,
       createStaffMessage,
       load,
     ],
@@ -1379,8 +1393,7 @@ export const SBC_UPFRONT_TABLE = [
   },
 ];
 
-/** Base navigation per role. Visibility of "staff", "staffmgmt", "attendance"
- *  is further filtered by `canMarkAttendance` for non-directors — see `navForUser`. */
+/** Base navigation per role. Additional director-only pages are filtered in `navForUser`. */
 export const ROLE_NAV: Record<Role, string[]> = {
   director: [
     "dashboard",
@@ -1438,18 +1451,12 @@ export const ROLE_NAV: Record<Role, string[]> = {
 };
 
 const DIRECTOR_ONLY = new Set(["staffmgmt", "investors", "fees"]);
-const ATTENDANCE_GATED = new Set(["staff"]);
 
-/** Filter ROLE_NAV based on the user's attendance capability. Without it,
- *  non-director staff cannot see other staff (chat or attendance roster). */
+/** Filter ROLE_NAV based on role-only restrictions. Staff chat remains visible to every staff member. */
 export function navForUser(user: Staff): string[] {
   const base = ROLE_NAV[user.role] ?? [];
   if (user.role === "director") return base;
-  return base.filter((k) => {
-    if (DIRECTOR_ONLY.has(k)) return false;
-    if (ATTENDANCE_GATED.has(k) && !user.canMarkAttendance) return false;
-    return true;
-  });
+  return base.filter((k) => !DIRECTOR_ONLY.has(k));
 }
 
 export function scoreLoan(inputs: {

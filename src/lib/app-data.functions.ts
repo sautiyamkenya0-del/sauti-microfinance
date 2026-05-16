@@ -96,7 +96,11 @@ export const loadAppData = createServerFn({ method: "GET" }).handler(async () =>
     supabaseAdmin.from("investors").select("*").order("joined_at", { ascending: false }),
     supabaseAdmin.from("attendance").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("appraisals").select("*").order("date", { ascending: false }),
-    supabaseAdmin.from("field_visits").select("*").order("date", { ascending: false }),
+    supabaseAdmin
+      .from("field_visits")
+      .select("*")
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false }),
     supabaseAdmin.from("followups").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("penalties").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("round_off").select("*").order("date", { ascending: false }),
@@ -730,6 +734,67 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     return { ok: true };
+  });
+
+export const createFieldVisitRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      type: "business" | "home" | "live";
+      locationNotes?: string;
+      lat?: number;
+      lng?: number;
+      photos?: string[];
+      byStaff?: string;
+      date?: string;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      type:
+        data?.type === "home" || data?.type === "live" || data?.type === "business"
+          ? data.type
+          : "business",
+      locationNotes: String(data?.locationNotes ?? "").trim(),
+      lat: data?.lat == null || data?.lat === "" ? undefined : Number(data.lat),
+      lng: data?.lng == null || data?.lng === "" ? undefined : Number(data.lng),
+      photos: Array.isArray(data?.photos)
+        ? data.photos
+            .map((photo) => String(photo ?? "").trim())
+            .filter(Boolean)
+        : [],
+      byStaff: data?.byStaff?.trim() || undefined,
+      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.memberId) throw new Error("Member is required.");
+    if (!data.locationNotes && (data.lat == null || data.lng == null)) {
+      throw new Error("Add location notes or capture GPS coordinates.");
+    }
+    if ((data.lat == null) !== (data.lng == null)) {
+      throw new Error("Both latitude and longitude are required together.");
+    }
+    if (data.lat != null && !Number.isFinite(data.lat)) {
+      throw new Error("Latitude is invalid.");
+    }
+    if (data.lng != null && !Number.isFinite(data.lng)) {
+      throw new Error("Longitude is invalid.");
+    }
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const id = await nextPrefixedId("field_visits", "FV", 1);
+    const { error } = await supabaseAdmin.from("field_visits").insert({
+      id,
+      member_id: data.memberId,
+      date: data.date,
+      type: data.type,
+      lat: data.lat ?? null,
+      lng: data.lng ?? null,
+      location_notes: data.locationNotes || null,
+      photos: data.photos.length ? data.photos : null,
+      by_staff: data.byStaff ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { id };
   });
 
 export const createStaffMessageRecord = createServerFn({ method: "POST" })
