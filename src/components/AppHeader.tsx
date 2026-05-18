@@ -16,7 +16,6 @@ import {
   Sparkles,
   IdCard,
   ShieldCheck,
-  KeyRound as KeyRoundSection,
   type LucideIcon,
 } from "lucide-react";
 
@@ -85,17 +84,6 @@ const ENTRIES: Entry[] = [
   },
 ];
 
-const DIRECTOR_ENTRIES: Entry[] = [
-  {
-    id: "secret-keys",
-    to: "/secret-keys",
-    label: "System Secrets",
-    icon: KeyRoundSection,
-    section: "admin",
-    requires: [],
-  },
-];
-
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   const { currentUser, loans } = useStore();
   const navigate = useNavigate();
@@ -112,10 +100,28 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
-  const entries = useMemo(() => {
-    const base = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
-    return currentUser.role === "director" ? [...base, ...DIRECTOR_ENTRIES] : base;
-  }, [allowed, currentUser.role]);
+  const entries = useMemo(
+    () => ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))),
+    [allowed],
+  );
+  const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
+
+  function onLogoTap() {
+    const now = Date.now();
+    const tap = tapsRef.current;
+    if (now - tap.first > 3000) {
+      tap.count = 0;
+      tap.first = now;
+    }
+    tap.count += 1;
+    if (tap.count >= 5) {
+      tapsRef.current = { count: 0, first: 0 };
+      if (currentUser.role === "director") {
+        setMobileNavOpen(false);
+        void navigate({ to: "/secret-keys" });
+      }
+    }
+  }
 
   const announceNotification = useCallback(
     ({ id, title: nextTitle, detail, urgent }: NotifyEventDetail) => {
@@ -315,13 +321,10 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => {
-                      setMobileNavOpen(false);
-                      void navigate({ to: "/" });
-                    }}
+                    onClick={onLogoTap}
                     className="shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    aria-label="Dashboard"
-                    title="Dashboard"
+                    aria-label="Logo"
+                    title=""
                   >
                     <img
                       src={logoUrl}

@@ -1,9 +1,8 @@
-import { useMemo } from "react";
-import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useMemo, useRef } from "react";
+import { Link, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import {
   Banknote,
   IdCard,
-  KeyRound,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -74,43 +73,50 @@ const ENTRIES: Entry[] = [
   },
 ];
 
-const DIRECTOR_ENTRIES: Entry[] = [
-  {
-    id: "secret-keys",
-    to: "/secret-keys",
-    label: "System Secrets",
-    icon: KeyRound,
-    section: "admin",
-    requires: [],
-  },
-];
-
 export function AppSidebar() {
   const { currentUser, loans, logout } = useStore();
   const router = useRouter();
+  const navigate = useNavigate();
   const path = useRouterState({ select: (r) => r.location.pathname });
   const unreadComms = useUnreadCommunicationCount();
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const activeSection = sectionForPath(path);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
-  const entries = useMemo(() => {
-    const base = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
-    return currentUser.role === "director" ? [...base, ...DIRECTOR_ENTRIES] : base;
-  }, [allowed, currentUser.role]);
+  const entries = useMemo(
+    () => ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))),
+    [allowed],
+  );
+  const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
+
+  function onLogoTap() {
+    const now = Date.now();
+    const tap = tapsRef.current;
+    if (now - tap.first > 3000) {
+      tap.count = 0;
+      tap.first = now;
+    }
+    tap.count += 1;
+    if (tap.count >= 5) {
+      tapsRef.current = { count: 0, first: 0 };
+      if (currentUser.role === "director") void navigate({ to: "/secret-keys" });
+    }
+  }
 
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-sidebar-border">
-        <Link
-          to="/"
+        <button
+          onClick={onLogoTap}
           className="shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
+          aria-label="Logo"
+          title=""
         >
           <img
             src={logo}
             alt="Sauti Business Community"
             className="h-12 w-12 rounded-full bg-white/95 p-0.5 ring-1 ring-sidebar-border"
           />
-        </Link>
+        </button>
         <div>
           <div className="font-display text-base font-semibold leading-tight">
             Sauti Microfinance

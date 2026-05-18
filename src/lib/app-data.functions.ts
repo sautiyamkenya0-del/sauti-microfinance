@@ -8,6 +8,7 @@ import {
   requireSignedInSession,
   requireStaffActor,
 } from "@/lib/auth.server";
+import { recordAudit } from "@/lib/audit.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -40,6 +41,47 @@ function toNumber(value: number | string | null | undefined) {
 
 function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+type AuditActor = {
+  id: string;
+  name: string;
+  role?: string | null;
+};
+
+function clipAuditText(value: unknown, limit: number = 140) {
+  const next = String(value ?? "").trim();
+  if (!next) return "";
+  return next.length > limit ? `${next.slice(0, limit)}...` : next;
+}
+
+async function auditAction(args: {
+  actor: AuditActor;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  summary: string;
+  details?: Record<string, unknown>;
+}) {
+  await recordAudit({
+    actor_id: args.actor.id,
+    actor_name: args.actor.name,
+    actor_role: args.actor.role ?? null,
+    action: args.action,
+    target_type: args.targetType,
+    target_id: args.targetId ?? null,
+    summary: args.summary,
+    details: args.details,
+  });
+}
+
+function summarizeAttachment(attachment?: Record<string, unknown>) {
+  if (!attachment) return undefined;
+  return {
+    name: clipAuditText(attachment.name, 80),
+    type: clipAuditText(attachment.type, 60),
+    size: Number(attachment.size ?? 0),
+  };
 }
 
 const SHARE_PRICE = 500;
@@ -1225,6 +1267,23 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       if (txError) throw new Error(txError.message);
     }
 
+    await auditAction({
+      actor,
+      action: "member.created",
+      targetType: "member",
+      targetId: memberId,
+      summary: `${actor.name} created member ${data.name}`,
+      details: {
+        fieldOfficerId,
+        status: data.status,
+        phone,
+        savingsBalance: data.savingsBalance,
+        shares: data.shares,
+        businessName: data.businessName ?? null,
+        businessPermanence: data.businessPermanence ?? null,
+        investorContribution: data.investorContribution || 0,
+      },
+    });
     return { id: memberId };
   });
 
@@ -1263,7 +1322,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    await requireDirectorActor();
+    const actor = await requireDirectorActor();
     if (!data.name) throw new Error("Staff name is required.");
     if (!data.email) throw new Error("Staff email is required.");
     if (!data.tempPassword || data.tempPassword.length < 6) {
@@ -1296,6 +1355,19 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       fingerprint_enrolled: data.fingerprintEnrolled,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff.created",
+      targetType: "staff",
+      targetId: staffId,
+      summary: `${actor.name} created staff account ${data.name}`,
+      details: {
+        role: data.role,
+        email: data.email,
+        canMarkAttendance: data.role === "director" ? true : data.canMarkAttendance,
+        fingerprintEnrolled: data.fingerprintEnrolled,
+      },
+    });
     return { id: staffId };
   });
 
@@ -1352,6 +1424,22 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff.updated",
+      targetType: "staff",
+      targetId: data.id,
+      summary: `${actor.name} updated staff ${data.id}`,
+      details: {
+        name: patch.name?.trim() || undefined,
+        role: patch.role,
+        email: patch.email?.trim() || undefined,
+        phone: patch.phone?.trim() || undefined,
+        canMarkAttendance: patch.role === "director" ? true : patch.canMarkAttendance,
+        fingerprintEnrolled: patch.fingerprintEnrolled,
+        passwordReset: !!patch.tempPassword,
+      },
+    });
     return { ok: true };
   });
 
@@ -1362,8 +1450,25 @@ export const deleteStaffRecord = createServerFn({ method: "POST" })
     if (!data.id) throw new Error("Staff id is required.");
     if (data.id === actor.id) throw new Error("You cannot delete your own staff account.");
     const supabaseAdmin = await requireSupabaseAdmin();
+    const { data: existingStaff } = await supabaseAdmin
+      .from("staff")
+      .select("name, role, email")
+      .eq("id", data.id)
+      .maybeSingle();
     const { error } = await supabaseAdmin.from("staff").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff.deleted",
+      targetType: "staff",
+      targetId: data.id,
+      summary: `${actor.name} deleted staff ${existingStaff?.name ?? data.id}`,
+      details: {
+        name: existingStaff?.name ?? null,
+        role: existingStaff?.role ?? null,
+        email: existingStaff?.email ?? null,
+      },
+    });
     return { ok: true };
   });
 
@@ -1417,6 +1522,21 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
       check_out: data.status === "permission" || data.status === "absent" ? null : checkOut,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "attendance.upserted",
+      targetType: "attendance",
+      targetId: id,
+      summary: `${actor.name} recorded attendance for ${data.staffId}`,
+      details: {
+        staffId: data.staffId,
+        status: data.status,
+        when: data.when,
+        date: data.date,
+        checkIn,
+        checkOut,
+      },
+    });
 
     return { ok: true };
   });
@@ -1488,6 +1608,20 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     };
     const { error } = await supabaseAdmin.from("field_visits").insert(insertPayload);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "field_visit.created",
+      targetType: "field_visit",
+      targetId: id,
+      summary: `${actor.name} added a ${data.type} field visit for ${data.memberId}`,
+      details: {
+        memberId: data.memberId,
+        date: data.date,
+        hasGps: data.lat != null && data.lng != null,
+        photoCount: data.photos.length,
+        locationNotes: clipAuditText(data.locationNotes, 160),
+      },
+    });
     return {
       id,
       visit: mapFieldVisitRow(insertPayload),
@@ -1558,6 +1692,23 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       });
     }
 
+    await auditAction({
+      actor,
+      action: "loan.created",
+      targetType: "loan",
+      targetId: id,
+      summary: `${actor.name} created loan ${id}`,
+      details: {
+        memberId: data.memberId,
+        principal: data.principal,
+        approvedAmount: approvedAmount ?? null,
+        status: data.status,
+        officerId,
+        termDays: data.termDays ?? null,
+        termMonths: data.termMonths,
+        purpose: clipAuditText(data.purpose, 160),
+      },
+    });
     return { id };
   });
 
@@ -1601,6 +1752,17 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         })
         .eq("id", data.loanId);
       if (error) throw new Error(error.message);
+      await auditAction({
+        actor,
+        action: "loan.rejected",
+        targetType: "loan",
+        targetId: data.loanId,
+        summary: `${actor.name} rejected loan ${data.loanId}`,
+        details: {
+          memberId: loan.member_id,
+          note: clipAuditText(data.note, 160),
+        },
+      });
       return { ok: true };
     }
 
@@ -1629,6 +1791,18 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       note: data.note ?? "Approved",
     });
 
+    await auditAction({
+      actor,
+      action: "loan.approved",
+      targetType: "loan",
+      targetId: data.loanId,
+      summary: `${actor.name} approved loan ${data.loanId}`,
+      details: {
+        memberId: loan.member_id,
+        approvedAmount,
+        note: clipAuditText(data.note, 160),
+      },
+    });
     return { ok: true };
   });
 
@@ -1741,6 +1915,22 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       }
     }
 
+    await auditAction({
+      actor,
+      action: "transaction.created",
+      targetType: "transaction",
+      targetId: id,
+      summary: `${actor.name} recorded ${data.type} transaction ${id}`,
+      details: {
+        type: data.type,
+        amount: data.amount,
+        memberId: data.memberId ?? null,
+        loanId: data.loanId ?? null,
+        date: data.date,
+        ref: data.ref ?? null,
+        note: clipAuditText(data.note, 160),
+      },
+    });
     return { id };
   });
 
@@ -1800,6 +1990,23 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
       opening_balance: data.openingBalance ?? null,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "petty_cash.created",
+      targetType: "petty_cash",
+      targetId: id,
+      summary: `${actor.name} recorded petty cash entry ${id}`,
+      details: {
+        date: data.date,
+        amount: data.amount,
+        category: data.category ?? null,
+        type: data.type ?? null,
+        mode: data.mode ?? null,
+        description: clipAuditText(data.description, 160),
+        payee: clipAuditText(data.payee, 80),
+        reference: clipAuditText(data.reference, 80),
+      },
+    });
     return { id };
   });
 
@@ -1848,6 +2055,21 @@ export const createAppraisalRecord = createServerFn({ method: "POST" })
       notes: data.notes ? String(data.notes) : null,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "appraisal.created",
+      targetType: "appraisal",
+      targetId: id,
+      summary: `${actor.name} created appraisal ${id}`,
+      details: {
+        memberId,
+        loanId: data.loanId ? String(data.loanId) : null,
+        decision: data.decision ? String(data.decision) : null,
+        riskLevel: data.riskLevel ? String(data.riskLevel) : null,
+        approvedAmount: Number(data.approvedAmount ?? 0),
+        totalScore: Number(data.totalScore ?? 0),
+      },
+    });
     return { id };
   });
 
@@ -1912,6 +2134,20 @@ export const createInvestorRecord = createServerFn({ method: "POST" })
       note: `Investor: ${data.name}`,
     });
 
+    await auditAction({
+      actor,
+      action: "investor.created",
+      targetType: "investor",
+      targetId: id,
+      summary: `${actor.name} created investor ${data.name}`,
+      details: {
+        name: data.name,
+        memberId: data.memberId ?? null,
+        contributed: data.contributed,
+        sharePct: data.sharePct,
+        joinedAt: data.joinedAt,
+      },
+    });
     return { id };
   });
 
@@ -1951,6 +2187,20 @@ export const createFollowupRecord = createServerFn({ method: "POST" })
       by_staff: actor.id,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "followup.created",
+      targetType: "followup",
+      targetId: id,
+      summary: `${actor.name} added follow-up ${id}`,
+      details: {
+        loanId: data.loanId,
+        memberId: data.memberId,
+        date: data.date,
+        outcome: data.outcome,
+        note: clipAuditText(data.note, 160),
+      },
+    });
     return {
       id,
       followup: mapFollowupRow({
@@ -1970,7 +2220,7 @@ export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
     penaltyId: String(data?.penaltyId ?? "").trim(),
   }))
   .handler(async ({ data }) => {
-    await requireManagerOrDirectorActor();
+    const actor = await requireManagerOrDirectorActor();
     if (!data.penaltyId) throw new Error("Penalty id is required.");
 
     const supabaseAdmin = await requireSupabaseAdmin();
@@ -2005,6 +2255,18 @@ export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
       .update({ status: "paid", paid_from: "round_off_pool" })
       .eq("id", data.penaltyId);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "penalty.settled_from_round_off",
+      targetType: "penalty",
+      targetId: data.penaltyId,
+      summary: `${actor.name} settled penalty ${data.penaltyId} from round-off pool`,
+      details: {
+        memberId: penalty.member_id,
+        amount: Number(penalty.amount ?? 0),
+        reason: clipAuditText(penalty.reason, 160),
+      },
+    });
     return { ok: true };
   });
 
@@ -2025,10 +2287,29 @@ export const applyMpesaPaymentRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    await requireStaffActor();
+    const actor = await requireStaffActor();
     if (!data.account) throw new Error("M-Pesa account is required.");
     if (data.amount <= 0) throw new Error("M-Pesa amount must be above zero.");
-    return applyMpesaPaymentToDatabase(data);
+    const result = await applyMpesaPaymentToDatabase(data);
+    await auditAction({
+      actor,
+      action: "mpesa.payment_applied",
+      targetType: "mpesa_event",
+      targetId: data.eventId ?? data.mpesaRef ?? data.account,
+      summary: `${actor.name} processed M-Pesa payment for ${data.account}`,
+      details: {
+        account: data.account,
+        amount: data.amount,
+        payerName: clipAuditText(data.payerName, 80),
+        mpesaRef: data.mpesaRef ?? null,
+        matched: result.matched,
+        memberId: result.memberId ?? null,
+        primaryType: result.primary?.type ?? null,
+        primaryAmount: result.primary?.amount ?? null,
+        toRoundOff: result.toRoundOff ?? 0,
+      },
+    });
+    return result;
   });
 
 export const createStaffMessageRecord = createServerFn({ method: "POST" })
@@ -2064,6 +2345,18 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
       attachment: data.attachment ?? null,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff_message.sent",
+      targetType: "staff_message",
+      targetId: id,
+      summary: `${actor.name} sent a staff message to ${data.receiverId}`,
+      details: {
+        receiverId: data.receiverId,
+        contentPreview: clipAuditText(data.content, 160),
+        attachment: summarizeAttachment(data.attachment),
+      },
+    });
     return { id };
   });
 
@@ -2093,17 +2386,46 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       by_name: actor.name,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff_memo.created",
+      targetType: "staff_memo",
+      targetId: id,
+      summary: `${actor.name} posted memo ${data.title}`,
+      details: {
+        date: data.date,
+        title: clipAuditText(data.title, 120),
+        bodyPreview: clipAuditText(data.body, 180),
+      },
+    });
     return { id };
   });
 
 export const deleteStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
   .handler(async ({ data }) => {
-    await requireStaffActor();
+    const actor = await requireStaffActor();
     if (!data.id) throw new Error("Memo id is required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: memo } = await runtimeDb
+      .from("staff_memos")
+      .select("title, memo_date, by_name")
+      .eq("id", data.id)
+      .maybeSingle();
     const { error } = await runtimeDb.from("staff_memos").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff_memo.deleted",
+      targetType: "staff_memo",
+      targetId: data.id,
+      summary: `${actor.name} deleted memo ${memo?.title ?? data.id}`,
+      details: {
+        title: memo?.title ?? null,
+        memoDate: memo?.memo_date ?? null,
+        byName: memo?.by_name ?? null,
+      },
+    });
     return { ok: true };
   });
 
@@ -2132,6 +2454,7 @@ export const createApprovalRequestRecord = createServerFn({ method: "POST" })
     }
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("APR");
     let requestedBy = data.requestedBy;
     let requestedByName = data.requestedByName ?? null;
     if (session.authMode === "member") {
@@ -2143,7 +2466,6 @@ export const createApprovalRequestRecord = createServerFn({ method: "POST" })
       requestedBy = actor.id;
       requestedByName = actor.name;
     }
-    const id = makeId("APR");
     const { error } = await runtimeDb.from("approval_requests").insert({
       id,
       kind: data.kind,
@@ -2154,6 +2476,37 @@ export const createApprovalRequestRecord = createServerFn({ method: "POST" })
       payload: data.payload ?? null,
     });
     if (error) throw new Error(error.message);
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      await recordAudit({
+        actor_id: member.id,
+        actor_name: member.name,
+        actor_role: "member",
+        action: "approval_request.created",
+        target_type: "approval_request",
+        target_id: id,
+        summary: `${member.name} created approval request ${data.title}`,
+        details: {
+          kind: data.kind,
+          title: clipAuditText(data.title, 120),
+          detail: clipAuditText(data.detail, 180),
+        },
+      });
+    } else {
+      const actor = await requireStaffActor();
+      await auditAction({
+        actor,
+        action: "approval_request.created",
+        targetType: "approval_request",
+        targetId: id,
+        summary: `${actor.name} created approval request ${data.title}`,
+        details: {
+          kind: data.kind,
+          title: clipAuditText(data.title, 120),
+          detail: clipAuditText(data.detail, 180),
+        },
+      });
+    }
     return { id };
   });
 
@@ -2185,6 +2538,17 @@ export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "approval_request.decided",
+      targetType: "approval_request",
+      targetId: data.id,
+      summary: `${actor.name} ${data.decision} approval request ${data.id}`,
+      details: {
+        decision: data.decision,
+        note: clipAuditText(data.note, 160),
+      },
+    });
     return { ok: true };
   });
 
@@ -2214,7 +2578,7 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    await requireDirectorActor();
+    const actor = await requireDirectorActor();
     if (!data.key || !data.label) throw new Error("Fee policy key and label are required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb.from("fee_policies").upsert({
@@ -2229,17 +2593,51 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       notes: data.notes ?? null,
     });
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "fee_policy.upserted",
+      targetType: "fee_policy",
+      targetId: data.key,
+      summary: `${actor.name} saved fee policy ${data.key}`,
+      details: {
+        label: data.label,
+        amount: data.amount,
+        permanence: data.permanence,
+        durationDays: data.durationDays ?? null,
+        effectiveFrom: data.effectiveFrom,
+        scope: data.scope,
+        custom: data.custom,
+      },
+    });
     return { ok: true };
   });
 
 export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { key: string }) => ({ key: String(data?.key ?? "").trim() }))
   .handler(async ({ data }) => {
-    await requireDirectorActor();
+    const actor = await requireDirectorActor();
     if (!data.key) throw new Error("Fee key is required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: feePolicy } = await runtimeDb
+      .from("fee_policies")
+      .select("label, amount, permanence, scope")
+      .eq("key", data.key)
+      .maybeSingle();
     const { error } = await runtimeDb.from("fee_policies").delete().eq("key", data.key);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "fee_policy.deleted",
+      targetType: "fee_policy",
+      targetId: data.key,
+      summary: `${actor.name} deleted fee policy ${data.key}`,
+      details: {
+        label: feePolicy?.label ?? null,
+        amount: feePolicy?.amount ?? null,
+        permanence: feePolicy?.permanence ?? null,
+        scope: feePolicy?.scope ?? null,
+      },
+    });
     return { ok: true };
   });
 
@@ -2320,6 +2718,38 @@ export const createSupportThreadRecord = createServerFn({ method: "POST" })
       if (messagesError) throw new Error(messagesError.message);
     }
 
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      await recordAudit({
+        actor_id: member.id,
+        actor_name: member.name,
+        actor_role: "member",
+        action: "support_thread.created",
+        target_type: "support_thread",
+        target_id: id,
+        summary: `${member.name} created support thread ${data.subject}`,
+        details: {
+          subject: clipAuditText(data.subject, 120),
+          initialMessageCount: initialMessages.length,
+          assignedStaffId: data.assignedStaffId ?? null,
+        },
+      });
+    } else {
+      const actor = await requireStaffActor();
+      await auditAction({
+        actor,
+        action: "support_thread.created",
+        targetType: "support_thread",
+        targetId: id,
+        summary: `${actor.name} created support thread ${data.subject}`,
+        details: {
+          memberId,
+          subject: clipAuditText(data.subject, 120),
+          initialMessageCount: initialMessages.length,
+          assignedStaffId: data.assignedStaffId ?? null,
+        },
+      });
+    }
     return { id };
   });
 
@@ -2382,6 +2812,33 @@ export const appendSupportMessageRecord = createServerFn({ method: "POST" })
       .update({ updated_at: new Date().toISOString() })
       .eq("id", data.threadId);
     if (threadUpdateError) throw new Error(threadUpdateError.message);
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      await recordAudit({
+        actor_id: member.id,
+        actor_name: member.name,
+        actor_role: "member",
+        action: "support_message.appended",
+        target_type: "support_thread",
+        target_id: data.threadId,
+        summary: `${member.name} replied in support thread ${data.threadId}`,
+        details: {
+          textPreview: clipAuditText(data.text, 180),
+        },
+      });
+    } else {
+      const actor = await requireStaffActor();
+      await auditAction({
+        actor,
+        action: "support_message.appended",
+        targetType: "support_thread",
+        targetId: data.threadId,
+        summary: `${actor.name} replied in support thread ${data.threadId}`,
+        details: {
+          textPreview: clipAuditText(data.text, 180),
+        },
+      });
+    }
     return { id };
   });
 
@@ -2398,7 +2855,7 @@ export const updateSupportThreadRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    await requireStaffActor();
+    const actor = await requireStaffActor();
     if (!data.id) throw new Error("Support thread id is required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb
@@ -2410,5 +2867,16 @@ export const updateSupportThreadRecord = createServerFn({ method: "POST" })
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "support_thread.updated",
+      targetType: "support_thread",
+      targetId: data.id,
+      summary: `${actor.name} updated support thread ${data.id}`,
+      details: {
+        status: data.status,
+        assignedStaffId: data.assignedStaffId ?? null,
+      },
+    });
     return { ok: true };
   });

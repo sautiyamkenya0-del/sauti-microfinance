@@ -1,25 +1,46 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useServerFn } from "@tanstack/react-start";
 
+import { listNotificationReads, markNotificationReads } from "@/lib/notification-reads.functions";
 import { useStore } from "@/lib/store";
 
 const EVT = "sauti:read-changed";
-const readIdsState = new Set<string>();
+const readIdsByStaff = new Map<string, Set<string>>();
+const hydratedStaffIds = new Set<string>();
+const hydrationRequests = new Map<string, Promise<void>>();
 
 function emitReadChange() {
   window.dispatchEvent(new Event(EVT));
 }
 
-function snapshotReadIds() {
-  return new Set(readIdsState);
+function snapshotReadIds(staffId: string) {
+  return new Set(readIdsByStaff.get(staffId) ?? []);
+}
+
+function mergeReadIds(staffId: string, ids: Iterable<string>) {
+  const next = readIdsByStaff.get(staffId) ?? new Set<string>();
+  let changed = false;
+  for (const id of ids) {
+    const value = String(id ?? "").trim();
+    if (!value || next.has(value)) continue;
+    next.add(value);
+    changed = true;
+  }
+  readIdsByStaff.set(staffId, next);
+  return changed;
 }
 
 export function useReadIds() {
-  const [ids, setIds] = useState<Set<string>>(() => snapshotReadIds());
+  const { currentUser, authMode, isAuthenticated } = useStore();
+  const loadNotificationReads = useServerFn(listNotificationReads);
+  const persistNotificationReads = useServerFn(markNotificationReads);
+  const staffId = isAuthenticated && authMode === "staff" ? currentUser.id : "";
+  const [ids, setIds] = useState<Set<string>>(() => snapshotReadIds(staffId));
   const sigRef = useRef<string>("");
 
   useEffect(() => {
     const refresh = () => {
-      const next = snapshotReadIds();
+      const next = snapshotReadIds(staffId);
       const sig = [...next].sort().join("|");
       if (sig === sigRef.current) return;
       sigRef.current = sig;
@@ -28,18 +49,43 @@ export function useReadIds() {
     refresh();
     window.addEventListener(EVT, refresh);
     return () => window.removeEventListener(EVT, refresh);
-  }, []);
+  }, [staffId]);
 
-  const markRead = useCallback((id: string | string[]) => {
-    const arr = Array.isArray(id) ? id : [id];
-    arr.forEach((item) => readIdsState.add(item));
-    emitReadChange();
-  }, []);
+  useEffect(() => {
+    if (!staffId || hydratedStaffIds.has(staffId)) return;
 
-  const clearAll = useCallback((all: string[]) => {
-    all.forEach((item) => readIdsState.add(item));
-    emitReadChange();
-  }, []);
+    const pending =
+      hydrationRequests.get(staffId) ??
+      loadNotificationReads()
+        .then((result) => {
+          if (mergeReadIds(staffId, result.ids)) emitReadChange();
+          hydratedStaffIds.add(staffId);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          hydrationRequests.delete(staffId);
+        });
+
+    hydrationRequests.set(staffId, pending);
+  }, [loadNotificationReads, staffId]);
+
+  const markRead = useCallback(
+    (id: string | string[]) => {
+      if (!staffId) return;
+      const arr = Array.isArray(id) ? id : [id];
+      if (!arr.length) return;
+      if (mergeReadIds(staffId, arr)) emitReadChange();
+      void persistNotificationReads({ data: { ids: arr } }).catch(() => {});
+    },
+    [persistNotificationReads, staffId],
+  );
+
+  const clearAll = useCallback(
+    (all: string[]) => {
+      markRead(all);
+    },
+    [markRead],
+  );
 
   return { ids, markRead, clearAll };
 }
