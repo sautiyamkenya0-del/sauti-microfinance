@@ -77,9 +77,9 @@ function SharesPage() {
                 <span className="font-semibold">{fmtKES(units * sharePrice)}</span>
               </div>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (units <= 0) return;
-                  recordTransaction({
+                  await recordTransaction({
                     type: "share_purchase",
                     amount: units * sharePrice,
                     memberId,

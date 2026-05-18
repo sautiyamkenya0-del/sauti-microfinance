@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireStaffActor } from "@/lib/auth.server";
 import { extractGroqJson } from "@/lib/groq.server";
 
 /** AI scan for petty-cash entries — accepts an M-PESA screenshot (data-URL) and/or message text,
@@ -9,6 +10,7 @@ export const Route = createFileRoute("/api/ai/scan-mpesa")({
     handlers: {
       POST: async ({ request }) => {
         try {
+          await requireStaffActor();
           const { imageDataUrl, text } = await request.json();
           const userContent: any[] = [];
           if (!imageDataUrl && !text)

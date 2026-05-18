@@ -142,8 +142,8 @@ export function PendingReview() {
                 </label>
                 <div className="flex justify-between gap-2">
                   <button
-                    onClick={() => {
-                      rejectLoan(l.id, currentUser.id, note);
+                    onClick={async () => {
+                      await rejectLoan(l.id, currentUser.id, note);
                       toast.error("Loan rejected");
                       setReviewing(null);
                     }}
@@ -159,10 +159,10 @@ export function PendingReview() {
                       Cancel
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (adjAmount <= 0)
                           return toast.error("Approved amount must be above zero.");
-                        approveLoan(l.id, adjAmount, currentUser.id, note);
+                        await approveLoan(l.id, adjAmount, currentUser.id, note);
                         toast.success("Loan approved & disbursed");
                         setReviewing(null);
                       }}

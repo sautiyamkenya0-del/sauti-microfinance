@@ -23,6 +23,8 @@ type PhotoDraft = {
   data: string;
 };
 
+const MAX_VISIT_PHOTOS = 6;
+
 const VISIT_LABEL: Record<VisitType, string> = {
   business: "Business Point",
   home: "Home Point",
@@ -58,7 +60,7 @@ function imageFileToDataUrl(file: File) {
       const image = new Image();
       image.onerror = () => reject(new Error(`Could not process ${file.name}.`));
       image.onload = () => {
-        const maxEdge = 1600;
+        const maxEdge = 1280;
         const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.width * scale));
@@ -69,7 +71,7 @@ function imageFileToDataUrl(file: File) {
           return;
         }
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.82));
+        resolve(canvas.toDataURL("image/jpeg", 0.76));
       };
       image.src = String(reader.result ?? "");
     };
@@ -165,6 +167,14 @@ export function FieldVisits() {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!files.length) return;
+    if (supportingPhotos.length >= MAX_VISIT_PHOTOS) {
+      toast.error(`A visit can hold up to ${MAX_VISIT_PHOTOS} photos.`);
+      return;
+    }
+    if (supportingPhotos.length + files.length > MAX_VISIT_PHOTOS) {
+      toast.error(`Add up to ${MAX_VISIT_PHOTOS - supportingPhotos.length} more photo(s) for this visit.`);
+      return;
+    }
 
     try {
       const nextPhotos = await Promise.all(
@@ -401,7 +411,7 @@ export function FieldVisits() {
                   <div>
                     <div className="text-sm font-medium">Supporting photos</div>
                     <div className="text-xs text-muted-foreground">
-                      Add as many photos as you need before saving this field visit.
+                      Add up to {MAX_VISIT_PHOTOS} photos before saving this field visit.
                     </div>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted">

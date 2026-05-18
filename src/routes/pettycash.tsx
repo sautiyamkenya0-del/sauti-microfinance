@@ -330,7 +330,7 @@ function PettyPage() {
             setOpenEntry(false);
             setOpenScan(false);
           }}
-          onSave={(d) => {
+          onSave={async (d) => {
             if (!d.payee && !d.description) {
               toast.error("Add at least a payee or details.");
               return;
@@ -339,7 +339,7 @@ function PettyPage() {
               toast.error("Amount must be > 0.");
               return;
             }
-            addPetty({ ...d, by: d.by || staff[0]?.id || "" });
+            await addPetty({ ...d, by: d.by || staff[0]?.id || "" });
             toast.success(d.type === "topup" ? "Top-up recorded" : "Payment recorded");
             setOpenEntry(false);
             setOpenScan(false);
@@ -372,7 +372,7 @@ function PettyEntryDialog({
   draft: EntryDraft;
   setDraft: (d: EntryDraft) => void;
   onClose: () => void;
-  onSave: (d: EntryDraft) => void;
+  onSave: (d: EntryDraft) => Promise<void>;
 }) {
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -622,7 +622,7 @@ function PettyEntryDialog({
             Cancel
           </button>
           <button
-            onClick={() => onSave(draft)}
+            onClick={() => void onSave(draft)}
             className="px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
           >
             Save entry

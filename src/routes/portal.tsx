@@ -47,6 +47,7 @@ export const Route = createFileRoute("/portal")({
 
 function Portal() {
   const {
+    staff,
     members,
     loans,
     transactions,
@@ -56,6 +57,7 @@ function Portal() {
     authMode,
     portalMemberId,
     setPortalMemberId,
+    logout,
   } = useStore();
   // The Member Portal route lives inside the staff app; every signed-in user here
   // is staff (director / manager / loan_officer). Render it as a staff "view-as"
@@ -79,6 +81,8 @@ function Portal() {
   const [tab, setTab] = useState<Tab>("overview");
 
   const member = members.find((m) => m.id === memberId);
+  const fieldOfficerName =
+    member?.fieldOfficerId && staff.find((person) => person.id === member.fieldOfficerId)?.name;
   const myLoans = loans.filter((l) => l.memberId === memberId);
   const myTx = transactions.filter((t) => t.memberId === memberId);
   const myPen = penalties.filter((p) => p.memberId === memberId);
@@ -98,10 +102,34 @@ function Portal() {
 
   return (
     <>
-      <AppHeader
-        title="Member Portal"
-        subtitle="Staff view-as: audit a member's profile, loans, fees and support thread."
-      />
+      {isStaffView ? (
+        <AppHeader
+          title="Member Portal"
+          subtitle="Staff view-as: audit a member's profile, loans, fees and support thread."
+        />
+      ) : (
+        <header className="border-b border-border bg-card/70 px-6 py-5 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                Sauti Microfinance
+              </div>
+              <h1 className="mt-1 font-display text-2xl font-semibold text-foreground">
+                Member Portal
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Track your savings, loans, fees, and support in one secure place.
+              </p>
+            </div>
+            <button
+              onClick={() => void logout()}
+              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
+      )}
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         {isStaffView && (
           <div className="bg-accent/15 border border-accent/30 rounded-xl p-4 flex items-start gap-3 text-sm">
@@ -121,7 +149,8 @@ function Portal() {
           </div>
         )}
         <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap items-end gap-3">
-          <label className="block flex-1 min-w-[280px]">
+          {isStaffView ? (
+            <label className="block flex-1 min-w-[280px]">
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
               {isStaffView ? "View member" : "Member sign-in"}
             </span>
@@ -136,7 +165,18 @@ function Portal() {
                 </option>
               ))}
             </select>
-          </label>
+            </label>
+          ) : (
+            <div className="min-w-[280px] flex-1">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Signed in as
+              </div>
+              <div className="mt-1 rounded-md border border-border bg-muted/50 px-3 py-3 text-sm">
+                <div className="font-medium text-foreground">{member?.name ?? "Member"}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{member?.id ?? memberId}</div>
+              </div>
+            </div>
+          )}
           <div className="text-xs text-muted-foreground">
             M-Pesa Paybill account: <span className="font-mono text-foreground">{memberId}</span>
           </div>
@@ -274,7 +314,7 @@ function Portal() {
                     value={businessPermanenceLabel(member.businessPermanence)}
                   />
                   <Field label="Business address" value={member.businessAddress} />
-                  <Field label="Field officer" value={member.fieldOfficerId} />
+                  <Field label="Field officer" value={fieldOfficerName ?? member.fieldOfficerId} />
 
                   <div className="sm:col-span-2 mt-2 pt-3 border-t border-border space-y-3">
                     <div className="text-[11px] uppercase tracking-wider text-muted-foreground">

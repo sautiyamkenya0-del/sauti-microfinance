@@ -188,9 +188,9 @@ export function AppSidebar() {
           </div>
         </div>
         <button
-          onClick={() => {
-            logout();
-            router.navigate({ to: "/login" });
+          onClick={async () => {
+            await logout();
+            await router.navigate({ to: "/login" });
           }}
           className="w-full inline-flex items-center justify-center gap-2 bg-sidebar-accent text-sidebar-accent-foreground text-sm rounded-md px-2 py-2 border border-sidebar-border hover:bg-sidebar-accent/80"
         >

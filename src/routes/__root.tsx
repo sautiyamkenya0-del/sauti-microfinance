@@ -180,7 +180,6 @@ function AppLayout() {
     return (
       <div className="min-h-screen bg-background">
         <SplashScreen />
-        <MpesaQueueDrainer />
         <Outlet />
       </div>
     );

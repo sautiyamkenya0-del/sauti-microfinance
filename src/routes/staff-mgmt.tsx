@@ -188,8 +188,10 @@ function StaffMgmt() {
                       <button
                         onClick={() => {
                           if (confirm(`Remove ${s.name}?`)) {
-                            void removeStaff(s.id);
-                            toast.success("Staff removed");
+                            void (async () => {
+                              await removeStaff(s.id);
+                              toast.success("Staff removed");
+                            })();
                           }
                         }}
                         className="px-2 py-1.5 rounded-md bg-destructive/10 text-destructive border border-destructive/30 hover:bg-destructive/20"

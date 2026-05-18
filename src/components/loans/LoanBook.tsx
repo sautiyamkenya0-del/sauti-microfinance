@@ -272,10 +272,10 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const ln = loans.find((l) => l.id === repayFor);
                   if (!ln || repayAmt <= 0) return;
-                  recordTransaction({
+                  await recordTransaction({
                     type: "loan_repayment",
                     amount: repayAmt,
                     memberId: ln.memberId,
@@ -373,8 +373,8 @@ export function MemberLoanHistory({
                     {pool >= p.amount &&
                       (currentUser.role === "manager" || currentUser.role === "director") && (
                         <button
-                          onClick={() => {
-                            if (settlePenaltyFromPool(p.id)) {
+                          onClick={async () => {
+                            if (await settlePenaltyFromPool(p.id)) {
                               toast.success("Settled from pool");
                             } else {
                               toast.error("Pool short");

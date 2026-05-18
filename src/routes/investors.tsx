@@ -180,10 +180,10 @@ function InvestorsContent() {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!form.name || form.contributed <= 0)
                     return toast.error("Name & contribution required");
-                  addInvestor(form);
+                  await addInvestor(form);
                   toast.success("Investor added");
                   setOpen(false);
                   setForm({ name: "", phone: "", contributed: 0, sharePct: 0, notes: "" });

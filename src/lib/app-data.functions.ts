@@ -1,4 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
+import {
+  getAuthSessionData,
+  hashPassword,
+  requireDirectorActor,
+  requireManagerOrDirectorActor,
+  requireMemberActor,
+  requireSignedInSession,
+  requireStaffActor,
+} from "@/lib/auth.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -37,6 +46,8 @@ function makeId(prefix: string) {
 const SHARE_PRICE = 500;
 const ROUNDING_BASE = 1;
 const MANDATORY_SAVINGS_THRESHOLD = 1000;
+const MAX_FIELD_VISIT_PHOTOS = 6;
+const MAX_FIELD_VISIT_TOTAL_BYTES = 8 * 1024 * 1024;
 
 function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
   if (amount <= 0) return 0;
@@ -104,25 +115,18 @@ function memberNeedsStickerRow(member: {
   return !!member.fee_has_shop;
 }
 
-async function insertTransactionRow(
-  row: Omit<
-    Parameters<ReturnType<typeof requireSupabaseAdmin>["from"]>[0] extends never
-      ? never
-      : any,
-    never
-  > & {
-    date?: string;
-    type: string;
-    amount: number;
-    member_id?: string | null;
-    loan_id?: string | null;
-    by_staff?: string | null;
-    note?: string | null;
-    ref?: string | null;
-    account?: string | null;
-    payer_name?: string | null;
-  },
-) {
+async function insertTransactionRow(row: {
+  date?: string;
+  type: string;
+  amount: number;
+  member_id?: string | null;
+  loan_id?: string | null;
+  by_staff?: string | null;
+  note?: string | null;
+  ref?: string | null;
+  account?: string | null;
+  payer_name?: string | null;
+}) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const id = await nextPrefixedId("transactions", "T", 1);
   const { error } = await supabaseAdmin.from("transactions").insert({
@@ -495,7 +499,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   if (Object.keys(memberPatch).length > 0) {
     const { error: memberUpdateError } = await supabaseAdmin
       .from("members")
-      .update(memberPatch)
+        .update(memberPatch as any)
       .eq("id", memberId);
     if (memberUpdateError) throw new Error(memberUpdateError.message);
   }
@@ -564,9 +568,449 @@ async function nextPrefixedId(
   return `${prefix}${maxSeen + 1}`;
 }
 
+function approxDataUrlBytes(value: string) {
+  const payload = value.includes(",") ? value.slice(value.indexOf(",") + 1) : value;
+  return Math.ceil((payload.length * 3) / 4);
+}
+
+function mapStaffRow(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    email: row.email ?? undefined,
+    phone: row.phone ?? undefined,
+    nationalId: row.national_id ?? undefined,
+    address: row.address ?? undefined,
+    notes: row.notes ?? undefined,
+    photo: row.photo ?? undefined,
+    canMarkAttendance: !!row.can_mark_attendance,
+    fingerprintEnrolled: !!row.fingerprint_enrolled,
+  };
+}
+
+function mapMemberRow(row: any) {
+  const legacyNames = splitLegacyLastName(row.last_name);
+  const businessPermanence =
+    (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
+
+  return {
+    id: row.id,
+    name: row.name,
+    phone: row.phone,
+    joinedAt: row.joined_at,
+    status: row.status,
+    shares: row.shares,
+    savingsBalance: toNumber(row.savings_balance),
+    fees: {
+      membership: row.fee_membership,
+      card: row.fee_card,
+      hasShop:
+        businessPermanence === "permanent"
+          ? true
+          : businessPermanence === "semi"
+            ? false
+            : row.fee_has_shop,
+      sticker: row.fee_sticker,
+      firstUpfrontPaid: row.fee_first_upfront_paid,
+    },
+    isInvestor: row.is_investor,
+    investorId: row.investor_id ?? undefined,
+    firstName: row.first_name ?? undefined,
+    secondName: row.second_name ?? legacyNames.secondName,
+    thirdName: row.third_name ?? legacyNames.thirdName,
+    lastName: row.last_name ?? undefined,
+    dob: row.dob ?? undefined,
+    gender: (row.gender as "Male" | "Female" | null) ?? undefined,
+    email: row.email ?? undefined,
+    address: row.address ?? undefined,
+    city: row.city ?? undefined,
+    county: row.county ?? undefined,
+    village: row.village ?? undefined,
+    savingsOnly: row.savings_only,
+    oldSystemId: row.old_system_id ?? undefined,
+    businessName: row.business_name ?? undefined,
+    businessType: row.business_type ?? undefined,
+    businessPermanence,
+    businessAddress: row.business_address ?? undefined,
+    fieldOfficerId: row.field_officer_id ?? undefined,
+  };
+}
+
+function mapLoanRow(row: any) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    principal: toNumber(row.principal),
+    approvedAmount: row.approved_amount == null ? undefined : toNumber(row.approved_amount),
+    rate: toNumber(row.rate),
+    termMonths: row.term_months,
+    termDays: row.term_days == null ? undefined : (row.term_days as 7 | 14 | 30 | 60 | 90),
+    startDate: row.start_date,
+    status: row.status,
+    officerId: row.officer_id ?? "",
+    paid: toNumber(row.paid),
+    purpose: row.purpose ?? undefined,
+    reviewedBy: row.reviewed_by ?? undefined,
+    reviewNote: row.review_note ?? undefined,
+  };
+}
+
+function mapTransactionRow(row: any) {
+  return {
+    id: row.id,
+    date: row.date,
+    type: row.type,
+    account: row.account ?? undefined,
+    payerName: row.payer_name ?? undefined,
+    amount: toNumber(row.amount),
+    memberId: row.member_id ?? undefined,
+    loanId: row.loan_id ?? undefined,
+    ref: row.ref ?? undefined,
+    by: row.by_staff ?? "",
+    note: row.note ?? undefined,
+  };
+}
+
+function mapPettyCashRow(row: any) {
+  return {
+    id: row.id,
+    date: row.date,
+    description: row.description,
+    amount: toNumber(row.amount),
+    category: row.category ?? "",
+    by: row.by_staff ?? "",
+    time: row.time ?? undefined,
+    type: row.type ?? undefined,
+    payee: row.payee ?? undefined,
+    contact: row.contact ?? undefined,
+    mode: row.mode ?? undefined,
+    reference: row.reference ?? undefined,
+    txnCost: row.txn_cost == null ? undefined : toNumber(row.txn_cost),
+    openingBalance: row.opening_balance == null ? undefined : toNumber(row.opening_balance),
+  };
+}
+
+function mapInvestorRow(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    contributed: toNumber(row.contributed),
+    sharePct: toNumber(row.share_pct),
+    joinedAt: row.joined_at,
+    phone: row.phone ?? undefined,
+    notes: row.notes ?? undefined,
+    memberId: row.member_id ?? undefined,
+  };
+}
+
+function mapAttendanceRow(row: any) {
+  return {
+    id: row.id,
+    staffId: row.staff_id,
+    date: row.date,
+    status: row.status,
+    checkIn: row.check_in ?? undefined,
+    checkOut: row.check_out ?? undefined,
+  };
+}
+
+function mapAppraisalRow(row: any) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    loanId: row.loan_id ?? undefined,
+    date: row.date,
+    officerId: row.officer_id ?? "",
+    goodDay: toNumber(row.good_day),
+    averageDay: toNumber(row.average_day),
+    badDay: toNumber(row.bad_day),
+    operatingExpenses: toNumber(row.operating_expenses),
+    nonEarningDays: row.non_earning_days,
+    existingDebt: toNumber(row.existing_debt),
+    monthlyDebtRepayment: toNumber(row.monthly_debt_repayment),
+    crbStatus: (row.crb_status as "Positive" | "Negative" | "Unknown" | "No Record") ?? "Unknown",
+    reschedulesLast12: row.reschedules_last_12,
+    dti: toNumber(row.dti),
+    dicr: toNumber(row.dicr),
+    bdsr: toNumber(row.bdsr),
+    lsr: toNumber(row.lsr),
+    savingsBuffer: toNumber(row.savings_buffer),
+    scoreDICR: toNumber(row.score_dicr),
+    scoreBDSR: toNumber(row.score_bdsr),
+    scoreSavings: toNumber(row.score_savings),
+    scoreCRB: toNumber(row.score_crb),
+    scoreBurden: toNumber(row.score_burden),
+    scoreDocs: toNumber(row.score_docs),
+    scoreCoop: toNumber(row.score_coop),
+    totalScore: toNumber(row.total_score),
+    decision:
+      (row.decision as "Approve" | "Approve with Adjustments" | "Refer / Downsize" | "Reject") ??
+      "Refer / Downsize",
+    riskLevel: (row.risk_level as "LOW" | "MODERATE" | "HIGH" | "VERY HIGH") ?? "MODERATE",
+    approvedAmount: toNumber(row.approved_amount),
+    approvedTerm: row.approved_term ?? "",
+    specialConditions: row.special_conditions ?? "",
+    notes: row.notes ?? "",
+  };
+}
+
+function mapFieldVisitRow(row: any) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    date: row.date,
+    type: row.type,
+    lat: row.lat == null ? undefined : toNumber(row.lat),
+    lng: row.lng == null ? undefined : toNumber(row.lng),
+    locationNotes: row.location_notes ?? "",
+    photos: row.photos ?? undefined,
+    by: row.by_staff ?? "",
+  };
+}
+
+function mapFollowupRow(row: any) {
+  return {
+    id: row.id,
+    loanId: row.loan_id,
+    memberId: row.member_id,
+    date: row.date,
+    note: row.note,
+    outcome: row.outcome,
+    by: row.by_staff ?? "",
+  };
+}
+
+function mapPenaltyRow(row: any) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    loanId: row.loan_id ?? undefined,
+    date: row.date,
+    amount: toNumber(row.amount),
+    reason: row.reason,
+    status: row.status,
+    paidFrom: row.paid_from ?? undefined,
+  };
+}
+
+function mapRoundOffRow(row: any) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    date: row.date,
+    amount: toNumber(row.amount),
+    source: row.source,
+    ref: row.ref ?? undefined,
+  };
+}
+
+function mapStaffMessageRow(row: any) {
+  return {
+    id: row.id,
+    senderId: row.sender_id,
+    receiverId: row.receiver_id,
+    senderName: row.sender_name,
+    content: row.content ?? undefined,
+    attachment: row.attachment
+      ? {
+          name: row.attachment.name ?? "attachment",
+          type: row.attachment.type ?? "application/octet-stream",
+          size: Number(row.attachment.size ?? 0),
+          data: row.attachment.data ?? "",
+        }
+      : undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function mapMemoRow(row: any) {
+  return {
+    id: row.id,
+    date: row.memo_date,
+    title: row.title,
+    body: row.body,
+    by: row.by_name,
+    byStaffId: row.by_staff_id ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function mapApprovalRow(row: any) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    detail: row.detail,
+    requestedBy: row.requested_by,
+    requestedByName: row.requested_by_name ?? undefined,
+    payload: row.payload ?? undefined,
+    status: row.status,
+    createdAt: row.created_at,
+    reviewedBy: row.reviewed_by ?? undefined,
+    reviewNote: row.review_note ?? undefined,
+    reviewedAt: row.reviewed_at ?? undefined,
+  };
+}
+
+function mapFeePolicyRow(row: any) {
+  return {
+    key: row.key,
+    label: row.label,
+    amount: toNumber(row.amount),
+    permanence: row.permanence,
+    durationDays: row.duration_days ?? undefined,
+    effectiveFrom: row.effective_from,
+    scope: row.scope,
+    custom: row.custom,
+    notes: row.notes ?? undefined,
+    updatedAt: row.updated_at,
+  };
+}
+
+function groupSupportMessages(rows: any[]) {
+  const supportMessagesByThread = new Map<string, any[]>();
+  for (const row of rows) {
+    const list = supportMessagesByThread.get(row.thread_id) ?? [];
+    list.push(row);
+    supportMessagesByThread.set(row.thread_id, list);
+  }
+  return supportMessagesByThread;
+}
+
+function mapSupportThreadRow(row: any, supportMessagesByThread: Map<string, any[]>) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    memberName: row.member_name,
+    assignedStaffId: row.assigned_staff_id ?? undefined,
+    status: row.status,
+    subject: row.subject,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    messages: (supportMessagesByThread.get(row.id) ?? []).map((message: any) => ({
+      id: message.id,
+      from: message.sender_kind,
+      fromName: message.sender_name,
+      fromId: message.sender_id ?? undefined,
+      text: message.text,
+      at: message.created_at,
+    })),
+  };
+}
+
+function emptyAppData() {
+  return {
+    isAuthenticated: false,
+    authMode: "staff" as const,
+    portalMemberId: "",
+    currentUser: undefined,
+    staff: [],
+    members: [],
+    loans: [],
+    transactions: [],
+    pettyCash: [],
+    investors: [],
+    attendance: [],
+    appraisals: [],
+    fieldVisits: [],
+    followups: [],
+    penalties: [],
+    roundOff: [],
+    staffMessages: [],
+    memos: [],
+    approvals: [],
+    feePolicies: [],
+    supportThreads: [],
+  };
+}
+
 export const loadAppData = createServerFn({ method: "POST" }).handler(async () => {
+  const session = await getAuthSessionData();
+  const base = emptyAppData();
+  if (!session.authMode) return base;
+
   const supabaseAdmin = await requireSupabaseAdmin();
   const runtimeDb = supabaseAdmin as any;
+
+  if (session.authMode === "member" && session.memberId) {
+    const [memberResult, staffResult, loansResult, transactionsResult, penaltiesResult, roundOffResult, feePoliciesResult, supportThreadsResult] =
+      await Promise.all([
+        supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
+        supabaseAdmin.from("staff").select("id, name, role").order("id"),
+        supabaseAdmin
+          .from("loans")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("start_date", { ascending: false }),
+        supabaseAdmin
+          .from("transactions")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("date", { ascending: false }),
+        supabaseAdmin
+          .from("penalties")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("date", { ascending: false }),
+        supabaseAdmin
+          .from("round_off")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("date", { ascending: false }),
+        runtimeDb.from("fee_policies").select("*").order("updated_at", { ascending: false }),
+        runtimeDb
+          .from("support_threads")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("updated_at", { ascending: false }),
+      ]);
+
+    const memberResults = [
+      memberResult,
+      staffResult,
+      loansResult,
+      transactionsResult,
+      penaltiesResult,
+      roundOffResult,
+      feePoliciesResult,
+      supportThreadsResult,
+    ];
+    const failedMemberResult = memberResults.find((result) => result.error);
+    if (failedMemberResult?.error) throw new Error(failedMemberResult.error.message);
+    if (!memberResult.data) return base;
+
+    const threadIds = (supportThreadsResult.data ?? []).map((row: any) => row.id);
+    const supportMessagesResult = threadIds.length
+      ? await runtimeDb
+          .from("support_messages")
+          .select("*")
+          .in("thread_id", threadIds)
+          .order("created_at", { ascending: true })
+      : { data: [], error: null };
+    if (supportMessagesResult.error) throw new Error(supportMessagesResult.error.message);
+
+    const supportMessagesByThread = groupSupportMessages(supportMessagesResult.data ?? []);
+
+    return {
+      ...base,
+      isAuthenticated: true,
+      authMode: "member" as const,
+      portalMemberId: memberResult.data.id,
+      staff: (staffResult.data ?? []).map(mapStaffRow),
+      members: [mapMemberRow(memberResult.data)],
+      loans: (loansResult.data ?? []).map(mapLoanRow),
+      transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
+      penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
+      roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
+      feePolicies: (feePoliciesResult.data ?? []).map(mapFeePolicyRow),
+      supportThreads: (supportThreadsResult.data ?? []).map((row: any) =>
+        mapSupportThreadRow(row, supportMessagesByThread),
+      ),
+    };
+  }
+
+  const actor = await requireStaffActor();
 
   const [
     staffResult,
@@ -635,282 +1079,34 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
   const failed = results.find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
 
-  const supportMessagesByThread = new Map<string, any[]>();
-  for (const row of supportMessagesResult.data ?? []) {
-    const list = supportMessagesByThread.get(row.thread_id) ?? [];
-    list.push(row);
-    supportMessagesByThread.set(row.thread_id, list);
-  }
+  const supportMessagesByThread = groupSupportMessages(supportMessagesResult.data ?? []);
+
+  const staffRows = (staffResult.data ?? []).map(mapStaffRow);
 
   return {
-    staff: (staffResult.data ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      role: row.role,
-      email: row.email ?? undefined,
-      phone: row.phone ?? undefined,
-      nationalId: row.national_id ?? undefined,
-      address: row.address ?? undefined,
-      notes: row.notes ?? undefined,
-      photo: row.photo ?? undefined,
-      tempPassword: row.temp_password ?? undefined,
-      canMarkAttendance: row.can_mark_attendance,
-      fingerprintEnrolled: row.fingerprint_enrolled,
-    })),
-    members: (membersResult.data ?? []).map((row) => {
-      const legacyNames = splitLegacyLastName(row.last_name);
-      const businessPermanence =
-        (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
-
-      return {
-        id: row.id,
-        name: row.name,
-        phone: row.phone,
-        joinedAt: row.joined_at,
-        status: row.status,
-        shares: row.shares,
-        savingsBalance: toNumber(row.savings_balance),
-        fees: {
-          membership: row.fee_membership,
-          card: row.fee_card,
-          hasShop:
-            businessPermanence === "permanent"
-              ? true
-              : businessPermanence === "semi"
-                ? false
-                : row.fee_has_shop,
-          sticker: row.fee_sticker,
-          firstUpfrontPaid: row.fee_first_upfront_paid,
-        },
-        isInvestor: row.is_investor,
-        investorId: row.investor_id ?? undefined,
-        firstName: row.first_name ?? undefined,
-        secondName: row.second_name ?? legacyNames.secondName,
-        thirdName: row.third_name ?? legacyNames.thirdName,
-        lastName: row.last_name ?? undefined,
-        dob: row.dob ?? undefined,
-        gender: (row.gender as "Male" | "Female" | null) ?? undefined,
-        email: row.email ?? undefined,
-        address: row.address ?? undefined,
-        city: row.city ?? undefined,
-        county: row.county ?? undefined,
-        village: row.village ?? undefined,
-        savingsOnly: row.savings_only,
-        oldSystemId: row.old_system_id ?? undefined,
-        businessName: row.business_name ?? undefined,
-        businessType: row.business_type ?? undefined,
-        businessPermanence,
-        businessAddress: row.business_address ?? undefined,
-        fieldOfficerId: row.field_officer_id ?? undefined,
-      };
-    }),
-    loans: (loansResult.data ?? []).map((row) => ({
-      id: row.id,
-      memberId: row.member_id,
-      principal: toNumber(row.principal),
-      approvedAmount: row.approved_amount == null ? undefined : toNumber(row.approved_amount),
-      rate: toNumber(row.rate),
-      termMonths: row.term_months,
-      termDays: row.term_days == null ? undefined : (row.term_days as 7 | 14 | 30 | 60 | 90),
-      startDate: row.start_date,
-      status: row.status,
-      officerId: row.officer_id ?? "",
-      paid: toNumber(row.paid),
-      purpose: row.purpose ?? undefined,
-      reviewedBy: row.reviewed_by ?? undefined,
-      reviewNote: row.review_note ?? undefined,
-    })),
-    transactions: (transactionsResult.data ?? []).map((row) => ({
-      id: row.id,
-      date: row.date,
-      type: row.type,
-      account: row.account ?? undefined,
-      payerName: row.payer_name ?? undefined,
-      amount: toNumber(row.amount),
-      memberId: row.member_id ?? undefined,
-      loanId: row.loan_id ?? undefined,
-      ref: row.ref ?? undefined,
-      by: row.by_staff ?? "",
-      note: row.note ?? undefined,
-    })),
-    pettyCash: (pettyCashResult.data ?? []).map((row) => ({
-      id: row.id,
-      date: row.date,
-      description: row.description,
-      amount: toNumber(row.amount),
-      category: row.category ?? "",
-      by: row.by_staff ?? "",
-      time: row.time ?? undefined,
-      type: row.type ?? undefined,
-      payee: row.payee ?? undefined,
-      contact: row.contact ?? undefined,
-      mode: row.mode ?? undefined,
-      reference: row.reference ?? undefined,
-      txnCost: row.txn_cost == null ? undefined : toNumber(row.txn_cost),
-      openingBalance: row.opening_balance == null ? undefined : toNumber(row.opening_balance),
-    })),
-    investors: (investorsResult.data ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      contributed: toNumber(row.contributed),
-      sharePct: toNumber(row.share_pct),
-      joinedAt: row.joined_at,
-      phone: row.phone ?? undefined,
-      notes: row.notes ?? undefined,
-      memberId: row.member_id ?? undefined,
-    })),
-    attendance: (attendanceResult.data ?? []).map((row) => ({
-      id: row.id,
-      staffId: row.staff_id,
-      date: row.date,
-      status: row.status,
-      checkIn: row.check_in ?? undefined,
-      checkOut: row.check_out ?? undefined,
-    })),
-    appraisals: (appraisalsResult.data ?? []).map((row) => ({
-      id: row.id,
-      memberId: row.member_id,
-      loanId: row.loan_id ?? undefined,
-      date: row.date,
-      officerId: row.officer_id ?? "",
-      goodDay: toNumber(row.good_day),
-      averageDay: toNumber(row.average_day),
-      badDay: toNumber(row.bad_day),
-      operatingExpenses: toNumber(row.operating_expenses),
-      nonEarningDays: row.non_earning_days,
-      existingDebt: toNumber(row.existing_debt),
-      monthlyDebtRepayment: toNumber(row.monthly_debt_repayment),
-      crbStatus: (row.crb_status as "Positive" | "Negative" | "Unknown" | "No Record") ?? "Unknown",
-      reschedulesLast12: row.reschedules_last_12,
-      dti: toNumber(row.dti),
-      dicr: toNumber(row.dicr),
-      bdsr: toNumber(row.bdsr),
-      lsr: toNumber(row.lsr),
-      savingsBuffer: toNumber(row.savings_buffer),
-      scoreDICR: toNumber(row.score_dicr),
-      scoreBDSR: toNumber(row.score_bdsr),
-      scoreSavings: toNumber(row.score_savings),
-      scoreCRB: toNumber(row.score_crb),
-      scoreBurden: toNumber(row.score_burden),
-      scoreDocs: toNumber(row.score_docs),
-      scoreCoop: toNumber(row.score_coop),
-      totalScore: toNumber(row.total_score),
-      decision:
-        (row.decision as "Approve" | "Approve with Adjustments" | "Refer / Downsize" | "Reject") ??
-        "Refer / Downsize",
-      riskLevel: (row.risk_level as "LOW" | "MODERATE" | "HIGH" | "VERY HIGH") ?? "MODERATE",
-      approvedAmount: toNumber(row.approved_amount),
-      approvedTerm: row.approved_term ?? "",
-      specialConditions: row.special_conditions ?? "",
-      notes: row.notes ?? "",
-    })),
-    fieldVisits: (fieldVisitsResult.data ?? []).map((row) => ({
-      id: row.id,
-      memberId: row.member_id,
-      date: row.date,
-      type: row.type,
-      lat: row.lat == null ? undefined : toNumber(row.lat),
-      lng: row.lng == null ? undefined : toNumber(row.lng),
-      locationNotes: row.location_notes ?? "",
-      photos: row.photos ?? undefined,
-      by: row.by_staff ?? "",
-    })),
-    followups: (followupsResult.data ?? []).map((row) => ({
-      id: row.id,
-      loanId: row.loan_id,
-      memberId: row.member_id,
-      date: row.date,
-      note: row.note,
-      outcome: row.outcome,
-      by: row.by_staff ?? "",
-    })),
-    penalties: (penaltiesResult.data ?? []).map((row) => ({
-      id: row.id,
-      memberId: row.member_id,
-      loanId: row.loan_id ?? undefined,
-      date: row.date,
-      amount: toNumber(row.amount),
-      reason: row.reason,
-      status: row.status,
-      paidFrom: row.paid_from ?? undefined,
-    })),
-    roundOff: (roundOffResult.data ?? []).map((row) => ({
-      id: row.id,
-      memberId: row.member_id,
-      date: row.date,
-      amount: toNumber(row.amount),
-      source: row.source,
-      ref: row.ref ?? undefined,
-    })),
-    staffMessages: (staffMessagesResult.data ?? []).map((row: any) => ({
-      id: row.id,
-      senderId: row.sender_id,
-      receiverId: row.receiver_id,
-      senderName: row.sender_name,
-      content: row.content ?? undefined,
-      attachment: row.attachment
-        ? {
-            name: row.attachment.name ?? "attachment",
-            type: row.attachment.type ?? "application/octet-stream",
-            size: Number(row.attachment.size ?? 0),
-            data: row.attachment.data ?? "",
-          }
-        : undefined,
-      createdAt: row.created_at,
-    })),
-    memos: (memosResult.data ?? []).map((row: any) => ({
-      id: row.id,
-      date: row.memo_date,
-      title: row.title,
-      body: row.body,
-      by: row.by_name,
-      byStaffId: row.by_staff_id ?? undefined,
-      createdAt: row.created_at,
-    })),
-    approvals: (approvalsResult.data ?? []).map((row: any) => ({
-      id: row.id,
-      kind: row.kind,
-      title: row.title,
-      detail: row.detail,
-      requestedBy: row.requested_by,
-      requestedByName: row.requested_by_name ?? undefined,
-      payload: row.payload ?? undefined,
-      status: row.status,
-      createdAt: row.created_at,
-      reviewedBy: row.reviewed_by ?? undefined,
-      reviewNote: row.review_note ?? undefined,
-      reviewedAt: row.reviewed_at ?? undefined,
-    })),
-    feePolicies: (feePoliciesResult.data ?? []).map((row: any) => ({
-      key: row.key,
-      label: row.label,
-      amount: toNumber(row.amount),
-      permanence: row.permanence,
-      durationDays: row.duration_days ?? undefined,
-      effectiveFrom: row.effective_from,
-      scope: row.scope,
-      custom: row.custom,
-      notes: row.notes ?? undefined,
-      updatedAt: row.updated_at,
-    })),
-    supportThreads: (supportThreadsResult.data ?? []).map((row: any) => ({
-      id: row.id,
-      memberId: row.member_id,
-      memberName: row.member_name,
-      assignedStaffId: row.assigned_staff_id ?? undefined,
-      status: row.status,
-      subject: row.subject,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      messages: (supportMessagesByThread.get(row.id) ?? []).map((message: any) => ({
-        id: message.id,
-        from: message.sender_kind,
-        fromName: message.sender_name,
-        fromId: message.sender_id ?? undefined,
-        text: message.text,
-        at: message.created_at,
-      })),
-    })),
+    ...base,
+    isAuthenticated: true,
+    authMode: "staff" as const,
+    currentUser: staffRows.find((row) => row.id === actor.id),
+    staff: staffRows,
+    members: (membersResult.data ?? []).map(mapMemberRow),
+    loans: (loansResult.data ?? []).map(mapLoanRow),
+    transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
+    pettyCash: (pettyCashResult.data ?? []).map(mapPettyCashRow),
+    investors: (investorsResult.data ?? []).map(mapInvestorRow),
+    attendance: (attendanceResult.data ?? []).map(mapAttendanceRow),
+    appraisals: (appraisalsResult.data ?? []).map(mapAppraisalRow),
+    fieldVisits: (fieldVisitsResult.data ?? []).map(mapFieldVisitRow),
+    followups: (followupsResult.data ?? []).map(mapFollowupRow),
+    penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
+    roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
+    staffMessages: (staffMessagesResult.data ?? []).map(mapStaffMessageRow),
+    memos: (memosResult.data ?? []).map(mapMemoRow),
+    approvals: (approvalsResult.data ?? []).map(mapApprovalRow),
+    feePolicies: (feePoliciesResult.data ?? []).map(mapFeePolicyRow),
+    supportThreads: (supportThreadsResult.data ?? []).map((row: any) =>
+      mapSupportThreadRow(row, supportMessagesByThread),
+    ),
   };
 });
 
@@ -972,6 +1168,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.name) throw new Error("Member name is required.");
     if (!data.phone) throw new Error("Member phone is required.");
     if (!isValidLocalKenyanPhone(data.phone)) {
@@ -1003,6 +1200,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const lastName =
       [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || undefined;
     const hasShop = data.businessPermanence === "permanent";
+    const fieldOfficerId = data.fieldOfficerId ?? actor.id;
 
     const { error: memberError } = await supabaseAdmin.from("members").insert({
       id: memberId,
@@ -1029,7 +1227,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       business_type: data.businessType ?? null,
       business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
-      field_officer_id: data.fieldOfficerId ?? null,
+      field_officer_id: fieldOfficerId,
       is_investor: data.investorContribution > 0,
     });
     if (memberError) throw new Error(memberError.message);
@@ -1062,7 +1260,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
         type: "investor_contribution",
         amount: data.investorContribution,
         member_id: memberId,
-        by_staff: data.fieldOfficerId ?? null,
+        by_staff: actor.id,
         note: `Member-investor onboarding: ${data.name}`,
       });
       if (txError) throw new Error(txError.message);
@@ -1106,6 +1304,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    await requireDirectorActor();
     if (!data.name) throw new Error("Staff name is required.");
     if (!data.email) throw new Error("Staff email is required.");
     if (!data.tempPassword || data.tempPassword.length < 6) {
@@ -1113,6 +1312,14 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     }
 
     const supabaseAdmin = await requireSupabaseAdmin();
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("staff")
+      .select("id")
+      .eq("email", data.email)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (existing) throw new Error("That email address is already assigned to another staff account.");
+
     const staffId = await nextPrefixedId("staff", "S", 1);
     const { error } = await supabaseAdmin.from("staff").insert({
       id: staffId,
@@ -1124,7 +1331,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       address: data.address ?? null,
       notes: data.notes ?? null,
       photo: data.photo ?? null,
-      temp_password: data.tempPassword,
+      temp_password: hashPassword(data.tempPassword),
       can_mark_attendance: data.role === "director" ? true : data.canMarkAttendance,
       fingerprint_enrolled: data.fingerprintEnrolled,
     });
@@ -1158,7 +1365,14 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
     if (!data.id) throw new Error("Staff id is required.");
+    if (data.patch.tempPassword && data.patch.tempPassword.length < 6) {
+      throw new Error("Temporary password must be at least 6 characters.");
+    }
+    if (data.id === actor.id && data.patch.role && data.patch.role !== "director") {
+      throw new Error("You cannot remove your own director access.");
+    }
     const supabaseAdmin = await requireSupabaseAdmin();
     const patch = data.patch;
     const { error } = await supabaseAdmin
@@ -1172,7 +1386,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
         address: patch.address?.trim() || null,
         notes: patch.notes?.trim() || null,
         photo: patch.photo || null,
-        temp_password: patch.tempPassword || undefined,
+        temp_password: patch.tempPassword ? hashPassword(patch.tempPassword) : undefined,
         can_mark_attendance: patch.role === "director" ? true : patch.canMarkAttendance,
         fingerprint_enrolled: patch.fingerprintEnrolled,
       })
@@ -1184,7 +1398,9 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
 export const deleteStaffRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
   .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
     if (!data.id) throw new Error("Staff id is required.");
+    if (data.id === actor.id) throw new Error("You cannot delete your own staff account.");
     const supabaseAdmin = await requireSupabaseAdmin();
     const { error } = await supabaseAdmin.from("staff").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
@@ -1206,7 +1422,16 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.staffId) throw new Error("Staff id is required.");
+    const canMarkOtherStaff =
+      actor.id === data.staffId ||
+      actor.role === "director" ||
+      actor.role === "manager" ||
+      actor.canMarkAttendance;
+    if (!canMarkOtherStaff) {
+      throw new Error("You can only update your own attendance unless granted attendance rights.");
+    }
     const supabaseAdmin = await requireSupabaseAdmin();
     const time = new Date().toTimeString().slice(0, 5);
     const id = `A-${data.date}-${data.staffId}`;
@@ -1254,8 +1479,8 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
           ? data.type
           : "business",
       locationNotes: String(data?.locationNotes ?? "").trim(),
-      lat: data?.lat == null || data?.lat === "" ? undefined : Number(data.lat),
-      lng: data?.lng == null || data?.lng === "" ? undefined : Number(data.lng),
+      lat: data?.lat == null ? undefined : Number(data.lat),
+      lng: data?.lng == null ? undefined : Number(data.lng),
       photos: Array.isArray(data?.photos)
         ? data.photos
             .map((photo) => String(photo ?? "").trim())
@@ -1266,6 +1491,7 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.memberId) throw new Error("Member is required.");
     if (!data.locationNotes && (data.lat == null || data.lng == null)) {
       throw new Error("Add location notes or capture GPS coordinates.");
@@ -1279,10 +1505,17 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     if (data.lng != null && !Number.isFinite(data.lng)) {
       throw new Error("Longitude is invalid.");
     }
+    if (data.photos.length > MAX_FIELD_VISIT_PHOTOS) {
+      throw new Error(`Attach at most ${MAX_FIELD_VISIT_PHOTOS} photos per field visit.`);
+    }
+    const totalPhotoBytes = data.photos.reduce((sum, photo) => sum + approxDataUrlBytes(photo), 0);
+    if (totalPhotoBytes > MAX_FIELD_VISIT_TOTAL_BYTES) {
+      throw new Error("The selected field visit photos are too large. Remove some photos and try again.");
+    }
 
     const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("field_visits", "FV", 1);
-    const { error } = await supabaseAdmin.from("field_visits").insert({
+    const insertPayload = {
       id,
       member_id: data.memberId,
       date: data.date,
@@ -1291,10 +1524,14 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       lng: data.lng ?? null,
       location_notes: data.locationNotes || null,
       photos: data.photos.length ? data.photos : null,
-      by_staff: data.byStaff ?? null,
-    });
+      by_staff: actor.id,
+    };
+    const { error } = await supabaseAdmin.from("field_visits").insert(insertPayload);
     if (error) throw new Error(error.message);
-    return { id };
+    return {
+      id,
+      visit: mapFieldVisitRow(insertPayload),
+    };
   });
 
 export const createLoanRecord = createServerFn({ method: "POST" })
@@ -1325,6 +1562,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.memberId) throw new Error("Member is required.");
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
 
@@ -1332,6 +1570,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     const id = await nextPrefixedId("loans", "L", 1001);
     const approvedAmount =
       data.status === "active" ? (data.approvedAmount ?? data.principal) : data.approvedAmount;
+    const officerId = data.officerId ?? actor.id;
     const { error } = await supabaseAdmin.from("loans").insert({
       id,
       member_id: data.memberId,
@@ -1342,7 +1581,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       term_days: data.termDays ?? null,
       start_date: data.startDate,
       status: data.status as never,
-      officer_id: data.officerId ?? null,
+      officer_id: officerId,
       paid: 0,
       purpose: data.purpose ?? null,
     });
@@ -1355,7 +1594,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         amount: approvedAmount ?? data.principal,
         member_id: data.memberId,
         loan_id: id,
-        by_staff: data.officerId ?? null,
+        by_staff: actor.id,
         note: data.purpose ? `Disbursed for ${data.purpose}` : "Direct active loan disbursement",
       });
     }
@@ -1381,8 +1620,8 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireManagerOrDirectorActor();
     if (!data.loanId) throw new Error("Loan id is required.");
-    if (!data.reviewedBy) throw new Error("Reviewer is required.");
 
     const supabaseAdmin = await requireSupabaseAdmin();
     const { data: loan, error: loanError } = await supabaseAdmin
@@ -1399,7 +1638,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         .from("loans")
         .update({
           status: "rejected",
-          reviewed_by: data.reviewedBy,
+          reviewed_by: actor.id,
           review_note: data.note ?? null,
         })
         .eq("id", data.loanId);
@@ -1416,7 +1655,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         principal: approvedAmount,
         approved_amount: approvedAmount,
         status: "active",
-        reviewed_by: data.reviewedBy,
+        reviewed_by: actor.id,
         review_note: data.note ?? null,
       })
       .eq("id", data.loanId);
@@ -1428,7 +1667,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       amount: approvedAmount,
       member_id: loan.member_id,
       loan_id: loan.id,
-      by_staff: data.reviewedBy,
+      by_staff: actor.id,
       note: data.note ?? "Approved",
     });
 
@@ -1470,7 +1709,14 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (data.amount <= 0) throw new Error("Transaction amount must be above zero.");
+    if (data.type === "loan_repayment" && !data.loanId) {
+      throw new Error("Loan repayment transactions must be linked to a loan.");
+    }
+    if (data.type === "share_purchase" && data.amount % SHARE_PRICE !== 0) {
+      throw new Error(`Share purchases must be in increments of ${SHARE_PRICE}/=.`);
+    }
 
     const supabaseAdmin = await requireSupabaseAdmin();
     const id = await insertTransactionRow({
@@ -1479,7 +1725,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       amount: data.amount,
       member_id: data.memberId ?? null,
       loan_id: data.loanId ?? null,
-      by_staff: data.by || null,
+      by_staff: actor.id,
       note: data.note ?? null,
       ref: data.ref ?? null,
       account: data.account ?? null,
@@ -1498,6 +1744,9 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         if (data.type === "deposit") {
           patch.savings_balance = Number(member.savings_balance ?? 0) + data.amount;
         } else if (data.type === "withdrawal") {
+          if (Number(member.savings_balance ?? 0) < data.amount) {
+            throw new Error("Withdrawal exceeds the member's savings balance.");
+          }
           patch.savings_balance = Math.max(0, Number(member.savings_balance ?? 0) - data.amount);
         } else if (data.type === "share_purchase") {
           patch.shares = Number(member.shares ?? 0) + Math.floor(data.amount / SHARE_PRICE);
@@ -1505,7 +1754,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         if (Object.keys(patch).length > 0) {
           const { error: updateMemberError } = await supabaseAdmin
             .from("members")
-            .update(patch)
+            .update(patch as any)
             .eq("id", data.memberId);
           if (updateMemberError) throw new Error(updateMemberError.message);
         }
@@ -1571,6 +1820,7 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.description) throw new Error("Petty cash details are required.");
     if (data.amount <= 0) throw new Error("Petty cash amount must be above zero.");
 
@@ -1582,7 +1832,7 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
       description: data.description,
       amount: data.amount,
       category: data.category ?? null,
-      by_staff: data.by ?? null,
+      by_staff: actor.id,
       time: data.time ?? null,
       type: data.type ?? null,
       payee: data.payee ?? null,
@@ -1599,6 +1849,7 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
 export const createAppraisalRecord = createServerFn({ method: "POST" })
   .inputValidator((data: Record<string, unknown>) => data)
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     const memberId = String(data.memberId ?? "").trim();
     if (!memberId) throw new Error("Member is required.");
 
@@ -1609,7 +1860,7 @@ export const createAppraisalRecord = createServerFn({ method: "POST" })
       member_id: memberId,
       loan_id: data.loanId ? String(data.loanId) : null,
       date: new Date().toISOString().slice(0, 10),
-      officer_id: data.officerId ? String(data.officerId) : null,
+      officer_id: actor.id,
       good_day: Number(data.goodDay ?? 0),
       average_day: Number(data.averageDay ?? 0),
       bad_day: Number(data.badDay ?? 0),
@@ -1666,6 +1917,7 @@ export const createInvestorRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
     if (!data.name) throw new Error("Investor name is required.");
     if (data.contributed <= 0) throw new Error("Contribution must be above zero.");
 
@@ -1699,7 +1951,7 @@ export const createInvestorRecord = createServerFn({ method: "POST" })
       type: "investor_contribution",
       amount: data.contributed,
       member_id: data.memberId ?? null,
-      by_staff: data.byStaff ?? null,
+      by_staff: actor.id,
       note: `Investor: ${data.name}`,
     });
 
@@ -1725,6 +1977,7 @@ export const createFollowupRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.loanId || !data.memberId || !data.note) {
       throw new Error("Follow-up details are incomplete.");
     }
@@ -1738,15 +1991,27 @@ export const createFollowupRecord = createServerFn({ method: "POST" })
       date: data.date,
       note: data.note,
       outcome: data.outcome as never,
-      by_staff: data.by || null,
+      by_staff: actor.id,
     });
     if (error) throw new Error(error.message);
-    return { id };
+    return {
+      id,
+      followup: mapFollowupRow({
+        id,
+        loan_id: data.loanId,
+        member_id: data.memberId,
+        date: data.date,
+        note: data.note,
+        outcome: data.outcome,
+        by_staff: actor.id,
+      }),
+    };
   });
 
 export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { penaltyId: string }) => ({ penaltyId: String(data?.penaltyId ?? "").trim() }))
   .handler(async ({ data }) => {
+    await requireManagerOrDirectorActor();
     if (!data.penaltyId) throw new Error("Penalty id is required.");
 
     const supabaseAdmin = await requireSupabaseAdmin();
@@ -1801,6 +2066,7 @@ export const applyMpesaPaymentRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    await requireStaffActor();
     if (!data.account) throw new Error("M-Pesa account is required.");
     if (data.amount <= 0) throw new Error("M-Pesa amount must be above zero.");
     return applyMpesaPaymentToDatabase(data);
@@ -1823,17 +2089,17 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.senderId || !data.receiverId) throw new Error("Both sender and receiver are required.");
-    if (!data.senderName) throw new Error("Sender name is required.");
     if (!data.content && !data.attachment) throw new Error("Message cannot be empty.");
 
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const id = makeId("STM");
     const { error } = await runtimeDb.from("staff_messages").insert({
       id,
-      sender_id: data.senderId,
+      sender_id: actor.id,
       receiver_id: data.receiverId,
-      sender_name: data.senderName,
+      sender_name: actor.name,
       content: data.content ?? null,
       attachment: data.attachment ?? null,
     });
@@ -1858,17 +2124,18 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
     if (!data.title || !data.body || !data.by) throw new Error("Memo title, body and author are required.");
 
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const id = makeId("MEM");
     const { error } = await runtimeDb.from("staff_memos").insert({
       id,
       memo_date: data.date,
       title: data.title,
       body: data.body,
-      by_staff_id: data.byStaffId ?? null,
-      by_name: data.by,
+      by_staff_id: actor.id,
+      by_name: actor.name,
     });
     if (error) throw new Error(error.message);
     return { id };
@@ -1877,8 +2144,9 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
 export const deleteStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
   .handler(async ({ data }) => {
+    await requireStaffActor();
     if (!data.id) throw new Error("Memo id is required.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb.from("staff_memos").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1903,19 +2171,31 @@ export const createApprovalRequestRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
     if (!data.kind || !data.title || !data.detail || !data.requestedBy) {
       throw new Error("Approval request is incomplete.");
     }
 
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    let requestedBy = data.requestedBy;
+    let requestedByName = data.requestedByName ?? null;
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      requestedBy = member.id;
+      requestedByName = member.name;
+    } else {
+      const actor = await requireStaffActor();
+      requestedBy = actor.id;
+      requestedByName = actor.name;
+    }
     const id = makeId("APR");
     const { error } = await runtimeDb.from("approval_requests").insert({
       id,
       kind: data.kind,
       title: data.title,
       detail: data.detail,
-      requested_by: data.requestedBy,
-      requested_by_name: data.requestedByName ?? null,
+      requested_by: requestedBy,
+      requested_by_name: requestedByName,
       payload: data.payload ?? null,
     });
     if (error) throw new Error(error.message);
@@ -1937,13 +2217,14 @@ export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    if (!data.id || !data.reviewedBy) throw new Error("Approval decision is incomplete.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const actor = await requireManagerOrDirectorActor();
+    if (!data.id) throw new Error("Approval decision is incomplete.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb
       .from("approval_requests")
       .update({
         status: data.decision,
-        reviewed_by: data.reviewedBy,
+        reviewed_by: actor.id,
         review_note: data.note ?? null,
         reviewed_at: new Date().toISOString(),
       })
@@ -1977,8 +2258,9 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    await requireDirectorActor();
     if (!data.key || !data.label) throw new Error("Fee policy key and label are required.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb.from("fee_policies").upsert({
       key: data.key,
       label: data.label,
@@ -1997,8 +2279,9 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
 export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { key: string }) => ({ key: String(data?.key ?? "").trim() }))
   .handler(async ({ data }) => {
+    await requireDirectorActor();
     if (!data.key) throw new Error("Fee key is required.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb.from("fee_policies").delete().eq("key", data.key);
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -2026,24 +2309,50 @@ export const createSupportThreadRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
     if (!data.memberId || !data.memberName || !data.subject) {
       throw new Error("Support thread details are incomplete.");
     }
 
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    let memberId = data.memberId;
+    let memberName = data.memberName;
+    let initialMessages = data.initialMessages;
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      memberId = member.id;
+      memberName = member.name;
+      initialMessages = data.initialMessages.map((message) =>
+        message.from === "member"
+          ? {
+              ...message,
+              from: "member" as const,
+              fromName: member.name,
+              fromId: member.id,
+            }
+          : {
+              ...message,
+              from: "ai" as const,
+              fromName: "SautiAI",
+              fromId: undefined,
+            },
+      );
+    } else {
+      await requireStaffActor();
+    }
     const id = makeId("SUP");
     const { error: threadError } = await runtimeDb.from("support_threads").insert({
       id,
-      member_id: data.memberId,
-      member_name: data.memberName,
+      member_id: memberId,
+      member_name: memberName,
       assigned_staff_id: data.assignedStaffId ?? null,
       status: data.assignedStaffId ? "open" : "ai",
       subject: data.subject,
     });
     if (threadError) throw new Error(threadError.message);
 
-    if (data.initialMessages.length > 0) {
-      const rows = data.initialMessages.map((message, index) => ({
+    if (initialMessages.length > 0) {
+      const rows = initialMessages.map((message, index) => ({
         id: `${id}-MSG-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
         thread_id: id,
         sender_kind: message.from,
@@ -2075,18 +2384,47 @@ export const appendSupportMessageRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
     if (!data.threadId || !data.fromName || !data.text) throw new Error("Support message is incomplete.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    let senderKind: "member" | "staff";
+    let senderName: string;
+    let senderId: string;
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      const { data: thread, error: threadError } = await runtimeDb
+        .from("support_threads")
+        .select("member_id")
+        .eq("id", data.threadId)
+        .maybeSingle();
+      if (threadError) throw new Error(threadError.message);
+      if (!thread || thread.member_id !== member.id) {
+        throw new Error("You cannot reply to that support thread.");
+      }
+      senderKind = "member";
+      senderName = member.name;
+      senderId = member.id;
+    } else {
+      const actor = await requireStaffActor();
+      senderKind = "staff";
+      senderName = actor.name;
+      senderId = actor.id;
+    }
     const id = makeId("SUM");
     const { error } = await runtimeDb.from("support_messages").insert({
       id,
       thread_id: data.threadId,
-      sender_kind: data.from,
-      sender_name: data.fromName,
-      sender_id: data.fromId ?? null,
+      sender_kind: senderKind,
+      sender_name: senderName,
+      sender_id: senderId,
       text: data.text,
     });
     if (error) throw new Error(error.message);
+    const { error: threadUpdateError } = await runtimeDb
+      .from("support_threads")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", data.threadId);
+    if (threadUpdateError) throw new Error(threadUpdateError.message);
     return { id };
   });
 
@@ -2103,13 +2441,15 @@ export const updateSupportThreadRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    await requireStaffActor();
     if (!data.id) throw new Error("Support thread id is required.");
-    const runtimeDb = requireSupabaseAdmin() as any;
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb
       .from("support_threads")
       .update({
         status: data.status,
         assigned_staff_id: data.assignedStaffId ?? null,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);

@@ -121,8 +121,8 @@ export function FollowUps() {
                   <FollowupForm
                     loanId={loan.id}
                     memberId={member.id}
-                    onAdd={(note, outcome) => {
-                      addFollowup({
+                    onAdd={async (note, outcome) => {
+                      await addFollowup({
                         loanId: loan.id,
                         memberId: member.id,
                         note,
@@ -194,7 +194,10 @@ function FollowupForm({
 }: {
   loanId: string;
   memberId: string;
-  onAdd: (note: string, outcome: "promised" | "paid" | "no-show" | "dispute" | "other") => void;
+  onAdd: (
+    note: string,
+    outcome: "promised" | "paid" | "no-show" | "dispute" | "other",
+  ) => Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const [outcome, setOutcome] = useState<"promised" | "paid" | "no-show" | "dispute" | "other">(
@@ -220,9 +223,9 @@ function FollowupForm({
         <option value="other">Other</option>
       </select>
       <button
-        onClick={() => {
+        onClick={async () => {
           if (!note.trim()) return;
-          onAdd(note, outcome);
+          await onAdd(note, outcome);
           setNote("");
         }}
         className="px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"

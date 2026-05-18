@@ -76,10 +76,10 @@ export function RepeatApplication({
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
-  const submit = () => {
+  const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
-    const loanId = addLoan({
+    const loanId = await addLoan({
       memberId: member.id,
       principal: loanAmount,
       rate: calc.ratePct,

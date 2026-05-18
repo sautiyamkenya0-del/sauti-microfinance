@@ -60,10 +60,9 @@ function AttendancePage() {
     (row) => row?.status === "present" || row?.status === "signed_out",
   ).length;
   const permissionToday = todayRows.filter((row) => row?.status === "permission").length;
-  const actionable =
+  const canMarkOthers =
     currentUser.role === "director" ||
     currentUser.role === "manager" ||
-    currentUser.role === "loan_officer" ||
     currentUser.canMarkAttendance;
 
   async function applyStatus(staffId: string, status: Attendance["status"], when?: "in" | "out") {
@@ -152,7 +151,7 @@ function AttendancePage() {
                 <th className="px-5 py-3 text-left">Status</th>
                 <th className="px-5 py-3 text-left">Check-in</th>
                 <th className="px-5 py-3 text-left">Check-out</th>
-                {actionable && <th className="px-5 py-3 text-left">Actions</th>}
+                <th className="px-5 py-3 text-left">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -170,7 +169,7 @@ function AttendancePage() {
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">{row?.checkIn ?? "-"}</td>
                     <td className="px-5 py-3 text-muted-foreground">{row?.checkOut ?? "-"}</td>
-                    {actionable && (
+                    {(member.id === currentUser.id || canMarkOthers) && (
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-2">
                           <button

@@ -12,32 +12,39 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
-  const { loginMember, loginStaff, setAuthenticated } = useStore();
+  const { loginMember, loginStaff } = useStore();
   const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [secret, setSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     const id = identifier.trim();
     if (!id || !secret) return toast.error("Enter your sign-in details.");
 
-    if (id.includes("@")) {
-      const staff = loginStaff(id, secret);
-      if (!staff) return toast.error("Invalid email or password.");
-      setAuthenticated(true);
-      toast.success(`Welcome, ${staff.name}`);
-      router.navigate({ to: "/" });
-      return;
+    setSubmitting(true);
+    try {
+      if (id.includes("@")) {
+        const staff = await loginStaff(id, secret);
+        if (!staff) return toast.error("Invalid email or password.");
+        toast.success(`Welcome, ${staff.name}`);
+        await router.navigate({ to: "/" });
+        return;
+      }
+
+      const member = await loginMember(id, secret);
+      if (!member) return toast.error("The supplied sign-in details are not valid.");
+
+      toast.success(`Welcome, ${member.name}`);
+      await router.navigate({ to: "/portal" });
+    } catch (error: any) {
+      toast.error(error?.message ?? "Sign-in failed. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-
-    const member = loginMember(id, secret);
-    if (!member) return toast.error("The supplied sign-in details are not valid.");
-
-    setAuthenticated(true);
-    toast.success(`Welcome, ${member.name}`);
-    router.navigate({ to: "/portal" });
   };
 
   return (
@@ -93,9 +100,10 @@ function LoginPage() {
 
             <button
               type="submit"
+              disabled={submitting}
               className="mt-2 w-full rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
             >
-              Sign in
+              {submitting ? "Signing in..." : "Sign in"}
             </button>
           </form>
         </div>

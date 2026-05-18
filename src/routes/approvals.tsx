@@ -78,8 +78,13 @@ function ApprovalsPage() {
                       {canDecide && (
                         <>
                           <button
-                            onClick={() => {
-                              approveLoan(l.id, l.principal, currentUser.id, "Approved from queue");
+                            onClick={async () => {
+                              await approveLoan(
+                                l.id,
+                                l.principal,
+                                currentUser.id,
+                                "Approved from queue",
+                              );
                               toast.success("Loan approved & disbursed");
                             }}
                             className="text-xs px-2 py-1 rounded-md bg-success/15 text-success hover:bg-success/25"
@@ -87,8 +92,8 @@ function ApprovalsPage() {
                             Approve
                           </button>
                           <button
-                            onClick={() => {
-                              rejectLoan(l.id, currentUser.id, "Rejected from queue");
+                            onClick={async () => {
+                              await rejectLoan(l.id, currentUser.id, "Rejected from queue");
                               toast.warning("Loan rejected");
                             }}
                             className="text-xs px-2 py-1 rounded-md bg-destructive/15 text-destructive hover:bg-destructive/25"
@@ -132,8 +137,8 @@ function ApprovalsPage() {
                 key={r.id}
                 req={r}
                 canDecide={canDecide}
-                onDecide={(d, note) => {
-                  decide(r.id, d, currentUser.id, note);
+                onDecide={async (d, note) => {
+                  await decide(r.id, d, currentUser.id, note);
                   toast.success(`Request ${d}`);
                 }}
               />
@@ -152,7 +157,7 @@ function RequestRow({
 }: {
   req: ApprovalRequest;
   canDecide: boolean;
-  onDecide: (d: "approved" | "rejected", note?: string) => void;
+  onDecide: (d: "approved" | "rejected", note?: string) => Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const tone =
@@ -195,13 +200,13 @@ function RequestRow({
           />
           <div className="flex gap-2">
             <button
-              onClick={() => onDecide("approved", note)}
+              onClick={() => void onDecide("approved", note)}
               className="flex-1 text-xs px-2 py-1 rounded-md bg-success/15 text-success hover:bg-success/25"
             >
               Approve
             </button>
             <button
-              onClick={() => onDecide("rejected", note)}
+              onClick={() => void onDecide("rejected", note)}
               className="flex-1 text-xs px-2 py-1 rounded-md bg-destructive/15 text-destructive hover:bg-destructive/25"
             >
               Reject

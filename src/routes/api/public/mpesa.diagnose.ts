@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
+import { requireDirectorActor } from "@/lib/auth.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
 
 /** GET /api/public/mpesa/diagnose
@@ -10,6 +11,7 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
   server: {
     handlers: {
       GET: async () => {
+        await requireDirectorActor();
         const adminEnv = getSupabaseAdminEnvStatus();
         const ck = (await getSecret("MPESA_CONSUMER_KEY")) ?? "";
         const cs = (await getSecret("MPESA_CONSUMER_SECRET")) ?? "";

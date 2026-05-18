@@ -86,9 +86,9 @@ function SavingsPage() {
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
               />
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (amount <= 0) return;
-                  recordTransaction({ type, amount, memberId, by: currentUser.id });
+                  await recordTransaction({ type, amount, memberId, by: currentUser.id });
                   toast.success(`${type === "deposit" ? "Deposit" : "Withdrawal"} recorded`);
                   setAmount(0);
                 }}

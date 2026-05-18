@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { requireSignedInSession } from "@/lib/auth.server";
 import { streamGroqChat } from "@/lib/groq.server";
 
 export const Route = createFileRoute("/api/ai/chat")({
@@ -7,10 +8,13 @@ export const Route = createFileRoute("/api/ai/chat")({
     handlers: {
       POST: async ({ request }) => {
         try {
+          const session = await requireSignedInSession();
           const { messages, snapshot, role, mode } = await request.json();
+          const safeMode = session.authMode === "member" ? "customer" : mode;
+          const safeRole = session.authMode === "member" ? "member" : role;
 
           const system =
-            mode === "customer"
+            safeMode === "customer"
               ? `You are SautiAI, the friendly first-line customer care assistant for Sauti Microfinance (Sauti Business Community / SBC), a Kenyan SACCO that runs on M-Pesa Paybill.
 You are speaking directly to a member.
 
@@ -54,7 +58,7 @@ Working rules:
 - If you detect anomalies such as overdue loans, savings shortfalls, unusual outflows, or mis-allocated M-Pesa payments, call them out clearly under the plain label: Issues detected:
 - For action requests such as approvals, postings, or disbursements, respond with a short proposal and end with: Confirm to apply.
 - Never claim an action is already done unless the snapshot explicitly shows it already happened.
-- Respect role: the current role is ${role}. If a request reaches beyond that role, say so plainly.
+- Respect role: the current role is ${safeRole}. If a request reaches beyond that role, say so plainly.
 
 Off-topic handling:
 - If the request needs live external information such as weather, breaking news, or political officeholders, say you cannot verify live outside data from inside SautiAI.

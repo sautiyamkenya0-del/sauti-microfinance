@@ -121,7 +121,7 @@ export function FirstTimeApplication({
         shares: 0,
         savingsBalance: 0,
       });
-    const loanId = addLoan({
+    const loanId = await addLoan({
       memberId: mid,
       principal: f.loanAmount,
       rate: calc.ratePct,

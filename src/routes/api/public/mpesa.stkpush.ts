@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
+import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
+import { toComparableKenyanPhone } from "@/lib/utils";
 
 /** Daraja STK Push trigger.
  * POST { phone, amount, accountRef, description } -> sends a real Lipa Na M-Pesa Online prompt.
@@ -11,6 +13,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
     handlers: {
       POST: async ({ request }) => {
         try {
+          const session = await requireSignedInSession();
           const body = await request.json();
           const phoneRaw = String(body.phone ?? "").replace(/\D/g, "");
           const amount = Math.max(1, Math.floor(Number(body.amount) || 0));
@@ -33,6 +36,30 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
               { ok: false, error: "Amount must be at least 1." },
               { status: 400 },
             );
+          }
+
+          if (session.authMode === "member") {
+            const member = await requireMemberActor();
+            const expectedDigits = member.id.replace(/^M0*/, "") || "0";
+            const expectedAccountRef = `SBC${expectedDigits.padStart(4, "0")}K`;
+            if (accountRef.toUpperCase() !== expectedAccountRef) {
+              return Response.json(
+                {
+                  ok: false,
+                  error: "Members can only trigger M-Pesa prompts for their own account.",
+                },
+                { status: 403 },
+              );
+            }
+            if (toComparableKenyanPhone(body.phone) !== toComparableKenyanPhone(member.phone)) {
+              return Response.json(
+                {
+                  ok: false,
+                  error: "Members can only trigger M-Pesa prompts to their registered phone number.",
+                },
+                { status: 403 },
+              );
+            }
           }
 
           const consumerKey = await getSecret("MPESA_CONSUMER_KEY");

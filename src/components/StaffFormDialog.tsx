@@ -36,7 +36,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
   const [nationalId, setNationalId] = useState(editing?.nationalId ?? "");
   const [address, setAddress] = useState(editing?.address ?? "");
   const [role, setRole] = useState<Role>(editing?.role ?? "loan_officer");
-  const [tempPassword, setTempPassword] = useState(editing?.tempPassword ?? "");
+  const [tempPassword, setTempPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [notes, setNotes] = useState(editing?.notes ?? "");
   const [enrolFp, setEnrolFp] = useState(false);
@@ -54,7 +54,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
     setNationalId(editing?.nationalId ?? "");
     setAddress(editing?.address ?? "");
     setRole(editing?.role ?? "loan_officer");
-    setTempPassword(editing?.tempPassword ?? "");
+    setTempPassword("");
     setShowPwd(false);
     setNotes(editing?.notes ?? "");
     setEnrolFp(false);
@@ -74,6 +74,9 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
     if (!editing && tempPassword.length < 6) {
       return toast.error("Temporary password must be at least 6 characters");
     }
+    if (editing && tempPassword && tempPassword.length < 6) {
+      return toast.error("New temporary password must be at least 6 characters");
+    }
 
     const payload = {
       name,
@@ -87,7 +90,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
       address,
       notes,
       photo,
-      tempPassword,
+      tempPassword: tempPassword.trim() || undefined,
       canMarkAttendance: role === "director" ? true : canMarkAttendance,
       fingerprintEnrolled: enrolFp || editing?.fingerprintEnrolled,
     };
@@ -226,13 +229,13 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
                 <option value="director">Director</option>
               </select>
             </Field>
-            <Field label="Temporary password" required>
+            <Field label={editing ? "New temporary password" : "Temporary password"} required={!editing}>
               <div className="relative">
                 <input
                   type={showPwd ? "text" : "password"}
                   value={tempPassword}
                   onChange={(e) => setTempPassword(e.target.value)}
-                  placeholder=">= 6 characters"
+                  placeholder={editing ? "Leave blank to keep the current password" : ">= 6 characters"}
                   className={inputCls + " pr-10"}
                 />
                 <button

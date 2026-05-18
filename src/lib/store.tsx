@@ -21,7 +21,7 @@ import {
   updateStaffRecord,
   upsertAttendanceRecord,
 } from "@/lib/app-data.functions";
-import { toComparableKenyanPhone } from "@/lib/utils";
+import { signInMember, signInStaff, signOutSession } from "@/lib/auth.functions";
 
 export type Role = "director" | "manager" | "loan_officer";
 
@@ -377,11 +377,11 @@ type Store = {
   staffMessages: StaffMessage[];
   sharePrice: number;
   /** Member auth — membership No. + phone number. Returns the matched member or null. */
-  loginMember: (memberNo: string, phone: string) => Member | null;
+  loginMember: (memberNo: string, phone: string) => Promise<Member | null>;
   /** Staff auth — email + temp password. */
-  loginStaff: (email: string, password: string) => Staff | null;
-  /** Logout — resets currentUser to default seed director (demo only). */
-  logout: () => void;
+  loginStaff: (email: string, password: string) => Promise<Staff | null>;
+  /** Logout — clears the server session and resets local state. */
+  logout: () => Promise<void>;
   addMember: (
     m: Omit<Member, "id" | "fees" | "isInvestor" | "investorId"> & {
       fees?: MandatoryFees;
@@ -432,6 +432,9 @@ const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
+  const authenticateMember = useServerFn(signInMember);
+  const authenticateStaff = useServerFn(signInStaff);
+  const signOut = useServerFn(signOutSession);
   const applyMpesaPaymentServer = useServerFn(applyMpesaPaymentRecord);
   const createAppraisal = useServerFn(createAppraisalRecord);
   const createMember = useServerFn(createMemberRecord);
@@ -470,6 +473,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   async function refreshFromDatabase() {
     try {
       const data = await load();
+      setIsAuthenticated(!!data.isAuthenticated);
+      setAuthMode(data.authMode ?? "staff");
+      setPortalMemberIdState(data.portalMemberId ?? "");
+      if (data.currentUser) {
+        setCurrentUserState(data.currentUser);
+      } else if (!data.isAuthenticated || data.authMode !== "staff") {
+        setCurrentUserState(seedStaff[0]);
+      }
       setStaff(data.staff);
       setMembers(data.members);
       setLoans(data.loans);
@@ -483,9 +494,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPenalties(data.penalties);
       setRoundOff(data.roundOff);
       setStaffMessages(data.staffMessages ?? []);
+      return data;
     } finally {
       setIsHydrated(true);
     }
+  }
+
+  function refreshInBackground(fallbackMessage: string) {
+    void refreshFromDatabase().catch((error: any) => {
+      toast.error(error?.message ?? fallbackMessage);
+    });
   }
 
   useEffect(() => {
@@ -495,11 +513,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!staff.length) return;
+    if (!staff.length || authMode !== "staff") return;
     setCurrentUserState((prev) => {
       return staff.find((member) => member.id === prev.id) ?? staff[0];
     });
-  }, [staff]);
+  }, [authMode, staff]);
 
   const setAuthenticated = (next: boolean) => {
     setIsAuthenticated(next);
@@ -687,7 +705,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             date: visit.date,
           },
         });
-        await refreshFromDatabase();
+        if (result.visit) {
+          setFieldVisits((current) => [
+            result.visit,
+            ...current.filter((existingVisit) => existingVisit.id !== result.visit.id),
+          ]);
+        }
+        refreshInBackground("Saved the field visit, but background sync failed.");
         return result.id;
       },
       addFollowup: async (n) => {
@@ -701,7 +725,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             by: n.by,
           },
         });
-        await refreshFromDatabase();
+        if (result.followup) {
+          setFollowups((current) => [
+            result.followup,
+            ...current.filter((existingFollowup) => existingFollowup.id !== result.followup.id),
+          ]);
+        }
+        refreshInBackground("Saved the follow-up, but background sync failed.");
         return result.id;
       },
       addStaffMessage: async (message) => {
@@ -721,41 +751,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const data = await load();
         setStaffMessages(data.staffMessages ?? []);
       },
-      loginMember: (memberNo, phone) => {
-        const norm = memberNo.trim().toUpperCase();
-        // Accept both raw IDs (M001) and SBC-prefixed (SBC0475K) — match the trailing digits
-        const m = norm.match(/(\d{1,4})/);
-        if (!m) return null;
-        const memberNum = m[1].padStart(3, "0");
-        const cleanPhone = toComparableKenyanPhone(phone);
-        const target = members.find((mb) => mb.id === `M${memberNum}`);
-        if (!target) return null;
-        const targetPhone = toComparableKenyanPhone(target.phone);
-        if (targetPhone && cleanPhone && targetPhone === cleanPhone) {
-          setAuthMode("member");
-          setPortalMemberId(target.id);
-          return target;
-        }
-        return null;
+      loginMember: async (memberNo, phone) => {
+        const result = await authenticateMember({
+          data: { memberNo, phone },
+        });
+        const data = await refreshFromDatabase();
+        return data?.members.find((member) => member.id === result.member.id) ?? null;
       },
-      loginStaff: (email, password) => {
-        const e = email.trim().toLowerCase();
-        const found = staff.find(
-          (s) => (s.email ?? "").toLowerCase() === e && (s.tempPassword ?? "") === password,
-        );
-        if (found) {
-          setAuthMode("staff");
-          setCurrentUser(found);
-          setAuthenticated(true);
-          return found;
-        }
-        return null;
+      loginStaff: async (email, password) => {
+        const result = await authenticateStaff({
+          data: { email, password },
+        });
+        const data = await refreshFromDatabase();
+        return data?.staff.find((member) => member.id === result.user.id) ?? null;
       },
-      logout: () => {
+      logout: async () => {
+        await signOut();
+        await refreshFromDatabase();
         setAuthMode("staff");
         setPortalMemberId("");
         setAuthenticated(false);
-        setCurrentUserState(staff[0] ?? seedStaff[0]);
+        setCurrentUserState(seedStaff[0]);
       },
       addStaff: async (s) => {
         const result = await createStaff({
@@ -885,13 +901,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createFollowup,
       createInvestor,
       createLoan,
+      createMember,
       createPetty,
+      createStaff,
       createStaffMessage,
       createTransaction,
+      deleteStaff,
       load,
       reviewLoan,
+      saveAttendance,
+      saveStaff,
+      signOut,
       settlePenaltyFromPoolServer,
-      staff,
+      authenticateMember,
+      authenticateStaff,
     ],
   );
 
