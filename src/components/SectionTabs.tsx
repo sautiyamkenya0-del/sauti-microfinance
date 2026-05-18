@@ -43,7 +43,7 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
   admin: [
     { to: "/staff-mgmt", label: "Staff Management", icon: UserCog },
-    { to: "/fees-policy", label: "Fees Policy", icon: Receipt },
+    { to: "/fees-policy", label: "Policy Center", icon: Receipt },
     { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/reports", label: "Reports", icon: FileBarChart },
     { to: "/policies", label: "SBC Policies", icon: BookOpen },

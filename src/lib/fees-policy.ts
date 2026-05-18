@@ -1,9 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
-import { useServerFn } from "@tanstack/react-start";
-
-import { deleteFeePolicyRecord, upsertFeePolicyRecord } from "@/lib/app-data.functions";
-import { listFeePolicies } from "@/lib/runtime-data.functions";
-
 export type FeeScope = "all" | "new_only" | "loan_holders" | "investors";
 export type FeePermanence = "permanent" | "semi";
 
@@ -19,6 +13,39 @@ export type FeePolicy = {
   notes?: string;
   updatedAt: string;
 };
+
+export const DEFAULT_FEE_POLICIES: FeePolicy[] = [
+  {
+    key: "membership",
+    label: "Membership Fee",
+    amount: 500,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "all",
+    custom: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    key: "card",
+    label: "Membership Card",
+    amount: 500,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "all",
+    custom: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    key: "sticker",
+    label: "Shop Sticker",
+    amount: 500,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "all",
+    custom: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+];
 
 export function isFeeActive(p: FeePolicy): boolean {
   if (p.permanence === "permanent") return true;
@@ -38,77 +65,22 @@ export function scopeLabel(s: FeeScope): string {
         : "Investors";
 }
 
-export function useFeesPolicy() {
-  const loadFeePolicies = useServerFn(listFeePolicies);
-  const [rows, setRows] = useState<FeePolicy[]>([]);
-
-  const refresh = useCallback(async () => {
-    setRows(await loadFeePolicies());
-  }, [loadFeePolicies]);
-
-  useEffect(() => {
-    refresh().catch(() => {});
-  }, [refresh]);
-
-  useEffect(() => {
-    const sync = () => {
-      if (document.hidden) return;
-      refresh().catch(() => {});
-    };
-    const timer = window.setInterval(sync, 60000);
-    window.addEventListener("focus", sync);
-    document.addEventListener("visibilitychange", sync);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", sync);
-      document.removeEventListener("visibilitychange", sync);
-    };
-  }, [refresh]);
-
-  return rows;
+export function normalizeFeePolicies(rows?: FeePolicy[] | null) {
+  const merged = new Map(DEFAULT_FEE_POLICIES.map((row) => [row.key, row]));
+  for (const row of rows ?? []) {
+    merged.set(row.key, row);
+  }
+  return Array.from(merged.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
 
-export function useFeePolicyActions() {
-  const saveFee = useServerFn(upsertFeePolicyRecord);
-  const removeFeeRecord = useServerFn(deleteFeePolicyRecord);
-  const loadFeePolicies = useServerFn(listFeePolicies);
-  const [rows, setRows] = useState<FeePolicy[]>([]);
-
-  const refresh = useCallback(async () => {
-    setRows(await loadFeePolicies());
-  }, [loadFeePolicies]);
-
-  useEffect(() => {
-    refresh().catch(() => {});
-  }, [refresh]);
-
-  const upsertFee = useCallback(
-    async (fee: FeePolicy) => {
-      await saveFee({
-        data: {
-          key: fee.key,
-          label: fee.label,
-          amount: fee.amount,
-          permanence: fee.permanence,
-          durationDays: fee.durationDays,
-          effectiveFrom: fee.effectiveFrom,
-          scope: fee.scope,
-          custom: fee.custom,
-          notes: fee.notes,
-        },
-      });
-      await refresh();
-    },
-    [refresh, saveFee],
-  );
-
-  const removeFee = useCallback(
-    async (key: string) => {
-      await removeFeeRecord({ data: { key } });
-      await refresh();
-    },
-    [refresh, removeFeeRecord],
-  );
-
-  return { rows, upsertFee, removeFee, refresh };
+export function feePolicyAmount(
+  rows: FeePolicy[] | undefined,
+  key: string,
+  fallback = 0,
+  activeOnly = true,
+) {
+  const found = normalizeFeePolicies(rows).find((row) => row.key === key);
+  if (!found) return fallback;
+  if (activeOnly && !isFeeActive(found)) return fallback;
+  return found.amount;
 }

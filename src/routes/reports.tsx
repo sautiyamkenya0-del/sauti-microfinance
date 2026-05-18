@@ -70,7 +70,11 @@ function ReportsPage() {
     const principal = loan.approvedAmount ?? loan.principal;
     return sum + sbcDeductions(principal).insurance;
   }, 0);
-  const transactionFees = processingFees + insuranceFees;
+  const transactionCostFees = disbursedLoans.reduce((sum, loan) => {
+    const principal = loan.approvedAmount ?? loan.principal;
+    return sum + sbcDeductions(principal).transactionCost;
+  }, 0);
+  const transactionFees = processingFees + insuranceFees + transactionCostFees;
   const mandatoryFees = feeTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
   const roundOffRevenue = roundOff.reduce((sum, entry) => sum + entry.amount, 0);
   const dailyPenaltyRevenue = paidPenalties
@@ -103,7 +107,7 @@ function ReportsPage() {
       label: "Transaction fees",
       count: disbursedLoans.length,
       amount: transactionFees,
-      note: "Processing and insurance deductions on disbursed loans.",
+      note: "Processing, insurance, and transaction-cost deductions on disbursed loans.",
     },
     {
       key: "mandatory_fees",
@@ -150,6 +154,13 @@ function ReportsPage() {
       count: disbursedLoans.length,
       amount: insuranceFees,
       note: "Insurance deductions earned on disbursement.",
+    },
+    {
+      key: "transaction_cost_fees",
+      label: "Transaction cost fees",
+      count: disbursedLoans.length,
+      amount: transactionCostFees,
+      note: "Transaction-cost deductions earned on disbursement.",
     },
     {
       key: "mandatory_fee_payments",

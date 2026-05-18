@@ -103,6 +103,19 @@ function mapFeePolicyRow(row: DbRow) {
   };
 }
 
+function mapPerformanceTargetRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    metric: readText(row.metric),
+    period: readText(row.period),
+    expectedValue: readNumber(row.expected_value),
+    startOn: readText(row.start_on),
+    notes: optionalText(row.notes),
+    createdAt: readText(row.created_at),
+    updatedAt: readText(row.updated_at),
+  };
+}
+
 function groupSupportMessages(rows: DbRow[]) {
   const grouped = new Map<string, DbRow[]>();
   for (const row of rows) {
@@ -182,6 +195,19 @@ export const listFeePolicies = createServerFn({ method: "POST" }).handler(async 
 
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => mapFeePolicyRow(row as DbRow));
+});
+
+export const listPerformanceTargets = createServerFn({ method: "POST" }).handler(async () => {
+  await requireStaffActor();
+  const supabaseAdmin = requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("performance_targets")
+    .select("*")
+    .order("start_on", { ascending: false })
+    .order("updated_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => mapPerformanceTargetRow(row as DbRow));
 });
 
 export const listSupportThreads = createServerFn({ method: "POST" }).handler(async () => {

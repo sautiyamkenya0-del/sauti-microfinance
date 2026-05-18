@@ -28,7 +28,7 @@ import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
-import { useFeesPolicy, isFeeActive, scopeLabel } from "@/lib/fees-policy";
+import { isFeeActive, scopeLabel } from "@/lib/fees-policy";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -58,6 +58,7 @@ function Portal() {
     portalMemberId,
     setPortalMemberId,
     logout,
+    feePolicies,
   } = useStore();
   // The Member Portal route lives inside the staff app; every signed-in user here
   // is staff (director / manager / loan_officer). Render it as a staff "view-as"
@@ -86,7 +87,7 @@ function Portal() {
   const myLoans = loans.filter((l) => l.memberId === memberId);
   const myTx = transactions.filter((t) => t.memberId === memberId);
   const myPen = penalties.filter((p) => p.memberId === memberId);
-  const fees = useFeesPolicy().filter(isFeeActive);
+  const fees = feePolicies.filter(isFeeActive);
   const visibleFees = member
     ? fees.filter((f) => f.key !== "sticker" || memberNeedsSticker(member))
     : fees;

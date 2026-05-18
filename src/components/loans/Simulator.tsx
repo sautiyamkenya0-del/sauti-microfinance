@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Section } from "@/components/ui-bits";
-import { fmtKES, roundUpKES, SBC_UPFRONT_TABLE } from "@/lib/store";
+import { fmtKES, loanRateForTerm, roundUpKES, sbcDeductions, SBC_UPFRONT_TABLE, useStore } from "@/lib/store";
 
 type LoanType = "standard" | "premium";
 
@@ -29,15 +29,6 @@ const DAY_OPTIONS: Record<LoanType, number[]> = {
 
 const SAVINGS_OPTIONS = [50, 100];
 
-const FEES = {
-  processingPct: 2,
-  insurancePct: 1.5,
-  transactionCost: 50,
-  registration: 500,
-  membership: 500,
-  sticker: 100,
-};
-
 function tierFor(amount: number) {
   return SBC_UPFRONT_TABLE.find((t) => amount >= t.min && amount <= t.max);
 }
@@ -51,15 +42,8 @@ function fmtDate(d: Date) {
   });
 }
 
-function simulatorRatePct(days: number) {
-  if (days === 7) return 10;
-  if (days === 14) return 15;
-  if (days === 30) return 20;
-  if (days === 60) return 25;
-  return 30;
-}
-
 export function Simulator() {
+  const { feePolicies, policySettings } = useStore();
   const [loanType, setLoanType] = useState<LoanType>("premium");
   const [amount, setAmount] = useState(30000);
   const [days, setDays] = useState<number>(30);
@@ -74,14 +58,13 @@ export function Simulator() {
   }, [dayOptions, days]);
 
   const calc = useMemo(() => {
-    const ratePct = simulatorRatePct(days);
+    const ratePct = loanRateForTerm(days);
     const interest = amount * (ratePct / 100);
-    const processing = amount * (FEES.processingPct / 100);
-    const insurance = amount * (FEES.insurancePct / 100);
-    const transaction = FEES.transactionCost;
-    const registration = FEES.registration;
-    const membership = FEES.membership;
-    const sticker = stickerOn ? FEES.sticker : 0;
+    const deductions = sbcDeductions(amount);
+    const transaction = deductions.transactionCost;
+    const registration = feePolicies.find((fee) => fee.key === "membership")?.amount ?? 500;
+    const membership = feePolicies.find((fee) => fee.key === "card")?.amount ?? 500;
+    const sticker = stickerOn ? (feePolicies.find((fee) => fee.key === "sticker")?.amount ?? 500) : 0;
 
     const totalRepayment = amount + interest + transaction;
     const rawDaily = totalRepayment / days;
@@ -95,7 +78,7 @@ export function Simulator() {
     const tier = tierFor(amount);
     const upfront = tier ? tier.minShares + tier.minSavings : 0;
     const totalUpfrontNow = upfront + registration + membership + sticker;
-    const netDisbursed = amount;
+    const netDisbursed = amount - deductions.total;
 
     const dueDates = Array.from({ length: days }, (_, i) => {
       const d = new Date(startDate);
@@ -105,8 +88,8 @@ export function Simulator() {
 
     return {
       interest,
-      processing,
-      insurance,
+      processing: deductions.processing,
+      insurance: deductions.insurance,
       transaction,
       registration,
       membership,
@@ -125,7 +108,7 @@ export function Simulator() {
       dueDates,
       tier,
     };
-  }, [amount, dailySavings, days, startDate, stickerOn]);
+  }, [amount, dailySavings, days, feePolicies, startDate, stickerOn]);
 
   const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
 
@@ -283,9 +266,12 @@ export function Simulator() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Mini label="Processing Fee" value={fmtKES(calc.processing)} />
               <Mini label="Insurance Fee" value={fmtKES(calc.insurance)} />
-              <Mini label="Transaction Cost" value={fmtKES(calc.transaction)} />
+              <Mini
+                label={`Transaction Cost (${policySettings.percentages.transactionCostPct}%)`}
+                value={fmtKES(calc.transaction)}
+              />
               <Mini label="Net Disbursed" value={fmtKES(calc.netDisbursed)} />
-              <Mini label="Registration Fee" value={fmtKES(calc.registration)} />
+              <Mini label="Membership Fee" value={fmtKES(calc.registration)} />
               <Mini label="Membership Card" value={fmtKES(calc.membership)} />
               <Mini label="Sticker Fee" value={fmtKES(calc.sticker)} />
             </div>

@@ -560,6 +560,10 @@ export function FirstTimeApplication({
               label={`Insurance (${SBC_FEES.insurancePct}%)`}
               value={fmtKES(calc.ded.insurance)}
             />
+            <Row
+              label={`Transaction Cost (${SBC_FEES.transactionCostPct}%)`}
+              value={fmtKES(calc.ded.transactionCost)}
+            />
             <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
           </div>
           <div className="space-y-2">

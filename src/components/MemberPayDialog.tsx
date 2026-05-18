@@ -21,17 +21,20 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
 export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
-  const { loans } = useStore();
+  const { loans, feePolicies, policySettings } = useStore();
   const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
   const [busy, setBusy] = useState(false);
 
   const [legacyStickerOn, setLegacyStickerOn] = useState(member.fees.hasShop || false);
   const stickerOn = member.businessPermanence ? memberNeedsSticker(member) : legacyStickerOn;
   const fees = member.fees;
+  const membershipAmount = feePolicies.find((fee) => fee.key === "membership")?.amount ?? 500;
+  const cardAmount = feePolicies.find((fee) => fee.key === "card")?.amount ?? 500;
+  const stickerAmount = feePolicies.find((fee) => fee.key === "sticker")?.amount ?? 500;
   const feeQueue = [
-    { key: "membership", label: "Membership fee", amount: 500, owed: !fees.membership },
-    { key: "card", label: "Membership card", amount: 500, owed: !fees.card },
-    { key: "sticker", label: "Sticker (shop)", amount: 500, owed: stickerOn && !fees.sticker },
+    { key: "membership", label: "Membership fee", amount: membershipAmount, owed: !fees.membership },
+    { key: "card", label: "Membership card", amount: cardAmount, owed: !fees.card },
+    { key: "sticker", label: "Sticker (shop)", amount: stickerAmount, owed: stickerOn && !fees.sticker },
   ];
   const feesDue = feeQueue.filter((f) => f.owed).reduce((s, f) => s + f.amount, 0);
 
@@ -53,12 +56,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const previewAmount = useMemo(() => {
     if (mode === "officer") {
-      if (purpose === "upfront") return feesDue + 500;
+      if (purpose === "upfront") return feesDue + policySettings.percentages.firstUpfrontAmount;
       if (purpose === "fees") return feesDue;
       return 0;
     }
     return Math.max(0, Math.floor(amount || 0));
-  }, [mode, purpose, amount, feesDue]);
+  }, [amount, feesDue, mode, policySettings.percentages.firstUpfrontAmount, purpose]);
 
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
@@ -240,7 +243,7 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
               {purpose === "upfront" && (
                 <div className="mt-1 flex justify-between border-t border-border pt-1">
                   <span>First daily installment</span>
-                  <span>{fmtKES(500)}</span>
+                  <span>{fmtKES(policySettings.percentages.firstUpfrontAmount)}</span>
                 </div>
               )}
             </div>

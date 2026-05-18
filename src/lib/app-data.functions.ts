@@ -10,6 +10,12 @@ import {
 } from "@/lib/auth.server";
 import { recordAudit } from "@/lib/audit.server";
 import {
+  DEFAULT_FEE_POLICIES,
+  feePolicyAmount,
+  normalizeFeePolicies,
+  type FeePolicy,
+} from "@/lib/fees-policy";
+import {
   formatMembershipNumber,
   isInvestorCategory,
   isInvestorOnlyCategory,
@@ -19,6 +25,16 @@ import {
   resolveMemberCategory,
   type MemberCategory,
 } from "@/lib/membership";
+import {
+  DEFAULT_POLICY_SETTINGS,
+  POLICY_SETTING_LABELS,
+  clonePolicySettings,
+  mergePolicySettings,
+  policySettingsRowsFromConfig,
+  waterfallRuleForScenario,
+  type PolicySettingKey,
+  type PolicySettingRow,
+} from "@/lib/policy-settings";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -95,8 +111,8 @@ function summarizeAttachment(attachment?: Record<string, unknown>) {
 }
 
 const SHARE_PRICE = 500;
-const ROUNDING_BASE = 1;
-const MANDATORY_SAVINGS_THRESHOLD = 1000;
+const ROUNDING_BASE = DEFAULT_POLICY_SETTINGS.percentages.roundOffStep;
+const MANDATORY_SAVINGS_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold;
 const MAX_FIELD_VISIT_PHOTOS = 6;
 const MAX_FIELD_VISIT_TOTAL_BYTES = 8 * 1024 * 1024;
 
@@ -465,42 +481,40 @@ export async function applyMpesaPaymentToDatabase(args: {
     };
   }
 
+  const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+  const feePolicies = await loadRuntimeFeePolicies(supabaseAdmin);
   const memberPatch: Record<string, unknown> = {};
-  const feeQueue: Array<{
-    key: "fee_membership" | "fee_card" | "fee_sticker";
-    label: string;
-    amount: number;
-    required: boolean;
-  }> = [
-    { key: "fee_membership", label: "Membership fee", amount: 500, required: true },
-    { key: "fee_card", label: "Membership card", amount: 500, required: true },
+  const roundOffStep = policySettings.percentages.roundOffStep || ROUNDING_BASE;
+  const mandatorySavingsThreshold =
+    policySettings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD;
+  const feeQueue: Record<
+    string,
     {
+      key: "fee_membership" | "fee_card" | "fee_sticker";
+      label: string;
+      amount: number;
+      required: boolean;
+    }
+  > = {
+    membership_fee: {
+      key: "fee_membership",
+      label: "Membership fee",
+      amount: feePolicyAmount(feePolicies, "membership", 0),
+      required: true,
+    },
+    card_fee: {
+      key: "fee_card",
+      label: "Membership card",
+      amount: feePolicyAmount(feePolicies, "card", 0),
+      required: true,
+    },
+    sticker_fee: {
       key: "fee_sticker",
       label: "Sticker fee",
-      amount: 500,
+      amount: feePolicyAmount(feePolicies, "sticker", 0),
       required: memberNeedsStickerRow(member),
     },
-  ];
-
-  for (const fee of feeQueue) {
-    if (!fee.required) continue;
-    if (member[fee.key]) continue;
-    if (remaining < fee.amount) break;
-    remaining -= fee.amount;
-    memberPatch[fee.key] = true;
-    txBatch.push({
-      date: today,
-      type: "fee_payment",
-      amount: fee.amount,
-      member_id: memberId,
-      by_staff: "MPESA",
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `${fee.label} (auto)`,
-    });
-    notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
-  }
+  };
 
   const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
     .from("penalties")
@@ -510,12 +524,156 @@ export async function applyMpesaPaymentToDatabase(args: {
     .order("date", { ascending: true });
   if (penaltiesError) throw new Error(penaltiesError.message);
 
-  for (const penalty of outstandingPenalties ?? []) {
-    const amount = Number(penalty.amount ?? 0);
-    if (remaining < amount) continue;
-    remaining -= amount;
-    penaltiesCleared.push({ id: penalty.id, amount });
-    notes.push(`Cleared penalty ${penalty.id} (${penalty.reason}) - ${amount}/=.`);
+  const { data: activeLoan, error: activeLoanError } = await supabaseAdmin
+    .from("loans")
+    .select("*")
+    .eq("member_id", memberId)
+    .eq("status", "active")
+    .order("start_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (activeLoanError) throw new Error(activeLoanError.message);
+
+  const scenario = activeLoan ? "member_with_loan" : "member_without_loan";
+  const waterfall = waterfallRuleForScenario(scenario, policySettings).steps;
+
+  function setPrimaryIfMissing(
+    type: string,
+    amount: number,
+    note: string,
+    loanId?: string,
+  ) {
+    if (primary) return;
+    primary = { type, amount, note, loanId };
+  }
+
+  function queueSavingsDeposit(applied: number, notePrefix: string) {
+    if (applied <= 0) return;
+    const rounded = roundUpKES(applied, roundOffStep);
+    const surplus = Math.max(0, rounded - applied);
+    setPrimaryIfMissing(
+      "deposit",
+      applied,
+      `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+    );
+    txBatch.push({
+      date: today,
+      type: "deposit",
+      amount: applied,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+    });
+    memberPatch.savings_balance = Number(memberPatch.savings_balance ?? member.savings_balance ?? 0) + applied;
+    if (surplus > 0) toRoundOff += surplus;
+    if (Number(memberPatch.savings_balance ?? 0) < mandatorySavingsThreshold) {
+      notes.push(
+        `${notePrefix} Member is still below the mandatory savings threshold of ${mandatorySavingsThreshold}/=.`,
+      );
+    } else {
+      notes.push(`${notePrefix} Member meets mandatory savings threshold.`);
+    }
+  }
+
+  for (const step of waterfall) {
+    if (remaining <= 0) break;
+
+    if (step === "membership_fee" || step === "card_fee" || step === "sticker_fee") {
+      const fee = feeQueue[step];
+      if (!fee || !fee.required || fee.amount <= 0) continue;
+      if (member[fee.key] || memberPatch[fee.key]) continue;
+      if (remaining < fee.amount) continue;
+      remaining -= fee.amount;
+      memberPatch[fee.key] = true;
+      setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
+      txBatch.push({
+        date: today,
+        type: "fee_payment",
+        amount: fee.amount,
+        member_id: memberId,
+        by_staff: "MPESA",
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `${fee.label} (auto)`,
+      });
+      notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
+      continue;
+    }
+
+    if (step === "penalties") {
+      for (const penalty of outstandingPenalties ?? []) {
+        const amount = Number(penalty.amount ?? 0);
+        if (remaining < amount) continue;
+        remaining -= amount;
+        penaltiesCleared.push({ id: penalty.id, amount });
+        notes.push(`Cleared penalty ${penalty.id} (${penalty.reason}) - ${amount}/=.`);
+      }
+      continue;
+    }
+
+    if (step === "active_loan_repayment" && activeLoan) {
+      const summary = loanBalanceSummary(activeLoan);
+      const applied = Math.min(remaining, summary.balance);
+      if (applied <= 0) continue;
+      const rounded = roundUpKES(applied, roundOffStep);
+      const surplus = Math.max(0, rounded - applied);
+      if (remaining >= rounded) {
+        remaining -= rounded;
+        if (surplus > 0) toRoundOff += surplus;
+      } else {
+        remaining = 0;
+      }
+
+      setPrimaryIfMissing(
+        "loan_repayment",
+        applied,
+        `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+        activeLoan.id,
+      );
+      txBatch.push({
+        date: today,
+        type: "loan_repayment",
+        amount: applied,
+        member_id: memberId,
+        loan_id: activeLoan.id,
+        by_staff: "MPESA",
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+      });
+
+      const nextPaid = Number(activeLoan.paid ?? 0) + applied;
+      const nextBalance = Math.max(0, summary.total - nextPaid);
+      const { error: loanUpdateError } = await supabaseAdmin
+        .from("loans")
+        .update({
+          paid: nextPaid,
+          status: nextBalance <= 0 ? "closed" : activeLoan.status,
+        })
+        .eq("id", activeLoan.id);
+      if (loanUpdateError) throw new Error(loanUpdateError.message);
+
+      if (!member.fee_first_upfront_paid) {
+        memberPatch.fee_first_upfront_paid = true;
+      }
+
+      notes.push(
+        `Applied ${applied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
+      );
+      continue;
+    }
+
+    if (step === "savings") {
+      const applied = remaining;
+      queueSavingsDeposit(applied, "");
+      remaining = 0;
+      continue;
+    }
   }
 
   if (penaltiesCleared.length > 0) {
@@ -528,98 +686,11 @@ export async function applyMpesaPaymentToDatabase(args: {
     }
   }
 
-  const { data: activeLoan, error: activeLoanError } = await supabaseAdmin
-    .from("loans")
-    .select("*")
-    .eq("member_id", memberId)
-    .eq("status", "active")
-    .order("start_date", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (activeLoanError) throw new Error(activeLoanError.message);
-
-  if (activeLoan && remaining > 0) {
-    const summary = loanBalanceSummary(activeLoan);
-    const applied = Math.min(remaining, summary.balance);
-    const rounded = roundUpKES(applied, ROUNDING_BASE);
-    const surplus = Math.max(0, rounded - applied);
-    if (remaining >= rounded) {
-      remaining -= rounded;
-      if (surplus > 0) toRoundOff += surplus;
-    } else {
-      remaining = 0;
-    }
-
-    primary = {
-      type: "loan_repayment",
-      amount: applied,
-      loanId: activeLoan.id,
-      note: `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
-    };
-    txBatch.push({
-      date: today,
-      type: "loan_repayment",
-      amount: applied,
-      member_id: memberId,
-      loan_id: activeLoan.id,
-      by_staff: "MPESA",
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    });
-
-    const nextPaid = Number(activeLoan.paid ?? 0) + applied;
-    const nextBalance = Math.max(0, summary.total - nextPaid);
-    const { error: loanUpdateError } = await supabaseAdmin
-      .from("loans")
-      .update({
-        paid: nextPaid,
-        status: nextBalance <= 0 ? "closed" : activeLoan.status,
-      })
-      .eq("id", activeLoan.id);
-    if (loanUpdateError) throw new Error(loanUpdateError.message);
-
-    if (!member.fee_first_upfront_paid) {
-      memberPatch.fee_first_upfront_paid = true;
-    }
-
-    notes.push(
-      `Applied ${applied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
-    );
-  }
-
   if (remaining > 0) {
-    const rounded = roundUpKES(remaining, ROUNDING_BASE);
-    const surplus = Math.max(0, rounded - remaining);
-    const applied = remaining;
-    if (!primary) {
-      primary = {
-        type: "deposit",
-        amount: applied,
-        note: `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
-      };
-    }
-    txBatch.push({
-      date: today,
-      type: "deposit",
-      amount: applied,
-      member_id: memberId,
-      by_staff: "MPESA",
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    });
-    memberPatch.savings_balance = Number(member.savings_balance ?? 0) + applied;
-    if (surplus > 0) toRoundOff += surplus;
-    if (Number(member.savings_balance ?? 0) + applied < MANDATORY_SAVINGS_THRESHOLD) {
-      notes.push(
-        `Member is still below the mandatory savings threshold of ${MANDATORY_SAVINGS_THRESHOLD}/=.`,
-      );
-    } else {
-      notes.push("Member meets mandatory savings threshold.");
-    }
+    queueSavingsDeposit(remaining, "Safety fallback:");
+    notes.push(
+      "Remaining balance was routed to savings because the configured waterfall ended before the full amount was allocated.",
+    );
     remaining = 0;
   }
 
@@ -995,6 +1066,31 @@ function mapFeePolicyRow(row: any) {
   };
 }
 
+function mapPolicySettingRow(row: any): PolicySettingRow {
+  return {
+    key: row.key,
+    label: row.label,
+    value: row.value ?? {},
+    notes: row.notes ?? undefined,
+    updatedAt: row.updated_at ?? undefined,
+  };
+}
+
+async function loadRuntimeFeePolicies(supabaseAdmin: any): Promise<FeePolicy[]> {
+  const { data, error } = await supabaseAdmin
+    .from("fee_policies")
+    .select("*")
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return normalizeFeePolicies((data ?? []).map(mapFeePolicyRow));
+}
+
+async function loadRuntimePolicySettings(supabaseAdmin: any) {
+  const { data, error } = await supabaseAdmin.from("policy_settings").select("*");
+  if (error) throw new Error(error.message);
+  return mergePolicySettings((data ?? []).map(mapPolicySettingRow));
+}
+
 function groupSupportMessages(rows: any[]) {
   const supportMessagesByThread = new Map<string, any[]>();
   for (const row of rows) {
@@ -1047,7 +1143,8 @@ function emptyAppData() {
     staffMessages: [],
     memos: [],
     approvals: [],
-    feePolicies: [],
+    feePolicies: normalizeFeePolicies(DEFAULT_FEE_POLICIES),
+    policySettings: clonePolicySettings(DEFAULT_POLICY_SETTINGS),
     supportThreads: [],
   };
 }
@@ -1067,6 +1164,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       transactionsResult,
       penaltiesResult,
       roundOffResult,
+      feePoliciesResult,
+      policySettingsResult,
     ] = await Promise.all([
       supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
       supabaseAdmin.from("staff").select("id, name, role").order("id"),
@@ -1090,6 +1189,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
         .select("*")
         .eq("member_id", session.memberId)
         .order("date", { ascending: false }),
+      supabaseAdmin.from("fee_policies").select("*").order("updated_at", { ascending: false }),
+      supabaseAdmin.from("policy_settings").select("*"),
     ]);
 
     const memberResults = [
@@ -1099,6 +1200,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       transactionsResult,
       penaltiesResult,
       roundOffResult,
+      feePoliciesResult,
+      policySettingsResult,
     ];
     const failedMemberResult = memberResults.find((result) => result.error);
     if (failedMemberResult?.error) throw new Error(failedMemberResult.error.message);
@@ -1115,6 +1218,10 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
       penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
       roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
+      feePolicies: normalizeFeePolicies((feePoliciesResult.data ?? []).map(mapFeePolicyRow)),
+      policySettings: mergePolicySettings(
+        (policySettingsResult.data ?? []).map(mapPolicySettingRow),
+      ),
     };
   }
 
@@ -1134,6 +1241,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penaltiesResult,
     roundOffResult,
     staffMessagesResult,
+    feePoliciesResult,
+    policySettingsResult,
   ] = await Promise.all([
     supabaseAdmin.from("staff").select("*").order("id"),
     supabaseAdmin.from("members").select("*").order("id"),
@@ -1156,6 +1265,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       .select("*")
       .or(`sender_id.eq.${actor.id},receiver_id.eq.${actor.id}`)
       .order("created_at", { ascending: true }),
+    supabaseAdmin.from("fee_policies").select("*").order("updated_at", { ascending: false }),
+    supabaseAdmin.from("policy_settings").select("*"),
   ]);
 
   const results = [
@@ -1172,6 +1283,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penaltiesResult,
     roundOffResult,
     staffMessagesResult,
+    feePoliciesResult,
+    policySettingsResult,
   ];
   const failed = results.find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
@@ -1196,6 +1309,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
     roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
     staffMessages: (staffMessagesResult.data ?? []).map(mapStaffMessageRow),
+    feePolicies: normalizeFeePolicies((feePoliciesResult.data ?? []).map(mapFeePolicyRow)),
+    policySettings: mergePolicySettings((policySettingsResult.data ?? []).map(mapPolicySettingRow)),
   };
 });
 
@@ -2807,6 +2922,147 @@ export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
         amount: feePolicy?.amount ?? null,
         permanence: feePolicy?.permanence ?? null,
         scope: feePolicy?.scope ?? null,
+      },
+    });
+    return { ok: true };
+  });
+
+export const upsertPolicySettingRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { key: PolicySettingKey; value: unknown; notes?: string }) => ({
+      key: (data?.key ?? "percentages") as PolicySettingKey,
+      value: data?.value ?? {},
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!(data.key in POLICY_SETTING_LABELS)) {
+      throw new Error("Unknown policy setting key.");
+    }
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const nextRows = policySettingsRowsFromConfig(
+      mergePolicySettings([
+        {
+          key: data.key,
+          label: POLICY_SETTING_LABELS[data.key],
+          value: data.value,
+          notes: data.notes,
+        },
+      ]),
+    );
+    const record = nextRows.find((row) => row.key === data.key);
+    if (!record) throw new Error("Failed to prepare the policy setting.");
+
+    const { error } = await runtimeDb.from("policy_settings").upsert({
+      key: data.key,
+      label: POLICY_SETTING_LABELS[data.key],
+      value: record.value,
+      notes: data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "policy_setting.upserted",
+      targetType: "policy_setting",
+      targetId: data.key,
+      summary: `${actor.name} updated policy setting ${data.key}`,
+      details: {
+        key: data.key,
+        notes: data.notes ?? null,
+        value: record.value,
+      },
+    });
+    return { ok: true };
+  });
+
+export const upsertPerformanceTargetRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      metric: string;
+      period: string;
+      expectedValue: number;
+      startOn: string;
+      notes?: string;
+    }) => ({
+      id: String(data?.id ?? "").trim() || undefined,
+      metric: String(data?.metric ?? "").trim(),
+      period: String(data?.period ?? "").trim(),
+      expectedValue: Number(data?.expectedValue ?? 0),
+      startOn: String(data?.startOn ?? "").trim() || new Date().toISOString().slice(0, 10),
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    const validMetrics = new Set([
+      "collections_total",
+      "loan_repayments",
+      "loan_disbursements",
+      "new_loans_count",
+      "registrations",
+      "cards_paid",
+      "stickers_paid",
+      "stickers_issued",
+    ]);
+    const validPeriods = new Set(["daily", "weekly", "monthly", "annual"]);
+    if (!validMetrics.has(data.metric)) throw new Error("Unknown target metric.");
+    if (!validPeriods.has(data.period)) throw new Error("Unknown target period.");
+    if (data.expectedValue < 0) throw new Error("Expected value cannot be negative.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = data.id ?? makeId("TGT");
+    const { error } = await runtimeDb.from("performance_targets").upsert({
+      id,
+      metric: data.metric,
+      period: data.period,
+      expected_value: data.expectedValue,
+      start_on: data.startOn,
+      notes: data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "performance_target.upserted",
+      targetType: "performance_target",
+      targetId: id,
+      summary: `${actor.name} saved a ${data.period} ${data.metric} target`,
+      details: {
+        metric: data.metric,
+        period: data.period,
+        expectedValue: data.expectedValue,
+        startOn: data.startOn,
+        notes: data.notes ?? null,
+      },
+    });
+    return { id };
+  });
+
+export const deletePerformanceTargetRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.id) throw new Error("Target id is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: target } = await runtimeDb
+      .from("performance_targets")
+      .select("metric, period, expected_value, start_on")
+      .eq("id", data.id)
+      .maybeSingle();
+    const { error } = await runtimeDb.from("performance_targets").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "performance_target.deleted",
+      targetType: "performance_target",
+      targetId: data.id,
+      summary: `${actor.name} deleted target ${data.id}`,
+      details: {
+        metric: target?.metric ?? null,
+        period: target?.period ?? null,
+        expectedValue: target?.expected_value ?? null,
+        startOn: target?.start_on ?? null,
       },
     });
     return { ok: true };

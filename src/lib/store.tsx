@@ -35,6 +35,13 @@ import {
   resolveMemberCategory,
   type MemberCategory,
 } from "@/lib/membership";
+import { normalizeFeePolicies, type FeePolicy } from "@/lib/fees-policy";
+import {
+  DEFAULT_POLICY_SETTINGS,
+  getActivePolicySettings,
+  setActivePolicySettings,
+  type PolicySettings,
+} from "@/lib/policy-settings";
 import { listStaffMessages } from "@/lib/runtime-data.functions";
 
 export type Role = "director" | "manager" | "loan_officer";
@@ -320,11 +327,11 @@ export const STANDARD_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
 export const PREMIUM_LOAN_TERMS: LoanTermDays[] = [14, 30, 60, 90];
 export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30, 60, 90];
 export const SBC_TERM_RATE_PCT_BY_DAYS: Record<LoanTermDays, number> = {
-  7: 10,
-  14: 15,
-  30: 20,
-  60: 25,
-  90: 30,
+  7: DEFAULT_POLICY_SETTINGS.interestRates[7],
+  14: DEFAULT_POLICY_SETTINGS.interestRates[14],
+  30: DEFAULT_POLICY_SETTINGS.interestRates[30],
+  60: DEFAULT_POLICY_SETTINGS.interestRates[60],
+  90: DEFAULT_POLICY_SETTINGS.interestRates[90],
 };
 
 /**
@@ -402,6 +409,8 @@ type Store = {
   penalties: Penalty[];
   roundOff: RoundOffEntry[];
   staffMessages: StaffMessage[];
+  feePolicies: FeePolicy[];
+  policySettings: PolicySettings;
   sharePrice: number;
   /** Member auth — membership No. + phone number. Returns the matched member or null. */
   loginMember: (memberNo: string, phone: string) => Promise<Member | null>;
@@ -456,6 +465,7 @@ type Store = {
     mpesaRef?: string,
     eventId?: string,
   ) => Promise<MpesaAllocation>;
+  reloadAppData: () => Promise<void>;
 };
 
 const Ctx = createContext<Store | null>(null);
@@ -500,6 +510,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [roundOff, setRoundOff] = useState<RoundOffEntry[]>(seedRoundOff);
   const [staffMessages, setStaffMessages] = useState<StaffMessage[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>(seedAttendance);
+  const [feePolicies, setFeePolicies] = useState<FeePolicy[]>(normalizeFeePolicies([]));
+  const [policySettings, setPolicySettingsState] =
+    useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
 
   async function refreshFromDatabase() {
     try {
@@ -525,6 +538,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPenalties(data.penalties);
       setRoundOff(data.roundOff);
       setStaffMessages(data.staffMessages ?? []);
+      setFeePolicies(normalizeFeePolicies(data.feePolicies ?? []));
+      setPolicySettingsState(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
+      setActivePolicySettings(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
       return data;
     } finally {
       setIsHydrated(true);
@@ -564,6 +580,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, [authMode, staff]);
 
+  useEffect(() => {
+    setActivePolicySettings(policySettings);
+  }, [policySettings]);
+
   const setAuthenticated = (next: boolean) => {
     setIsAuthenticated(next);
   };
@@ -600,6 +620,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       penalties,
       roundOff,
       staffMessages,
+      feePolicies,
+      policySettings,
       addMember: async (m) => {
         const result = await createMember({
           data: {
@@ -922,6 +944,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await refreshFromDatabase();
         return result as MpesaAllocation;
       },
+      reloadAppData: async () => {
+        await refreshFromDatabase();
+      },
     }),
     [
       isAuthenticated,
@@ -942,6 +967,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       roundOff,
       attendance,
       staffMessages,
+      feePolicies,
+      policySettings,
       applyMpesaPaymentServer,
       createAppraisal,
       createFieldVisit,
@@ -984,7 +1011,11 @@ export const fmtKES = (n: number) =>
 /** Round any KES amount UP to the nearest `step` (default 5/=). */
 export function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
   if (amount <= 0) return 0;
-  return Math.ceil(amount / step) * step;
+  const configuredStep =
+    Number.isFinite(step) && step > 0
+      ? step
+      : getActivePolicySettings().percentages.roundOffStep || ROUNDING_BASE;
+  return Math.ceil(amount / configuredStep) * configuredStep;
 }
 
 export function normalizeLoanTermDays(termDays?: number): LoanTermDays {
@@ -1002,7 +1033,7 @@ export function termPeriodsFromDays(termDays?: number) {
 }
 
 export function loanRateForTerm(termDays?: number) {
-  return SBC_TERM_RATE_PCT_BY_DAYS[normalizeLoanTermDays(termDays)];
+  return getActivePolicySettings().interestRates[normalizeLoanTermDays(termDays)];
 }
 
 export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths">) {
@@ -1052,16 +1083,31 @@ export function loanSummary(
 }
 
 export const SBC_FEES = {
-  processingPct: 2,
-  insurancePct: 1.5,
-  penaltyDailyPct: 5,
-  defaultPenaltyPct: 2,
+  get processingPct() {
+    return getActivePolicySettings().percentages.processingPct;
+  },
+  get insurancePct() {
+    return getActivePolicySettings().percentages.insurancePct;
+  },
+  get transactionCostPct() {
+    return getActivePolicySettings().percentages.transactionCostPct;
+  },
+  get penaltyDailyPct() {
+    return getActivePolicySettings().percentages.penaltyDailyPct;
+  },
+  get defaultPenaltyPct() {
+    return getActivePolicySettings().percentages.defaultPenaltyPct;
+  },
+  get firstUpfrontAmount() {
+    return getActivePolicySettings().percentages.firstUpfrontAmount;
+  },
 };
 
 export function sbcDeductions(principal: number) {
   const processing = principal * (SBC_FEES.processingPct / 100);
   const insurance = principal * (SBC_FEES.insurancePct / 100);
-  return { processing, insurance, total: processing + insurance };
+  const transactionCost = principal * (SBC_FEES.transactionCostPct / 100);
+  return { processing, insurance, transactionCost, total: processing + insurance + transactionCost };
 }
 
 export const SBC_UPFRONT_TABLE = [
