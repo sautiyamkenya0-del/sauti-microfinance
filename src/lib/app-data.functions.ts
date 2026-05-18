@@ -9,6 +9,16 @@ import {
   requireStaffActor,
 } from "@/lib/auth.server";
 import { recordAudit } from "@/lib/audit.server";
+import {
+  formatMembershipNumber,
+  isInvestorCategory,
+  isInvestorOnlyCategory,
+  membershipIdCandidates,
+  nextMembershipNumber,
+  normalizeMembershipNumber,
+  resolveMemberCategory,
+  type MemberCategory,
+} from "@/lib/membership";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -141,19 +151,106 @@ function loanBalanceSummary(loan: {
   };
 }
 
-function parseMembershipNumber(account: string) {
-  const norm = account.trim().toUpperCase();
-  const match = norm.match(/SBC0*(\d{1,4})/);
-  if (!match) return undefined;
-  return `M${match[1].padStart(3, "0")}`;
-}
-
 function memberNeedsStickerRow(member: {
   business_permanence?: string | null;
   fee_has_shop?: boolean | null;
 }) {
   if (member.business_permanence) return member.business_permanence === "permanent";
   return !!member.fee_has_shop;
+}
+
+async function findMemberByMembershipInput(account: string) {
+  const candidates = membershipIdCandidates(account);
+  if (!candidates.length) return null;
+
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin.from("members").select("*").in("id", candidates);
+  if (error) throw new Error(error.message);
+
+  for (const candidate of candidates) {
+    const match = (data ?? []).find((row) => row.id === candidate);
+    if (match) return match;
+  }
+  return null;
+}
+
+async function ensureInvestorForMember(member: {
+  id: string;
+  name: string;
+  phone?: string | null;
+  joined_at?: string | null;
+  investor_id?: string | null;
+  is_investor?: boolean | null;
+  member_category?: string | null;
+}) {
+  const category = resolveMemberCategory(member.member_category, member.is_investor);
+  if (!isInvestorCategory(category)) return null;
+
+  const supabaseAdmin = await requireSupabaseAdmin();
+  let investorId = member.investor_id ?? null;
+
+  if (investorId) {
+    const { data: investor, error } = await supabaseAdmin
+      .from("investors")
+      .select("*")
+      .eq("id", investorId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (investor) return investor;
+  }
+
+  const { data: linkedInvestor, error: linkedError } = await supabaseAdmin
+    .from("investors")
+    .select("*")
+    .eq("member_id", member.id)
+    .maybeSingle();
+  if (linkedError) throw new Error(linkedError.message);
+  if (linkedInvestor) {
+    if (linkedInvestor.id !== investorId || !member.is_investor) {
+      const { error: memberError } = await supabaseAdmin
+        .from("members")
+        .update({
+          investor_id: linkedInvestor.id,
+          is_investor: true,
+          member_category: category,
+        })
+        .eq("id", member.id);
+      if (memberError) throw new Error(memberError.message);
+    }
+    return linkedInvestor;
+  }
+
+  investorId = await nextPrefixedId("investors", "I", 1);
+  const joinedAt = member.joined_at ?? new Date().toISOString().slice(0, 10);
+  const { error: investorError } = await supabaseAdmin.from("investors").insert({
+    id: investorId,
+    name: member.name,
+    contributed: 0,
+    share_pct: 0,
+    joined_at: joinedAt,
+    phone: member.phone ?? null,
+    notes: `Auto-linked from ${formatMembershipNumber(member.id)}`,
+    member_id: member.id,
+  });
+  if (investorError) throw new Error(investorError.message);
+
+  const { error: memberError } = await supabaseAdmin
+    .from("members")
+    .update({
+      investor_id: investorId,
+      is_investor: true,
+      member_category: category,
+    })
+    .eq("id", member.id);
+  if (memberError) throw new Error(memberError.message);
+
+  const { data: investor, error } = await supabaseAdmin
+    .from("investors")
+    .select("*")
+    .eq("id", investorId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return investor;
 }
 
 async function insertTransactionRow(row: {
@@ -288,24 +385,19 @@ export async function applyMpesaPaymentToDatabase(args: {
     }
   }
 
-  const memberId = parseMembershipNumber(norm);
-  if (!memberId) {
-    notes.push(`Account "${args.account}" did not match SBC member pattern.`);
-    await markMpesaEventProcessed(args.eventId, null);
-    return { matched: false, account: norm, notes };
-  }
-
-  const { data: member, error: memberError } = await supabaseAdmin
-    .from("members")
-    .select("*")
-    .eq("id", memberId)
-    .maybeSingle();
-  if (memberError) throw new Error(memberError.message);
+  const membershipCandidates = membershipIdCandidates(norm);
+  const member = await findMemberByMembershipInput(norm);
   if (!member) {
-    notes.push(`No member with ID ${memberId}. Holding as suspense.`);
+    notes.push(
+      membershipCandidates.length
+        ? `No member matched account "${args.account}". Holding as suspense.`
+        : `Account "${args.account}" did not match SBC member pattern.`,
+    );
     await markMpesaEventProcessed(args.eventId, null);
     return { matched: false, account: norm, notes };
   }
+  const memberId = member.id;
+  const memberCategory = resolveMemberCategory(member.member_category, member.is_investor);
 
   let remaining = Number(args.amount ?? 0);
   const today = new Date().toISOString().slice(0, 10);
@@ -333,22 +425,16 @@ export async function applyMpesaPaymentToDatabase(args: {
   let toRoundOff = 0;
   let primaryTransactionId: string | undefined;
 
-  if (member.is_investor && member.investor_id) {
-    const { data: investor, error: investorError } = await supabaseAdmin
+  if (isInvestorOnlyCategory(memberCategory)) {
+    const investor = await ensureInvestorForMember(member);
+    if (!investor) throw new Error("Investor account could not be resolved.");
+    const { error: updateInvestorError } = await supabaseAdmin
       .from("investors")
-      .select("contributed")
-      .eq("id", member.investor_id)
-      .maybeSingle();
-    if (investorError) throw new Error(investorError.message);
-    if (investor) {
-      const { error: updateInvestorError } = await supabaseAdmin
-        .from("investors")
-        .update({
-          contributed: Number(investor.contributed ?? 0) + remaining,
-        })
-        .eq("id", member.investor_id);
-      if (updateInvestorError) throw new Error(updateInvestorError.message);
-    }
+      .update({
+        contributed: Number(investor.contributed ?? 0) + remaining,
+      })
+      .eq("id", investor.id);
+    if (updateInvestorError) throw new Error(updateInvestorError.message);
 
     primary = {
       type: "investor_contribution",
@@ -366,7 +452,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       payer_name: args.payerName,
       note: `Investment top-up via Paybill ${norm}`,
     });
-    notes.push(`Routed ${remaining}/= to investment pool for member-investor ${member.name}.`);
+    notes.push(`Routed ${remaining}/= to the investment pool for investor account ${member.name}.`);
     await markMpesaEventProcessed(args.eventId, primaryTransactionId);
     return {
       matched: true,
@@ -632,6 +718,7 @@ function mapMemberRow(row: any) {
   const legacyNames = splitLegacyLastName(row.last_name);
   const businessPermanence =
     (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
+  const category = resolveMemberCategory(row.member_category, row.is_investor);
 
   return {
     id: row.id,
@@ -653,7 +740,8 @@ function mapMemberRow(row: any) {
       sticker: row.fee_sticker,
       firstUpfrontPaid: row.fee_first_upfront_paid,
     },
-    isInvestor: row.is_investor,
+    category,
+    isInvestor: isInvestorCategory(category),
     investorId: row.investor_id ?? undefined,
     firstName: row.first_name ?? undefined,
     secondName: row.second_name ?? legacyNames.secondName,
@@ -1114,6 +1202,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
 export const createMemberRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
+      memberId?: string;
       name: string;
       phone: string;
       joinedAt?: string;
@@ -1136,9 +1225,11 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       businessPermanence?: "permanent" | "semi";
       businessAddress?: string;
       fieldOfficerId?: string;
+      category?: MemberCategory;
       investorContribution?: number;
       investorNotes?: string;
     }) => ({
+      memberId: data?.memberId?.trim() || undefined,
       name: String(data?.name ?? "").trim(),
       phone: String(data?.phone ?? "").trim(),
       joinedAt: data?.joinedAt,
@@ -1164,6 +1255,10 @@ export const createMemberRecord = createServerFn({ method: "POST" })
           : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
+      category:
+        data?.category === "investor" || data?.category === "both" || data?.category === "member"
+          ? data.category
+          : "member",
       investorContribution: Number(data?.investorContribution ?? 0),
       investorNotes: data?.investorNotes?.trim() || undefined,
     }),
@@ -1175,10 +1270,18 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     if (!isValidLocalKenyanPhone(data.phone)) {
       throw new Error("Use a local phone number starting with 07 or 01.");
     }
+    if (data.investorContribution < 0) {
+      throw new Error("Initial investment cannot be negative.");
+    }
 
     const supabaseAdmin = await requireSupabaseAdmin();
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
+    const memberCategory = resolveMemberCategory(data.category);
+    const requestedMemberId = data.memberId ? normalizeMembershipNumber(data.memberId) : undefined;
+    if (data.memberId && !requestedMemberId) {
+      throw new Error("Membership number must follow the SBC0001K format.");
+    }
 
     const { data: existingMembers, error: existingError } = await supabaseAdmin
       .from("members")
@@ -1187,21 +1290,31 @@ export const createMemberRecord = createServerFn({ method: "POST" })
 
     const duplicate = (existingMembers ?? []).find((row) => {
       const samePhone = toComparableKenyanPhone(row.phone) === normalizedPhone;
+      const sameMemberId =
+        !!requestedMemberId &&
+        membershipIdCandidates(requestedMemberId).some((candidate) => candidate === row.id);
       const sameLegacyId =
         data.oldSystemId &&
         row.old_system_id &&
         row.old_system_id.trim().toUpperCase() === data.oldSystemId.trim().toUpperCase();
-      return samePhone || sameLegacyId;
+      return samePhone || sameLegacyId || sameMemberId;
     });
     if (duplicate) {
       throw new Error(`Member already exists in the database as ${duplicate.id}.`);
     }
 
-    const memberId = await nextPrefixedId("members", "M", 101);
+    const memberId =
+      requestedMemberId ??
+      nextMembershipNumber(
+        (existingMembers ?? []).map((row) => row.id),
+        1,
+      );
     const lastName =
       [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || undefined;
     const hasShop = data.businessPermanence === "permanent";
     const fieldOfficerId = data.fieldOfficerId ?? actor.id;
+    const shares = memberCategory === "investor" ? 0 : data.shares;
+    const savingsBalance = memberCategory === "investor" ? 0 : data.savingsBalance;
 
     const { error: memberError } = await supabaseAdmin.from("members").insert({
       id: memberId,
@@ -1209,8 +1322,8 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       phone,
       joined_at: data.joinedAt ?? new Date().toISOString().slice(0, 10),
       status: data.status,
-      shares: data.shares,
-      savings_balance: data.savingsBalance,
+      shares,
+      savings_balance: savingsBalance,
       fee_has_shop: hasShop,
       first_name: data.firstName ?? null,
       second_name: data.secondName ?? null,
@@ -1229,13 +1342,13 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
       field_officer_id: fieldOfficerId,
-      is_investor: data.investorContribution > 0,
+      member_category: memberCategory,
+      is_investor: isInvestorCategory(memberCategory),
     });
     if (memberError) throw new Error(memberError.message);
 
-    if (data.investorContribution > 0) {
+    if (isInvestorCategory(memberCategory)) {
       const investorId = await nextPrefixedId("investors", "I", 1);
-      const txId = await nextPrefixedId("transactions", "T", 1);
 
       const { error: investorError } = await supabaseAdmin.from("investors").insert({
         id: investorId,
@@ -1255,16 +1368,20 @@ export const createMemberRecord = createServerFn({ method: "POST" })
         .eq("id", memberId);
       if (memberUpdateError) throw new Error(memberUpdateError.message);
 
-      const { error: txError } = await supabaseAdmin.from("transactions").insert({
-        id: txId,
-        date: data.joinedAt ?? new Date().toISOString().slice(0, 10),
-        type: "investor_contribution",
-        amount: data.investorContribution,
-        member_id: memberId,
-        by_staff: actor.id,
-        note: `Member-investor onboarding: ${data.name}`,
-      });
-      if (txError) throw new Error(txError.message);
+      if (data.investorContribution > 0) {
+        const txId = await nextPrefixedId("transactions", "T", 1);
+        const { error: txError } = await supabaseAdmin.from("transactions").insert({
+          id: txId,
+          date: data.joinedAt ?? new Date().toISOString().slice(0, 10),
+          type: "investor_contribution",
+          amount: data.investorContribution,
+          member_id: memberId,
+          account: formatMembershipNumber(memberId),
+          by_staff: actor.id,
+          note: `Investor onboarding: ${data.name}`,
+        });
+        if (txError) throw new Error(txError.message);
+      }
     }
 
     await auditAction({
@@ -1274,11 +1391,13 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       targetId: memberId,
       summary: `${actor.name} created member ${data.name}`,
       details: {
+        membershipNumber: formatMembershipNumber(memberId),
+        category: memberCategory,
         fieldOfficerId,
         status: data.status,
         phone,
-        savingsBalance: data.savingsBalance,
-        shares: data.shares,
+        savingsBalance,
+        shares,
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
         investorContribution: data.investorContribution || 0,
@@ -1851,24 +1970,53 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
     }
 
     const supabaseAdmin = await requireSupabaseAdmin();
+    let resolvedMemberId = data.memberId;
+    let investorTarget: {
+      id: string;
+      contributed: number | string | null;
+      member_id: string | null;
+    } | null = null;
+
+    if (!resolvedMemberId && data.account) {
+      const member = await findMemberByMembershipInput(data.account);
+      resolvedMemberId = member?.id;
+    }
+
+    if (data.type === "investor_contribution") {
+      if (!resolvedMemberId) {
+        throw new Error("Investor contributions must be linked to a membership number.");
+      }
+      const { data: member, error: memberError } = await supabaseAdmin
+        .from("members")
+        .select("*")
+        .eq("id", resolvedMemberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      if (!member) throw new Error("The selected membership number was not found.");
+      investorTarget = await ensureInvestorForMember(member);
+      if (!investorTarget) {
+        throw new Error("The selected membership number is not registered as an investor.");
+      }
+    }
+
     const id = await insertTransactionRow({
       date: data.date,
       type: data.type,
       amount: data.amount,
-      member_id: data.memberId ?? null,
+      member_id: resolvedMemberId ?? null,
       loan_id: data.loanId ?? null,
       by_staff: actor.id,
       note: data.note ?? null,
       ref: data.ref ?? null,
-      account: data.account ?? null,
+      account: data.account ?? (resolvedMemberId ? formatMembershipNumber(resolvedMemberId) : null),
       payer_name: data.payerName ?? null,
     });
 
-    if (data.memberId) {
+    if (resolvedMemberId) {
       const { data: member, error: memberError } = await supabaseAdmin
         .from("members")
         .select("savings_balance, shares")
-        .eq("id", data.memberId)
+        .eq("id", resolvedMemberId)
         .maybeSingle();
       if (memberError) throw new Error(memberError.message);
       if (member) {
@@ -1887,10 +2035,20 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
           const { error: updateMemberError } = await supabaseAdmin
             .from("members")
             .update(patch as any)
-            .eq("id", data.memberId);
+            .eq("id", resolvedMemberId);
           if (updateMemberError) throw new Error(updateMemberError.message);
         }
       }
+    }
+
+    if (data.type === "investor_contribution" && investorTarget) {
+      const { error: investorError } = await supabaseAdmin
+        .from("investors")
+        .update({
+          contributed: Number(investorTarget.contributed ?? 0) + data.amount,
+        })
+        .eq("id", investorTarget.id);
+      if (investorError) throw new Error(investorError.message);
     }
 
     if (data.loanId && data.type === "loan_repayment") {
@@ -1924,9 +2082,11 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       details: {
         type: data.type,
         amount: data.amount,
-        memberId: data.memberId ?? null,
+        memberId: resolvedMemberId ?? null,
         loanId: data.loanId ?? null,
         date: data.date,
+        account:
+          data.account ?? (resolvedMemberId ? formatMembershipNumber(resolvedMemberId) : null),
         ref: data.ref ?? null,
         note: clipAuditText(data.note, 160),
       },
@@ -2115,11 +2275,22 @@ export const createInvestorRecord = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     if (data.memberId) {
+      const { data: member, error: memberLookupError } = await supabaseAdmin
+        .from("members")
+        .select("member_category, is_investor")
+        .eq("id", data.memberId)
+        .maybeSingle();
+      if (memberLookupError) throw new Error(memberLookupError.message);
+      const nextCategory =
+        resolveMemberCategory(member?.member_category, member?.is_investor) === "investor"
+          ? "investor"
+          : "both";
       const { error: memberError } = await supabaseAdmin
         .from("members")
         .update({
           is_investor: true,
           investor_id: id,
+          member_category: nextCategory,
         })
         .eq("id", data.memberId);
       if (memberError) throw new Error(memberError.message);

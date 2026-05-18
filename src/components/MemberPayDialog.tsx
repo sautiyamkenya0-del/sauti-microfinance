@@ -4,6 +4,7 @@ import {
   businessPermanenceLabel,
   fmtKES,
   formatMembershipNumber,
+  isInvestorOnlyCategory,
   memberNeedsSticker,
   type Member,
 } from "@/lib/store";
@@ -34,11 +35,8 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   ];
   const feesDue = feeQueue.filter((f) => f.owed).reduce((s, f) => s + f.amount, 0);
 
-  const defaultPurpose: Purpose = member.isInvestor
-    ? "investment"
-    : activeLoan
-      ? "loan"
-      : "savings";
+  const investorOnly = isInvestorOnlyCategory(member.category);
+  const defaultPurpose: Purpose = investorOnly ? "investment" : activeLoan ? "loan" : "savings";
   const [purpose, setPurpose] = useState<Purpose>(mode === "officer" ? "upfront" : defaultPurpose);
   const [amount, setAmount] = useState<number>(0);
 
@@ -49,9 +47,9 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
       { value: "shares", label: "Buy shares" },
       { value: "fees", label: "Mandatory fees" },
     ];
-    if (member.isInvestor) opts.unshift({ value: "investment", label: "Investment top-up" });
+    if (investorOnly) opts.unshift({ value: "investment", label: "Investment top-up" });
     return opts;
-  }, [activeLoan, member.isInvestor]);
+  }, [activeLoan, investorOnly]);
 
   const previewAmount = useMemo(() => {
     if (mode === "officer") {
@@ -132,7 +130,8 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
             </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {member.name} - Membership{" "}
-              <span className="font-mono">SBC{member.id.replace(/^M/, "")}</span> - {member.phone}
+              <span className="font-mono">{formatMembershipNumber(member.id)}</span> -{" "}
+              {member.phone}
             </p>
           </div>
           <button
@@ -174,10 +173,14 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 Pay any amount you wish - no caps.
               </div>
             </label>
-            {member.isInvestor && (
+            {investorOnly && (
               <p className="text-xs text-accent">
-                As a member-investor, all payments to your Paybill account are routed to the
-                investment pool.
+                This investor-only account routes Paybill payments directly to the investment pool.
+              </p>
+            )}
+            {member.category === "both" && (
+              <p className="text-xs text-muted-foreground">
+                Member-plus-investor accounts still follow the normal member payment flow first.
               </p>
             )}
           </div>

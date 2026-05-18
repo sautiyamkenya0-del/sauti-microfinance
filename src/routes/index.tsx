@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useStore, fmtKES, loanSummary } from "@/lib/store";
+import { useStore, fmtKES, isMemberCategory, loanSummary } from "@/lib/store";
 import { AppHeader } from "@/components/AppHeader";
 import { StatCard, Section, Badge, DirectorOnly, RestrictedNotice } from "@/components/ui-bits";
 import { Banknote, Users, PiggyBank, TrendingUp, Wallet, PieChart } from "lucide-react";
@@ -22,11 +22,12 @@ export const Route = createFileRoute("/")({
 
 function Dashboard() {
   const { members, loans, transactions, investors, sharePrice, pettyCash } = useStore();
+  const memberAccounts = members.filter((member) => isMemberCategory(member.category));
 
   const activeLoans = loans.filter((l) => l.status === "active");
   const portfolio = activeLoans.reduce((s, l) => s + loanSummary(l).balance, 0);
-  const totalSavings = members.reduce((s, m) => s + m.savingsBalance, 0);
-  const totalShares = members.reduce((s, m) => s + m.shares, 0) * sharePrice;
+  const totalSavings = memberAccounts.reduce((s, m) => s + m.savingsBalance, 0);
+  const totalShares = memberAccounts.reduce((s, m) => s + m.shares, 0) * sharePrice;
   const investorCapital = investors.reduce((s, i) => s + i.contributed, 0);
   const pettyTotal = pettyCash.reduce((s, p) => s + p.amount, 0);
 
@@ -69,7 +70,7 @@ function Dashboard() {
               <StatCard
                 label="Member Savings"
                 value={fmtKES(totalSavings)}
-                hint={`${members.length} members`}
+                hint={`${memberAccounts.length} members`}
                 icon={<PiggyBank className="h-5 w-5" />}
                 tone="success"
               />
@@ -78,7 +79,7 @@ function Dashboard() {
               <StatCard
                 label="Share Capital"
                 value={fmtKES(totalShares)}
-                hint={`${members.reduce((s, m) => s + m.shares, 0)} units @ ${fmtKES(sharePrice)}`}
+                hint={`${memberAccounts.reduce((s, m) => s + m.shares, 0)} units @ ${fmtKES(sharePrice)}`}
                 icon={<PieChart className="h-5 w-5" />}
                 tone="accent"
               />
@@ -229,8 +230,8 @@ function Dashboard() {
             <Link to="/members" className="block hover:scale-[1.01] transition-transform">
               <StatCard
                 label="Members"
-                value={members.length}
-                hint={`${members.filter((m) => m.status === "active").length} active`}
+                value={memberAccounts.length}
+                hint={`${memberAccounts.filter((m) => m.status === "active").length} active`}
                 icon={<Users className="h-5 w-5" />}
               />
             </Link>

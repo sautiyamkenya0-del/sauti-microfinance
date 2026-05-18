@@ -502,6 +502,7 @@ export type Database = {
           is_investor: boolean;
           joined_at: string;
           last_name: string | null;
+          member_category: Database["public"]["Enums"]["member_category"];
           name: string;
           old_system_id: string | null;
           phone: string;
@@ -538,6 +539,7 @@ export type Database = {
           is_investor?: boolean;
           joined_at?: string;
           last_name?: string | null;
+          member_category?: Database["public"]["Enums"]["member_category"];
           name: string;
           old_system_id?: string | null;
           phone: string;
@@ -574,6 +576,7 @@ export type Database = {
           is_investor?: boolean;
           joined_at?: string;
           last_name?: string | null;
+          member_category?: Database["public"]["Enums"]["member_category"];
           name?: string;
           old_system_id?: string | null;
           phone?: string;
@@ -953,6 +956,7 @@ export type Database = {
       field_visit_type: "business" | "home" | "live";
       followup_outcome: "promised" | "paid" | "no-show" | "dispute" | "other";
       loan_status: "pending" | "active" | "closed" | "defaulted" | "rejected";
+      member_category: "member" | "investor" | "both";
       member_status: "active" | "dormant";
       payment_mode: "cash" | "mpesa" | "bank";
       penalty_source: "round_off_pool" | "direct" | "mpesa";
@@ -1099,6 +1103,7 @@ export const Constants = {
       field_visit_type: ["business", "home", "live"],
       followup_outcome: ["promised", "paid", "no-show", "dispute", "other"],
       loan_status: ["pending", "active", "closed", "defaulted", "rejected"],
+      member_category: ["member", "investor", "both"],
       member_status: ["active", "dormant"],
       payment_mode: ["cash", "mpesa", "bank"],
       penalty_source: ["round_off_pool", "direct", "mpesa"],

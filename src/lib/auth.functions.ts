@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
+import { membershipIdCandidates } from "@/lib/membership";
 import {
   clearAuthSession,
   getAuthSessionData,
@@ -19,13 +20,6 @@ function requireSupabaseAdmin() {
     );
   }
   return supabaseAdmin;
-}
-
-function parseMembershipNumber(value: string) {
-  const normalized = value.trim().toUpperCase();
-  const match = normalized.match(/(\d{1,4})/);
-  if (!match) return undefined;
-  return `M${match[1].padStart(3, "0")}`;
 }
 
 export const signInStaff = createServerFn({ method: "POST" })
@@ -105,16 +99,18 @@ export const signInMember = createServerFn({ method: "POST" })
       throw new Error("Enter your membership number and registered phone number.");
     }
 
-    const memberId = parseMembershipNumber(data.memberNo);
-    if (!memberId) throw new Error("The supplied sign-in details are not valid.");
+    const memberCandidates = membershipIdCandidates(data.memberNo);
+    if (!memberCandidates.length) throw new Error("The supplied sign-in details are not valid.");
 
     const supabaseAdmin = requireSupabaseAdmin();
-    const { data: memberRow, error } = await supabaseAdmin
+    const { data: memberRows, error } = await supabaseAdmin
       .from("members")
       .select("id, name, phone")
-      .eq("id", memberId)
-      .maybeSingle();
+      .in("id", memberCandidates);
     if (error) throw new Error(error.message);
+    const memberRow = memberCandidates
+      .map((candidate) => (memberRows ?? []).find((row) => row.id === candidate))
+      .find(Boolean);
 
     const suppliedPhone = toComparableKenyanPhone(data.phone);
     const memberPhone = toComparableKenyanPhone(memberRow?.phone ?? "");

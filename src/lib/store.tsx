@@ -22,6 +22,19 @@ import {
   upsertAttendanceRecord,
 } from "@/lib/app-data.functions";
 import { signInMember, signInStaff, signOutSession } from "@/lib/auth.functions";
+import {
+  formatMembershipNumber,
+  isInvestorCategory,
+  isMemberCategory,
+  isInvestorOnlyCategory,
+  nextMembershipNumber,
+  membershipIdCandidates,
+  membershipSequenceValue,
+  memberCategoryLabel,
+  normalizeMembershipNumber,
+  resolveMemberCategory,
+  type MemberCategory,
+} from "@/lib/membership";
 import { listStaffMessages } from "@/lib/runtime-data.functions";
 
 export type Role = "director" | "manager" | "loan_officer";
@@ -45,6 +58,7 @@ export type Member = {
   shares: number;
   savingsBalance: number;
   fees: MandatoryFees;
+  category: MemberCategory;
   isInvestor?: boolean;
   investorId?: string;
   // Extended applicant profile (per SBC registration form)
@@ -352,6 +366,20 @@ const seedRoundOff: RoundOffEntry[] = [];
 const seedPetty: PettyCashEntry[] = [];
 const seedInvestors: Investor[] = [];
 const seedAttendance: Attendance[] = [];
+
+export type { MemberCategory } from "@/lib/membership";
+export {
+  formatMembershipNumber,
+  isInvestorCategory,
+  isMemberCategory,
+  isInvestorOnlyCategory,
+  nextMembershipNumber,
+  membershipSequenceValue,
+  memberCategoryLabel,
+  normalizeMembershipNumber,
+  resolveMemberCategory,
+} from "@/lib/membership";
+
 type Store = {
   isAuthenticated: boolean;
   isHydrated: boolean;
@@ -383,6 +411,7 @@ type Store = {
   logout: () => Promise<void>;
   addMember: (
     m: Omit<Member, "id" | "fees" | "isInvestor" | "investorId"> & {
+      memberId?: string;
       fees?: MandatoryFees;
       investorContribution?: number;
       investorNotes?: string;
@@ -574,6 +603,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addMember: async (m) => {
         const result = await createMember({
           data: {
+            memberId: (m as any).memberId,
             name: m.name,
             phone: m.phone,
             joinedAt: m.joinedAt,
@@ -596,6 +626,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             businessPermanence: m.businessPermanence,
             businessAddress: m.businessAddress,
             fieldOfficerId: m.fieldOfficerId || currentUser.id,
+            category: m.category,
             investorContribution: (m as any).investorContribution,
             investorNotes: (m as any).investorNotes,
           },
@@ -873,9 +904,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return result.ok;
       },
       resolveMpesaAccount: (account: string) => {
-        const memberId = parseMembershipNumber(account);
-        if (!memberId) return undefined;
-        return members.find((mb) => mb.id === memberId);
+        const candidates = membershipIdCandidates(account);
+        return candidates
+          .map((candidate) => members.find((mb) => mb.id === candidate))
+          .find(Boolean);
       },
       applyMpesaPayment: async (account, amount, payerName, mpesaRef, eventId) => {
         const result = await applyMpesaPaymentServer({
@@ -971,18 +1003,6 @@ export function termPeriodsFromDays(termDays?: number) {
 
 export function loanRateForTerm(termDays?: number) {
   return SBC_TERM_RATE_PCT_BY_DAYS[normalizeLoanTermDays(termDays)];
-}
-
-export function formatMembershipNumber(memberId: string) {
-  const digits = String(memberId).replace(/^M0*/, "") || "0";
-  return `SBC${digits.padStart(4, "0")}K`;
-}
-
-export function parseMembershipNumber(account: string) {
-  const norm = account.trim().toUpperCase();
-  const m = norm.match(/SBC0*(\d{1,4})/);
-  if (!m) return undefined;
-  return `M${m[1].padStart(3, "0")}`;
 }
 
 export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths">) {

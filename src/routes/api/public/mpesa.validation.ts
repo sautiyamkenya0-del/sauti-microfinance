@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { isMembershipAccountReference } from "@/lib/membership";
 
 export const Route = createFileRoute("/api/public/mpesa/validation")({
   server: {
@@ -7,8 +8,8 @@ export const Route = createFileRoute("/api/public/mpesa/validation")({
         try {
           const body = await request.json();
           const acc = String(body.BillRefNumber || "").toUpperCase();
-          // Accept anything that looks like an SBC member code.
-          if (!/^SBC\d{3,}$/.test(acc)) {
+          // Accept current SBC codes and legacy member references during the transition.
+          if (!isMembershipAccountReference(acc)) {
             return Response.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account Number" });
           }
           return Response.json({ ResultCode: "0", ResultDesc: "Accepted" });

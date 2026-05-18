@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
-import { useStore, fmtKES } from "@/lib/store";
-import { useState } from "react";
+import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PiggyBank, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 
@@ -14,11 +14,21 @@ export const Route = createFileRoute("/savings")({
 
 function SavingsPage() {
   const { members, transactions, recordTransaction, currentUser } = useStore();
-  const [memberId, setMemberId] = useState(members[0]?.id ?? "");
+  const memberAccounts = useMemo(
+    () => members.filter((member) => isMemberCategory(member.category)),
+    [members],
+  );
+  const [memberId, setMemberId] = useState(memberAccounts[0]?.id ?? "");
   const [amount, setAmount] = useState(0);
   const [type, setType] = useState<"deposit" | "withdrawal">("deposit");
 
-  const total = members.reduce((s, m) => s + m.savingsBalance, 0);
+  useEffect(() => {
+    if (!memberAccounts.some((member) => member.id === memberId)) {
+      setMemberId(memberAccounts[0]?.id ?? "");
+    }
+  }, [memberAccounts, memberId]);
+
+  const total = memberAccounts.reduce((s, m) => s + m.savingsBalance, 0);
   const deposits = transactions
     .filter((t) => t.type === "deposit")
     .reduce((s, t) => s + t.amount, 0);
@@ -72,7 +82,7 @@ function SavingsPage() {
                 value={memberId}
                 onChange={(e) => setMemberId(e.target.value)}
               >
-                {members.map((m) => (
+                {memberAccounts.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} — {fmtKES(m.savingsBalance)}
                   </option>
@@ -112,7 +122,7 @@ function SavingsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {members.map((m) => {
+                    {memberAccounts.map((m) => {
                       const d = transactions.find(
                         (t) => t.memberId === m.id && t.type === "deposit",
                       );

@@ -1,13 +1,22 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, type BusinessPermanence, type Member } from "@/lib/store";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useStore,
+  fmtKES,
+  formatMembershipNumber,
+  memberCategoryLabel,
+  nextMembershipNumber,
+  normalizeMembershipNumber,
+  type BusinessPermanence,
+  type Member,
+  type MemberCategory,
+} from "@/lib/store";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { MemberLoanHistory } from "@/components/loans/LoanBook";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
-import { useNavigate } from "@tanstack/react-router";
 import { Smartphone, Send } from "lucide-react";
 
 export const Route = createFileRoute("/members")({
@@ -18,15 +27,18 @@ export const Route = createFileRoute("/members")({
 function MembersPage() {
   const { members, loans, addMember, sharePrice, currentUser } = useStore();
   const [open, setOpen] = useState(false);
-  const nextMemberNo = useMemo(() => {
-    const maxNumeric = members.reduce((max, mem) => {
-      const value = Number(mem.id.replace(/^M0*/, "") || "0");
-      return Math.max(max, value);
-    }, 0);
-    return `SBC${String(Math.max(maxNumeric + 1, 101)).padStart(4, "0")}K`;
-  }, [members]);
-  const emptyForm = {
-    memberNo: nextMemberNo,
+  const nextMemberNo = useMemo(
+    () =>
+      nextMembershipNumber(
+        members.map((member) => member.id),
+        1,
+      ),
+    [members],
+  );
+
+  const buildEmptyForm = (memberNo: string) => ({
+    memberNo,
+    category: "member" as MemberCategory,
     firstName: "",
     secondName: "",
     thirdName: "",
@@ -45,14 +57,10 @@ function MembersPage() {
     fieldOfficerId: "",
     shares: 0,
     savingsBalance: 0,
-    isInvestor: false,
     investorContribution: 0,
     investorNotes: "",
-  };
-  const [form, setForm] = useState(emptyForm);
-  useEffect(() => {
-    setForm((prev) => ({ ...prev, memberNo: nextMemberNo }));
-  }, [nextMemberNo]);
+  });
+  const [form, setForm] = useState(() => buildEmptyForm(nextMemberNo));
   const [q, setQ] = useState("");
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [payDialog, setPayDialog] = useState<{ member: Member; mode: "member" | "officer" } | null>(
@@ -63,10 +71,16 @@ function MembersPage() {
     currentUser.role === "loan_officer" ||
     currentUser.role === "manager" ||
     currentUser.role === "director";
+  const memberRegistry = useMemo(
+    () => members.filter((member) => member.category !== "investor"),
+    [members],
+  );
 
-  const filtered = members.filter(
+  const filtered = memberRegistry.filter(
     (m) => m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q),
   );
+  const showMemberFields = form.category !== "investor";
+  const showInvestorFields = form.category !== "member";
 
   return (
     <>
@@ -84,7 +98,10 @@ function MembersPage() {
             className="bg-card border border-border rounded-md px-3 py-2 text-sm w-72"
           />
           <button
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              setForm(buildEmptyForm(nextMemberNo));
+              setOpen(true);
+            }}
             className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90"
           >
             + Register member
@@ -96,13 +113,14 @@ function MembersPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
                 <tr>
-                  <th className="px-5 py-3 text-left">ID</th>
+                  <th className="px-5 py-3 text-left">Membership #</th>
                   <th className="px-5 py-3 text-left">Name</th>
                   <th className="px-5 py-3 text-left">Phone</th>
                   <th className="px-5 py-3 text-left">Joined</th>
                   <th className="px-5 py-3 text-right">Shares</th>
                   <th className="px-5 py-3 text-right">Savings</th>
                   <th className="px-5 py-3 text-right">Loans</th>
+                  <th className="px-5 py-3 text-left">Category</th>
                   <th className="px-5 py-3 text-left">Status</th>
                   <th className="px-5 py-3 text-right">Actions</th>
                 </tr>
@@ -121,7 +139,7 @@ function MembersPage() {
                         className="px-5 py-3 font-mono text-xs cursor-pointer"
                         onClick={() => setHistoryId(m.id)}
                       >
-                        {m.id}
+                        {formatMembershipNumber(m.id)}
                       </td>
                       <td
                         className="px-5 py-3 font-medium cursor-pointer"
@@ -140,6 +158,11 @@ function MembersPage() {
                       <td className="px-5 py-3 text-right">{fmtKES(m.savingsBalance)}</td>
                       <td className="px-5 py-3 text-right">
                         {active}/{memberLoans.length}
+                      </td>
+                      <td className="px-5 py-3">
+                        <Badge tone={m.category === "both" ? "accent" : "default"}>
+                          {memberCategoryLabel(m.category)}
+                        </Badge>
                       </td>
                       <td className="px-5 py-3">
                         <Badge tone={m.status === "active" ? "success" : "muted"}>{m.status}</Badge>
@@ -216,7 +239,46 @@ function MembersPage() {
                 <h4 className="font-display text-base font-semibold mb-3">Applicant Details</h4>
                 <div className="space-y-3">
                   <Field label="Member No.">
-                    <input className="input" value={form.memberNo} readOnly />
+                    <input
+                      className="input"
+                      value={form.memberNo}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          memberNo: e.target.value.toUpperCase().replace(/\s+/g, ""),
+                        })
+                      }
+                      onBlur={() => {
+                        const normalized = normalizeMembershipNumber(form.memberNo);
+                        if (normalized) {
+                          setForm((prev) => ({ ...prev, memberNo: normalized }));
+                        }
+                      }}
+                    />
+                  </Field>
+                  <Field label="Registration Category">
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { value: "member", label: "Member" },
+                          { value: "investor", label: "Investor" },
+                          { value: "both", label: "Both" },
+                        ] as const
+                      ).map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setForm({ ...form, category: option.value })}
+                          className={`rounded-md border px-3 py-2 text-sm font-medium ${
+                            form.category === option.value
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border hover:bg-muted"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </Field>
                   <div className="grid grid-cols-3 gap-3">
                     <Field label="First Name">
@@ -367,43 +429,43 @@ function MembersPage() {
               </section>
 
               {/* Initial balances */}
-              <section>
-                <h4 className="font-display text-base font-semibold mb-3">Initial Balances</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Initial Shares">
-                    <input
-                      type="number"
-                      className="input"
-                      value={form.shares}
-                      onChange={(e) => setForm({ ...form, shares: Number(e.target.value) })}
-                    />
-                  </Field>
-                  <Field label="Initial Savings (KSh)">
-                    <input
-                      type="number"
-                      className="input"
-                      value={form.savingsBalance}
-                      onChange={(e) => setForm({ ...form, savingsBalance: Number(e.target.value) })}
-                    />
-                  </Field>
-                </div>
-              </section>
+              {showMemberFields && (
+                <section>
+                  <h4 className="font-display text-base font-semibold mb-3">Initial Balances</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Initial Shares">
+                      <input
+                        type="number"
+                        className="input"
+                        value={form.shares}
+                        onChange={(e) => setForm({ ...form, shares: Number(e.target.value) })}
+                      />
+                    </Field>
+                    <Field label="Initial Savings (KSh)">
+                      <input
+                        type="number"
+                        className="input"
+                        value={form.savingsBalance}
+                        onChange={(e) =>
+                          setForm({ ...form, savingsBalance: Number(e.target.value) })
+                        }
+                      />
+                    </Field>
+                  </div>
+                </section>
+              )}
 
               {/* Investor option */}
-              <section className="border-t border-border pt-4">
-                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.isInvestor}
-                    onChange={(e) => setForm({ ...form, isInvestor: e.target.checked })}
-                  />
-                  Also register as an investor
-                </label>
-                <p className="text-xs text-muted-foreground mt-1">
-                  When ticked, any M-Pesa Paybill payment to this member's account is routed to the
-                  investment pool instead of savings/loan.
-                </p>
-                {form.isInvestor && (
+              {showInvestorFields && (
+                <section className="border-t border-border pt-4">
+                  <p className="text-sm font-medium">
+                    {form.category === "investor" ? "Investor account" : "Member-investor details"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Investor-only accounts route Paybill payments to investments. For Both, normal
+                    member payment logic takes priority, and investment top-ups should be recorded
+                    from the Investors page.
+                  </p>
                   <div className="space-y-2 mt-3">
                     <input
                       type="number"
@@ -422,8 +484,8 @@ function MembersPage() {
                       onChange={(e) => setForm({ ...form, investorNotes: e.target.value })}
                     />
                   </div>
-                )}
-              </section>
+                </section>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 mt-5">
@@ -435,10 +497,15 @@ function MembersPage() {
               </button>
               <button
                 onClick={async () => {
+                  const normalizedMemberNo = normalizeMembershipNumber(form.memberNo);
                   const fullName = [form.firstName, form.secondName, form.thirdName]
                     .filter(Boolean)
                     .join(" ")
                     .trim();
+                  if (!normalizedMemberNo) {
+                    toast.error("Membership number must follow the SBC0001K format.");
+                    return;
+                  }
                   if (!form.firstName.trim()) {
                     toast.error("First name is required");
                     return;
@@ -461,6 +528,7 @@ function MembersPage() {
                   }
                   try {
                     await addMember({
+                      memberId: normalizedMemberNo,
                       name: fullName,
                       phone,
                       status: "active",
@@ -477,21 +545,26 @@ function MembersPage() {
                       city: form.city || undefined,
                       county: form.county || undefined,
                       village: form.village || undefined,
-                      oldSystemId:
-                        form.memberNo && form.memberNo !== nextMemberNo ? form.memberNo : undefined,
                       businessName: form.businessName || undefined,
                       businessType: form.businessType || undefined,
                       businessPermanence: form.businessPermanence || undefined,
                       businessAddress: form.businessAddress || undefined,
                       fieldOfficerId: form.fieldOfficerId || undefined,
-                      investorContribution: form.isInvestor ? form.investorContribution : undefined,
-                      investorNotes: form.isInvestor ? form.investorNotes : undefined,
+                      category: form.category,
+                      investorContribution: showInvestorFields
+                        ? form.investorContribution
+                        : undefined,
+                      investorNotes: showInvestorFields ? form.investorNotes : undefined,
                     });
                     toast.success(
-                      form.isInvestor ? "Member-investor registered" : "Member registered",
+                      form.category === "investor"
+                        ? "Investor registered"
+                        : form.category === "both"
+                          ? "Member-investor registered"
+                          : "Member registered",
                     );
                     setOpen(false);
-                    setForm(emptyForm);
+                    setForm(buildEmptyForm(nextMemberNo));
                   } catch (error: unknown) {
                     toast.error(
                       error instanceof Error ? error.message : "Failed to register member",

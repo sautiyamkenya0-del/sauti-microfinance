@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
+import { formatMembershipNumber } from "@/lib/membership";
 import { getSecret } from "@/lib/runtime-secrets.server";
 import { toComparableKenyanPhone } from "@/lib/utils";
 
@@ -40,8 +41,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
 
           if (session.authMode === "member") {
             const member = await requireMemberActor();
-            const expectedDigits = member.id.replace(/^M0*/, "") || "0";
-            const expectedAccountRef = `SBC${expectedDigits.padStart(4, "0")}K`;
+            const expectedAccountRef = formatMembershipNumber(member.id);
             if (accountRef.toUpperCase() !== expectedAccountRef) {
               return Response.json(
                 {

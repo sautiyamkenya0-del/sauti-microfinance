@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
-import { useStore, fmtKES } from "@/lib/store";
-import { useState } from "react";
+import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PieChart as PieIcon } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
@@ -24,13 +24,25 @@ const COLORS = [
 
 function SharesPage() {
   const { members, sharePrice, recordTransaction, currentUser } = useStore();
-  const [memberId, setMemberId] = useState(members[0]?.id ?? "");
+  const memberAccounts = useMemo(
+    () => members.filter((member) => isMemberCategory(member.category)),
+    [members],
+  );
+  const [memberId, setMemberId] = useState(memberAccounts[0]?.id ?? "");
   const [units, setUnits] = useState(1);
 
-  const totalUnits = members.reduce((s, m) => s + m.shares, 0);
+  useEffect(() => {
+    if (!memberAccounts.some((member) => member.id === memberId)) {
+      setMemberId(memberAccounts[0]?.id ?? "");
+    }
+  }, [memberAccounts, memberId]);
+
+  const totalUnits = memberAccounts.reduce((s, m) => s + m.shares, 0);
   const totalCapital = totalUnits * sharePrice;
 
-  const data = members.filter((m) => m.shares > 0).map((m) => ({ name: m.name, value: m.shares }));
+  const data = memberAccounts
+    .filter((m) => m.shares > 0)
+    .map((m) => ({ name: m.name, value: m.shares }));
 
   return (
     <>
@@ -58,7 +70,7 @@ function SharesPage() {
                 value={memberId}
                 onChange={(e) => setMemberId(e.target.value)}
               >
-                {members.map((m) => (
+                {memberAccounts.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} — {m.shares} units
                   </option>
@@ -138,7 +150,7 @@ function SharesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {members
+              {memberAccounts
                 .filter((m) => m.shares > 0)
                 .sort((a, b) => b.shares - a.shares)
                 .map((m) => (

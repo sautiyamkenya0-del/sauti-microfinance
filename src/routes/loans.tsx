@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
-import { useStore } from "@/lib/store";
+import { isMemberCategory, useStore } from "@/lib/store";
 import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
 import { FirstTimeApplication } from "@/components/loans/FirstTimeApplication";
 import { RepeatApplication } from "@/components/loans/RepeatApplication";
@@ -27,6 +27,7 @@ function LoansHub() {
 
   const isFirstTime = selectedMemberId ? memberLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
+  const memberAccounts = members.filter((member) => isMemberCategory(member.category));
 
   const tabs: { key: Tab; label: string; hidden?: boolean }[] = [
     { key: "book", label: "Loan Book" },
@@ -76,7 +77,7 @@ function LoansHub() {
                   className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                 >
                   <option value="">— New / Walk-in (capture full details) —</option>
-                  {members.map((m) => (
+                  {memberAccounts.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.id} · {m.name} · {m.phone} · ({memberLoanCount(m.id)} loans)
                     </option>

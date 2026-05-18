@@ -1,8 +1,11 @@
 import { Section } from "@/components/ui-bits";
 import {
   useStore,
+  formatMembershipNumber,
   fmtKES,
   loanRateForTerm,
+  nextMembershipNumber,
+  normalizeMembershipNumber,
   loanScheduleTotal,
   normalizeLoanTermDays,
   sbcDeductions,
@@ -29,14 +32,22 @@ export function FirstTimeApplication({
   onSubmitted?: (loanId: string) => void;
 }) {
   const { members, currentUser, addLoan, addMember } = useStore();
+  const nextMemberNo = useMemo(
+    () =>
+      nextMembershipNumber(
+        members.map((member) => member.id),
+        1,
+      ),
+    [members],
+  );
   const existing = members.find((m) => m.id === memberId);
-  const [f, setF] = useState({
+  const [f, setF] = useState(() => ({
     fullName: existing?.name ?? "",
     nickname: "",
     maritalStatus: "Single",
     idNo: "",
     phone: existing?.phone ?? "",
-    membershipNo: existing?.id ?? "",
+    membershipNo: existing ? formatMembershipNumber(existing.id) : nextMemberNo,
     gender: "Male",
     dob: "",
     businessType: "Mama Mboga",
@@ -69,13 +80,32 @@ export function FirstTimeApplication({
     collateralAddedToLoan: false,
     collateralPhotosAttached: false,
     dailySavingsPlan: "50" as "50" | "100",
-  });
+  }));
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const loanCategory = useMemo<"Normal" | "Premium">(
     () => (f.loanAmount > 5000 ? "Premium" : "Normal"),
     [f.loanAmount],
   );
   const repaymentOptions = loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+
+  useEffect(() => {
+    if (existing) {
+      setF((prev) => ({
+        ...prev,
+        fullName: existing.name,
+        phone: existing.phone,
+        membershipNo: formatMembershipNumber(existing.id),
+      }));
+      return;
+    }
+
+    if (!memberId) {
+      setF((prev) => ({
+        ...prev,
+        membershipNo: prev.membershipNo || nextMemberNo,
+      }));
+    }
+  }, [existing, memberId, nextMemberNo]);
 
   useEffect(() => {
     if (repaymentOptions.includes(f.repaymentDays as (typeof repaymentOptions)[number])) return;
@@ -111,9 +141,16 @@ export function FirstTimeApplication({
       return toast.error("Use a local phone number starting with 07 or 01.");
     }
     const phone = toLocalKenyanPhone(f.phone);
+    const normalizedMembershipNo = f.membershipNo
+      ? normalizeMembershipNumber(f.membershipNo)
+      : undefined;
+    if (f.membershipNo && !normalizedMembershipNo) {
+      return toast.error("Membership number must follow the SBC0001K format.");
+    }
     let mid = members.find((x) => x.phone === phone)?.id;
     if (!mid)
       mid = await addMember({
+        memberId: normalizedMembershipNo,
         name: f.fullName,
         phone,
         joinedAt: new Date().toISOString().slice(0, 10),

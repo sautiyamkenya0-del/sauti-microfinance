@@ -1,8 +1,14 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly, RestrictedNotice } from "@/components/ui-bits";
-import { useStore, fmtKES } from "@/lib/store";
+import {
+  useStore,
+  fmtKES,
+  formatMembershipNumber,
+  memberCategoryLabel,
+  type Investor,
+} from "@/lib/store";
 import { Building2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 import { useState } from "react";
@@ -40,23 +46,33 @@ function InvPage() {
 }
 
 function InvestorsContent() {
-  const { investors, addInvestor } = useStore();
+  const { investors, members, recordTransaction, currentUser } = useStore();
+  const nav = useNavigate();
   const total = investors.reduce((s, i) => s + i.contributed, 0);
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", phone: "", contributed: 0, sharePct: 0, notes: "" });
+  const memberInvestors = investors.filter((investor) => {
+    const member = members.find((row) => row.id === investor.memberId);
+    return member?.category === "both";
+  }).length;
+  const investorOnly = investors.filter((investor) => {
+    const member = members.find((row) => row.id === investor.memberId);
+    return member?.category === "investor";
+  }).length;
+  const [topUpInvestor, setTopUpInvestor] = useState<Investor | null>(null);
+  const [topUpAmount, setTopUpAmount] = useState(0);
+  const [topUpNote, setTopUpNote] = useState("");
 
   return (
     <>
       <div className="flex justify-end">
         <button
-          onClick={() => setOpen(true)}
+          onClick={() => nav({ to: "/members" })}
           className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90"
         >
-          + Add Investor
+          Register From Members Page
         </button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Total Investor Capital"
           value={fmtKES(total)}
@@ -64,10 +80,8 @@ function InvestorsContent() {
           tone="accent"
         />
         <StatCard label="Investors" value={investors.length} />
-        <StatCard
-          label="Avg. Contribution"
-          value={fmtKES(investors.length ? total / investors.length : 0)}
-        />
+        <StatCard label="Investor Only" value={investorOnly} />
+        <StatCard label="Member + Investor" value={memberInvestors} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -98,95 +112,123 @@ function InvestorsContent() {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
               <tr>
+                <th className="px-5 py-3 text-left">Membership #</th>
                 <th className="px-5 py-3 text-left">Name</th>
                 <th className="px-5 py-3 text-right">Contributed</th>
+                <th className="px-5 py-3 text-left">Category</th>
                 <th className="px-5 py-3 text-right">Equity</th>
                 <th className="px-5 py-3 text-right">Joined</th>
+                <th className="px-5 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {investors.map((i) => (
-                <tr key={i.id}>
-                  <td className="px-5 py-3 font-medium">
-                    {i.name}
-                    {i.phone && (
-                      <div className="text-xs text-muted-foreground font-normal">{i.phone}</div>
-                    )}
-                  </td>
-                  <td className="px-5 py-3 text-right">{fmtKES(i.contributed)}</td>
-                  <td className="px-5 py-3 text-right">{i.sharePct}%</td>
-                  <td className="px-5 py-3 text-right text-xs text-muted-foreground">
-                    {i.joinedAt}
-                  </td>
-                </tr>
-              ))}
+              {investors.map((i) => {
+                const linkedMember = members.find((row) => row.id === i.memberId);
+                return (
+                  <tr key={i.id}>
+                    <td className="px-5 py-3 font-mono text-xs">
+                      {i.memberId ? formatMembershipNumber(i.memberId) : "Unlinked"}
+                    </td>
+                    <td className="px-5 py-3 font-medium">
+                      {i.name}
+                      {i.phone && (
+                        <div className="text-xs text-muted-foreground font-normal">{i.phone}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-right">{fmtKES(i.contributed)}</td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {linkedMember ? memberCategoryLabel(linkedMember.category) : "Investor"}
+                    </td>
+                    <td className="px-5 py-3 text-right">{i.sharePct}%</td>
+                    <td className="px-5 py-3 text-right text-xs text-muted-foreground">
+                      {i.joinedAt}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => {
+                          if (!i.memberId) {
+                            toast.error("This investor is missing a linked membership number.");
+                            return;
+                          }
+                          setTopUpInvestor(i);
+                          setTopUpAmount(0);
+                          setTopUpNote("");
+                        }}
+                        className="px-3 py-1.5 rounded-md text-xs bg-primary/10 text-primary hover:bg-primary/20"
+                      >
+                        Add Investment
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </Section>
       </div>
 
-      {open && (
+      {topUpInvestor && (
         <div
           className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4"
-          onClick={() => setOpen(false)}
+          onClick={() => setTopUpInvestor(null)}
         >
           <div
             className="bg-card rounded-xl border border-border w-full max-w-md p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="font-display text-lg font-semibold mb-4">Add Investor</h3>
+            <h3 className="font-display text-lg font-semibold mb-4">Add Investment</h3>
             <div className="space-y-3">
-              <input
-                placeholder="Investor name / entity"
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-              <input
-                placeholder="Phone (optional)"
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  placeholder="Contribution (KES)"
-                  className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  value={form.contributed}
-                  onChange={(e) => setForm({ ...form, contributed: Number(e.target.value) })}
-                />
-                <input
-                  type="number"
-                  placeholder="Equity %"
-                  className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  value={form.sharePct}
-                  onChange={(e) => setForm({ ...form, sharePct: Number(e.target.value) })}
-                />
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+                <div className="font-medium text-foreground">{topUpInvestor.name}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {topUpInvestor.memberId
+                    ? formatMembershipNumber(topUpInvestor.memberId)
+                    : "No membership number"}
+                </div>
               </div>
+              <input
+                type="number"
+                placeholder="Contribution (KES)"
+                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                value={topUpAmount || ""}
+                onChange={(e) => setTopUpAmount(Number(e.target.value))}
+              />
               <textarea
                 placeholder="Notes (optional)"
                 rows={2}
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                value={topUpNote}
+                onChange={(e) => setTopUpNote(e.target.value)}
               />
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button
-                onClick={() => setOpen(false)}
+                onClick={() => setTopUpInvestor(null)}
                 className="px-3 py-1.5 text-sm rounded-md hover:bg-muted"
               >
                 Cancel
               </button>
               <button
                 onClick={async () => {
-                  if (!form.name || form.contributed <= 0)
-                    return toast.error("Name & contribution required");
-                  await addInvestor(form);
-                  toast.success("Investor added");
-                  setOpen(false);
-                  setForm({ name: "", phone: "", contributed: 0, sharePct: 0, notes: "" });
+                  if (!topUpInvestor.memberId || topUpAmount <= 0) {
+                    return toast.error("Enter a valid investment amount.");
+                  }
+                  try {
+                    await recordTransaction({
+                      type: "investor_contribution",
+                      amount: topUpAmount,
+                      memberId: topUpInvestor.memberId,
+                      account: formatMembershipNumber(topUpInvestor.memberId),
+                      by: currentUser.id,
+                      note: topUpNote || `Investor top-up: ${topUpInvestor.name}`,
+                    });
+                    toast.success("Investment recorded");
+                    setTopUpInvestor(null);
+                    setTopUpAmount(0);
+                    setTopUpNote("");
+                  } catch (error: any) {
+                    toast.error(error?.message ?? "Failed to record investment.");
+                  }
                 }}
                 className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
               >
