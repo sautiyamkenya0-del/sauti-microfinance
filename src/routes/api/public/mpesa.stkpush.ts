@@ -55,7 +55,8 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
               return Response.json(
                 {
                   ok: false,
-                  error: "Members can only trigger M-Pesa prompts to their registered phone number.",
+                  error:
+                    "Members can only trigger M-Pesa prompts to their registered phone number.",
                 },
                 { status: 403 },
               );
@@ -147,10 +148,8 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
               return Response.json(
                 {
                   ok: false,
-                  error:
-                    "M-Pesa STK is not enabled for the configured Daraja application.",
-                  hint:
-                    "Enable Lipa Na M-Pesa Online / STK Push for the same production app in the Daraja portal, or switch back to credentials that already have STK enabled.",
+                  error: "M-Pesa STK is not enabled for the configured Daraja application.",
+                  hint: "Enable Lipa Na M-Pesa Online / STK Push for the same production app in the Daraja portal, or switch back to credentials that already have STK enabled.",
                   details: { ...(stkJson as object), requestId, errorCode, errorMessage },
                 },
                 { status: 502 },

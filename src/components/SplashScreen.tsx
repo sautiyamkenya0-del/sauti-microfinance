@@ -21,16 +21,16 @@ export function SplashScreen({ persist = false }: { persist?: boolean }) {
       setShown(false);
       return;
     }
-    const t1 = setTimeout(() => setFade(true), 2400);
+    const t1 = setTimeout(() => setFade(true), 300);
     const t2 = setTimeout(() => {
       setShown(false);
       splashShownThisRuntime = true;
-    }, 3000);
+    }, 650);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, []);
+  }, [persist]);
   if (!shown) return null;
   return (
     <div

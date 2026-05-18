@@ -28,7 +28,7 @@ function StaffMgmt() {
   if (currentUser.role !== "director") return <Navigate to="/" />;
 
   async function resetPassword(s: Staff) {
-    const newPwd = "Sauti" + Math.floor(1000 + Math.random() * 9000);
+    const newPwd = `Sauti!${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
     await updateStaff(s.id, { tempPassword: newPwd });
     toast.success(`New password for ${s.name}: ${newPwd}`);
   }

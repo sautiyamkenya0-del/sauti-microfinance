@@ -28,7 +28,9 @@ function parseMembershipNumber(value: string) {
 
 export const signInStaff = createServerFn({ method: "POST" })
   .inputValidator((data: { email: string; password: string }) => ({
-    email: String(data?.email ?? "").trim().toLowerCase(),
+    email: String(data?.email ?? "")
+      .trim()
+      .toLowerCase(),
     password: String(data?.password ?? ""),
   }))
   .handler(async ({ data }) => {
@@ -37,7 +39,7 @@ export const signInStaff = createServerFn({ method: "POST" })
     const supabaseAdmin = requireSupabaseAdmin();
     const { data: staffRow, error } = await supabaseAdmin
       .from("staff")
-      .select("*")
+      .select("id, name, role, temp_password")
       .eq("email", data.email)
       .maybeSingle();
     if (error) throw new Error(error.message);

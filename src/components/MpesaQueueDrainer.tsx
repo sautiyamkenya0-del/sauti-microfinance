@@ -2,12 +2,15 @@ import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { toast } from "sonner";
 
-/** Polls /api/mpesa/queue every 20s; runs the in-memory allocation engine for each Daraja confirmation. */
+/** Low-frequency fallback that retries any unprocessed M-Pesa confirmations. */
 export function MpesaQueueDrainer() {
   const { applyMpesaPayment } = useStore();
+
   useEffect(() => {
     let stop = false;
+
     async function tick() {
+      if (document.hidden || stop) return;
       try {
         const r = await fetch("/api/mpesa/queue", {
           cache: "no-store",
@@ -18,6 +21,7 @@ export function MpesaQueueDrainer() {
         });
         if (!r.ok) return;
         const { items } = await r.json();
+        if (!Array.isArray(items) || items.length === 0) return;
         for (const it of items as Array<{
           id: string;
           txId: string;
@@ -30,15 +34,18 @@ export function MpesaQueueDrainer() {
             `M-Pesa ${it.txId}: ${res.notes.join(" ")}`,
           );
         }
-      } catch {}
+      } catch {
+        // Confirmation callbacks already try immediate processing; this queue drainer is only a low-frequency safety net.
+      }
     }
-    tick();
+
+    void tick();
     const onVisible = () => {
       if (!document.hidden && !stop) void tick();
     };
     const id = setInterval(() => {
       if (!stop) void tick();
-    }, 5000);
+    }, 60000);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       stop = true;

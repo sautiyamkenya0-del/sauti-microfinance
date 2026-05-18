@@ -22,9 +22,8 @@ function splitLegacyLastName(lastName: string | null | undefined) {
 }
 
 async function requireSupabaseAdmin() {
-  const { getSupabaseAdminEnvStatus, getSupabaseAdminOrNull } = await import(
-    "@/integrations/supabase/client.server",
-  );
+  const { getSupabaseAdminEnvStatus, getSupabaseAdminOrNull } =
+    await import("@/integrations/supabase/client.server");
   const supabaseAdmin = getSupabaseAdminOrNull();
   if (!supabaseAdmin) {
     const missing = getSupabaseAdminEnvStatus().missing.join(", ");
@@ -499,7 +498,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   if (Object.keys(memberPatch).length > 0) {
     const { error: memberUpdateError } = await supabaseAdmin
       .from("members")
-        .update(memberPatch as any)
+      .update(memberPatch as any)
       .eq("id", memberId);
     if (memberUpdateError) throw new Error(memberUpdateError.message);
   }
@@ -556,16 +555,14 @@ async function nextPrefixedId(
   minimum: number,
 ) {
   const supabaseAdmin = await requireSupabaseAdmin();
-  const { data, error } = await supabaseAdmin.from(table).select("id");
+  const { data, error } = await supabaseAdmin.rpc("next_entity_id", {
+    entity_name: table,
+  });
   if (error) throw new Error(error.message);
-
-  const maxSeen = (data ?? []).reduce((maxValue, row) => {
-    const match = String(row.id ?? "").match(/(\d+)/);
-    if (!match) return maxValue;
-    return Math.max(maxValue, Number(match[1]));
-  }, minimum - 1);
-
-  return `${prefix}${maxSeen + 1}`;
+  if (!data) {
+    throw new Error(`Failed to allocate a new ${table} identifier.`);
+  }
+  return String(data);
 }
 
 function approxDataUrlBytes(value: string) {
@@ -931,40 +928,39 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
   if (!session.authMode) return base;
 
   const supabaseAdmin = await requireSupabaseAdmin();
-  const runtimeDb = supabaseAdmin as any;
 
   if (session.authMode === "member" && session.memberId) {
-    const [memberResult, staffResult, loansResult, transactionsResult, penaltiesResult, roundOffResult, feePoliciesResult, supportThreadsResult] =
-      await Promise.all([
-        supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
-        supabaseAdmin.from("staff").select("id, name, role").order("id"),
-        supabaseAdmin
-          .from("loans")
-          .select("*")
-          .eq("member_id", session.memberId)
-          .order("start_date", { ascending: false }),
-        supabaseAdmin
-          .from("transactions")
-          .select("*")
-          .eq("member_id", session.memberId)
-          .order("date", { ascending: false }),
-        supabaseAdmin
-          .from("penalties")
-          .select("*")
-          .eq("member_id", session.memberId)
-          .order("date", { ascending: false }),
-        supabaseAdmin
-          .from("round_off")
-          .select("*")
-          .eq("member_id", session.memberId)
-          .order("date", { ascending: false }),
-        runtimeDb.from("fee_policies").select("*").order("updated_at", { ascending: false }),
-        runtimeDb
-          .from("support_threads")
-          .select("*")
-          .eq("member_id", session.memberId)
-          .order("updated_at", { ascending: false }),
-      ]);
+    const [
+      memberResult,
+      staffResult,
+      loansResult,
+      transactionsResult,
+      penaltiesResult,
+      roundOffResult,
+    ] = await Promise.all([
+      supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
+      supabaseAdmin.from("staff").select("id, name, role").order("id"),
+      supabaseAdmin
+        .from("loans")
+        .select("*")
+        .eq("member_id", session.memberId)
+        .order("start_date", { ascending: false }),
+      supabaseAdmin
+        .from("transactions")
+        .select("*")
+        .eq("member_id", session.memberId)
+        .order("date", { ascending: false }),
+      supabaseAdmin
+        .from("penalties")
+        .select("*")
+        .eq("member_id", session.memberId)
+        .order("date", { ascending: false }),
+      supabaseAdmin
+        .from("round_off")
+        .select("*")
+        .eq("member_id", session.memberId)
+        .order("date", { ascending: false }),
+    ]);
 
     const memberResults = [
       memberResult,
@@ -973,24 +969,10 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       transactionsResult,
       penaltiesResult,
       roundOffResult,
-      feePoliciesResult,
-      supportThreadsResult,
     ];
     const failedMemberResult = memberResults.find((result) => result.error);
     if (failedMemberResult?.error) throw new Error(failedMemberResult.error.message);
     if (!memberResult.data) return base;
-
-    const threadIds = (supportThreadsResult.data ?? []).map((row: any) => row.id);
-    const supportMessagesResult = threadIds.length
-      ? await runtimeDb
-          .from("support_messages")
-          .select("*")
-          .in("thread_id", threadIds)
-          .order("created_at", { ascending: true })
-      : { data: [], error: null };
-    if (supportMessagesResult.error) throw new Error(supportMessagesResult.error.message);
-
-    const supportMessagesByThread = groupSupportMessages(supportMessagesResult.data ?? []);
 
     return {
       ...base,
@@ -1003,10 +985,6 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
       penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
       roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
-      feePolicies: (feePoliciesResult.data ?? []).map(mapFeePolicyRow),
-      supportThreads: (supportThreadsResult.data ?? []).map((row: any) =>
-        mapSupportThreadRow(row, supportMessagesByThread),
-      ),
     };
   }
 
@@ -1026,11 +1004,6 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penaltiesResult,
     roundOffResult,
     staffMessagesResult,
-    memosResult,
-    approvalsResult,
-    feePoliciesResult,
-    supportThreadsResult,
-    supportMessagesResult,
   ] = await Promise.all([
     supabaseAdmin.from("staff").select("*").order("id"),
     supabaseAdmin.from("members").select("*").order("id"),
@@ -1048,12 +1021,11 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     supabaseAdmin.from("followups").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("penalties").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("round_off").select("*").order("date", { ascending: false }),
-    runtimeDb.from("staff_messages").select("*").order("created_at", { ascending: true }),
-    runtimeDb.from("staff_memos").select("*").order("memo_date", { ascending: false }),
-    runtimeDb.from("approval_requests").select("*").order("created_at", { ascending: false }),
-    runtimeDb.from("fee_policies").select("*").order("updated_at", { ascending: false }),
-    runtimeDb.from("support_threads").select("*").order("updated_at", { ascending: false }),
-    runtimeDb.from("support_messages").select("*").order("created_at", { ascending: true }),
+    supabaseAdmin
+      .from("staff_messages")
+      .select("*")
+      .or(`sender_id.eq.${actor.id},receiver_id.eq.${actor.id}`)
+      .order("created_at", { ascending: true }),
   ]);
 
   const results = [
@@ -1070,16 +1042,9 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penaltiesResult,
     roundOffResult,
     staffMessagesResult,
-    memosResult,
-    approvalsResult,
-    feePoliciesResult,
-    supportThreadsResult,
-    supportMessagesResult,
   ];
   const failed = results.find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
-
-  const supportMessagesByThread = groupSupportMessages(supportMessagesResult.data ?? []);
 
   const staffRows = (staffResult.data ?? []).map(mapStaffRow);
 
@@ -1101,12 +1066,6 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
     roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
     staffMessages: (staffMessagesResult.data ?? []).map(mapStaffMessageRow),
-    memos: (memosResult.data ?? []).map(mapMemoRow),
-    approvals: (approvalsResult.data ?? []).map(mapApprovalRow),
-    feePolicies: (feePoliciesResult.data ?? []).map(mapFeePolicyRow),
-    supportThreads: (supportThreadsResult.data ?? []).map((row: any) =>
-      mapSupportThreadRow(row, supportMessagesByThread),
-    ),
   };
 });
 
@@ -1318,7 +1277,8 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       .eq("email", data.email)
       .maybeSingle();
     if (existingError) throw new Error(existingError.message);
-    if (existing) throw new Error("That email address is already assigned to another staff account.");
+    if (existing)
+      throw new Error("That email address is already assigned to another staff account.");
 
     const staffId = await nextPrefixedId("staff", "S", 1);
     const { error } = await supabaseAdmin.from("staff").insert({
@@ -1482,9 +1442,7 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       lat: data?.lat == null ? undefined : Number(data.lat),
       lng: data?.lng == null ? undefined : Number(data.lng),
       photos: Array.isArray(data?.photos)
-        ? data.photos
-            .map((photo) => String(photo ?? "").trim())
-            .filter(Boolean)
+        ? data.photos.map((photo) => String(photo ?? "").trim()).filter(Boolean)
         : [],
       byStaff: data?.byStaff?.trim() || undefined,
       date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
@@ -1510,7 +1468,9 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     }
     const totalPhotoBytes = data.photos.reduce((sum, photo) => sum + approxDataUrlBytes(photo), 0);
     if (totalPhotoBytes > MAX_FIELD_VISIT_TOTAL_BYTES) {
-      throw new Error("The selected field visit photos are too large. Remove some photos and try again.");
+      throw new Error(
+        "The selected field visit photos are too large. Remove some photos and try again.",
+      );
     }
 
     const supabaseAdmin = await requireSupabaseAdmin();
@@ -1550,8 +1510,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     }) => ({
       memberId: String(data?.memberId ?? "").trim(),
       principal: Number(data?.principal ?? 0),
-      approvedAmount:
-        data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
+      approvedAmount: data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
       rate: Number(data?.rate ?? 0),
       termMonths: Number(data?.termMonths ?? 0),
       termDays: data?.termDays == null ? undefined : Number(data.termDays),
@@ -1613,8 +1572,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     }) => ({
       loanId: String(data?.loanId ?? "").trim(),
       decision: data?.decision ?? "approved",
-      approvedAmount:
-        data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
+      approvedAmount: data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
       reviewedBy: String(data?.reviewedBy ?? "").trim(),
       note: data?.note?.trim() || undefined,
     }),
@@ -1815,8 +1773,7 @@ export const createPettyCashRecord = createServerFn({ method: "POST" })
       mode: data?.mode,
       reference: data?.reference?.trim() || undefined,
       txnCost: data?.txnCost == null ? undefined : Number(data.txnCost),
-      openingBalance:
-        data?.openingBalance == null ? undefined : Number(data.openingBalance),
+      openingBalance: data?.openingBalance == null ? undefined : Number(data.openingBalance),
     }),
   )
   .handler(async ({ data }) => {
@@ -2009,7 +1966,9 @@ export const createFollowupRecord = createServerFn({ method: "POST" })
   });
 
 export const settlePenaltyFromPoolRecord = createServerFn({ method: "POST" })
-  .inputValidator((data: { penaltyId: string }) => ({ penaltyId: String(data?.penaltyId ?? "").trim() }))
+  .inputValidator((data: { penaltyId: string }) => ({
+    penaltyId: String(data?.penaltyId ?? "").trim(),
+  }))
   .handler(async ({ data }) => {
     await requireManagerOrDirectorActor();
     if (!data.penaltyId) throw new Error("Penalty id is required.");
@@ -2090,7 +2049,8 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const actor = await requireStaffActor();
-    if (!data.senderId || !data.receiverId) throw new Error("Both sender and receiver are required.");
+    if (!data.senderId || !data.receiverId)
+      throw new Error("Both sender and receiver are required.");
     if (!data.content && !data.attachment) throw new Error("Message cannot be empty.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
@@ -2109,13 +2069,7 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
 
 export const createStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator(
-    (data: {
-      title: string;
-      body: string;
-      by: string;
-      byStaffId?: string;
-      date?: string;
-    }) => ({
+    (data: { title: string; body: string; by: string; byStaffId?: string; date?: string }) => ({
       title: String(data?.title ?? "").trim(),
       body: String(data?.body ?? "").trim(),
       by: String(data?.by ?? "").trim(),
@@ -2125,7 +2079,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const actor = await requireStaffActor();
-    if (!data.title || !data.body || !data.by) throw new Error("Memo title, body and author are required.");
+    if (!data.title || !data.body || !data.by)
+      throw new Error("Memo title, body and author are required.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const id = makeId("MEM");
@@ -2251,7 +2206,8 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       amount: Number(data?.amount ?? 0),
       permanence: data?.permanence ?? "permanent",
       durationDays: data?.durationDays ? Number(data.durationDays) : undefined,
-      effectiveFrom: String(data?.effectiveFrom ?? "").trim() || new Date().toISOString().slice(0, 10),
+      effectiveFrom:
+        String(data?.effectiveFrom ?? "").trim() || new Date().toISOString().slice(0, 10),
       scope: data?.scope ?? "all",
       custom: !!data?.custom,
       notes: data?.notes?.trim() || undefined,
@@ -2385,7 +2341,8 @@ export const appendSupportMessageRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const session = await requireSignedInSession();
-    if (!data.threadId || !data.fromName || !data.text) throw new Error("Support message is incomplete.");
+    if (!data.threadId || !data.fromName || !data.text)
+      throw new Error("Support message is incomplete.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     let senderKind: "member" | "staff";
     let senderName: string;

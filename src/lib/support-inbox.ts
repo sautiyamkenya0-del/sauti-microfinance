@@ -4,9 +4,9 @@ import { useServerFn } from "@tanstack/react-start";
 import {
   appendSupportMessageRecord,
   createSupportThreadRecord,
-  loadAppData,
   updateSupportThreadRecord,
 } from "@/lib/app-data.functions";
+import { listSupportThreads } from "@/lib/runtime-data.functions";
 
 export type SupportMsg = {
   id: string;
@@ -30,7 +30,7 @@ export type SupportThread = {
 };
 
 export function useSupportThreads(enabled = true) {
-  const load = useServerFn(loadAppData);
+  const loadSupportThreads = useServerFn(listSupportThreads);
   const [rows, setRows] = useState<SupportThread[]>([]);
 
   const refresh = useCallback(async () => {
@@ -38,9 +38,8 @@ export function useSupportThreads(enabled = true) {
       setRows([]);
       return;
     }
-    const data = await load();
-    setRows(data.supportThreads ?? []);
-  }, [enabled, load]);
+    setRows(await loadSupportThreads());
+  }, [enabled, loadSupportThreads]);
 
   useEffect(() => {
     if (!enabled) {
@@ -53,13 +52,16 @@ export function useSupportThreads(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     const sync = () => {
+      if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 4000);
+    const timer = window.setInterval(sync, 15000);
     window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
     };
   }, [enabled, refresh]);
 
@@ -67,16 +69,15 @@ export function useSupportThreads(enabled = true) {
 }
 
 export function useSupportInboxActions() {
-  const load = useServerFn(loadAppData);
+  const loadSupportThreads = useServerFn(listSupportThreads);
   const createThreadRecord = useServerFn(createSupportThreadRecord);
   const appendMessageRecord = useServerFn(appendSupportMessageRecord);
   const updateThreadRecord = useServerFn(updateSupportThreadRecord);
   const [rows, setRows] = useState<SupportThread[]>([]);
 
   const refresh = useCallback(async () => {
-    const data = await load();
-    setRows(data.supportThreads ?? []);
-  }, [load]);
+    setRows(await loadSupportThreads());
+  }, [loadSupportThreads]);
 
   useEffect(() => {
     refresh().catch(() => {});

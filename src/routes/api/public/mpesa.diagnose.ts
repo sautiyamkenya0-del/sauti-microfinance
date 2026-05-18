@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { requireDirectorActor } from "@/lib/auth.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
+import { readServerEnv } from "@/lib/server-env";
 
 /** GET /api/public/mpesa/diagnose
  *  Returns whether each MPESA_* secret is set + tries an OAuth token call.
@@ -11,6 +12,13 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
   server: {
     handlers: {
       GET: async () => {
+        const diagnosticsEnabled =
+          (readServerEnv("NODE_ENV") ?? "").toLowerCase() !== "production" ||
+          (readServerEnv("SAUTI_ENABLE_MPESA_DIAGNOSTICS") ?? "").toLowerCase() === "true";
+        if (!diagnosticsEnabled) {
+          return new Response("Not found", { status: 404 });
+        }
+
         await requireDirectorActor();
         const adminEnv = getSupabaseAdminEnvStatus();
         const ck = (await getSecret("MPESA_CONSUMER_KEY")) ?? "";

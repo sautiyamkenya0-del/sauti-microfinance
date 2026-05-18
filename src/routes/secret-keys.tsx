@@ -373,9 +373,9 @@ function SecretKeysPage() {
                 and M-Pesa scan features.
               </div>
               <div>
-                M-Pesa keys saved here override the build-time secrets — handy for swapping between
-                sandbox and production without redeploying. Test with{" "}
-                <span className="font-mono">/api/public/mpesa/diagnose</span>.
+                M-Pesa keys saved here override the build-time secrets and can be swapped without
+                redeploying. The diagnostic endpoint is disabled in production unless{" "}
+                <span className="font-mono">SAUTI_ENABLE_MPESA_DIAGNOSTICS=true</span>.
               </div>
             </div>
           </>

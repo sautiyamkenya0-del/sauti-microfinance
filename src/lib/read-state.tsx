@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useStore } from "@/lib/store";
 
 const EVT = "sauti:read-changed";
-let readIdsState = new Set<string>();
+const readIdsState = new Set<string>();
 
 function emitReadChange() {
   window.dispatchEvent(new Event(EVT));

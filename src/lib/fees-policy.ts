@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 
-import {
-  deleteFeePolicyRecord,
-  loadAppData,
-  upsertFeePolicyRecord,
-} from "@/lib/app-data.functions";
+import { deleteFeePolicyRecord, upsertFeePolicyRecord } from "@/lib/app-data.functions";
+import { listFeePolicies } from "@/lib/runtime-data.functions";
 
 export type FeeScope = "all" | "new_only" | "loan_holders" | "investors";
 export type FeePermanence = "permanent" | "semi";
@@ -42,13 +39,12 @@ export function scopeLabel(s: FeeScope): string {
 }
 
 export function useFeesPolicy() {
-  const load = useServerFn(loadAppData);
+  const loadFeePolicies = useServerFn(listFeePolicies);
   const [rows, setRows] = useState<FeePolicy[]>([]);
 
   const refresh = useCallback(async () => {
-    const data = await load();
-    setRows(data.feePolicies ?? []);
-  }, [load]);
+    setRows(await loadFeePolicies());
+  }, [loadFeePolicies]);
 
   useEffect(() => {
     refresh().catch(() => {});
@@ -56,13 +52,16 @@ export function useFeesPolicy() {
 
   useEffect(() => {
     const sync = () => {
+      if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 10000);
+    const timer = window.setInterval(sync, 60000);
     window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
     };
   }, [refresh]);
 
@@ -72,13 +71,12 @@ export function useFeesPolicy() {
 export function useFeePolicyActions() {
   const saveFee = useServerFn(upsertFeePolicyRecord);
   const removeFeeRecord = useServerFn(deleteFeePolicyRecord);
-  const load = useServerFn(loadAppData);
+  const loadFeePolicies = useServerFn(listFeePolicies);
   const [rows, setRows] = useState<FeePolicy[]>([]);
 
   const refresh = useCallback(async () => {
-    const data = await load();
-    setRows(data.feePolicies ?? []);
-  }, [load]);
+    setRows(await loadFeePolicies());
+  }, [loadFeePolicies]);
 
   useEffect(() => {
     refresh().catch(() => {});

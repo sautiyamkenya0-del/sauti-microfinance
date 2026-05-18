@@ -27,7 +27,7 @@ import {
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
-import { useApprovals } from "@/lib/approvals";
+import { useApprovalActions } from "@/lib/approvals";
 import { useFeesPolicy, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
@@ -90,7 +90,7 @@ function Portal() {
   const visibleFees = member
     ? fees.filter((f) => f.key !== "sticker" || memberNeedsSticker(member))
     : fees;
-  const { submit } = useApprovals();
+  const { submit } = useApprovalActions();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
   const [pinOld, setPinOld] = useState("");
@@ -151,20 +151,20 @@ function Portal() {
         <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap items-end gap-3">
           {isStaffView ? (
             <label className="block flex-1 min-w-[280px]">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              {isStaffView ? "View member" : "Member sign-in"}
-            </span>
-            <select
-              value={memberId}
-              onChange={(e) => setMemberId(e.target.value)}
-              className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-            >
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id} · {m.name}
-                </option>
-              ))}
-            </select>
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                {isStaffView ? "View member" : "Member sign-in"}
+              </span>
+              <select
+                value={memberId}
+                onChange={(e) => setMemberId(e.target.value)}
+                className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              >
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.id} · {m.name}
+                  </option>
+                ))}
+              </select>
             </label>
           ) : (
             <div className="min-w-[280px] flex-1">

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
-import { requireStaffActor } from "@/lib/auth.server";
+import { requireManagerOrDirectorActor } from "@/lib/auth.server";
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/api/mpesa/queue")({
   server: {
     handlers: {
       GET: async () => {
-        await requireStaffActor();
+        await requireManagerOrDirectorActor();
         const supabaseAdmin = getSupabaseAdminOrNull();
         if (!supabaseAdmin) {
           return Response.json({ items: [] }, { headers: NO_STORE_HEADERS });

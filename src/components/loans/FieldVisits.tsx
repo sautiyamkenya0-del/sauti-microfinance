@@ -172,7 +172,9 @@ export function FieldVisits() {
       return;
     }
     if (supportingPhotos.length + files.length > MAX_VISIT_PHOTOS) {
-      toast.error(`Add up to ${MAX_VISIT_PHOTOS - supportingPhotos.length} more photo(s) for this visit.`);
+      toast.error(
+        `Add up to ${MAX_VISIT_PHOTOS - supportingPhotos.length} more photo(s) for this visit.`,
+      );
       return;
     }
 
@@ -332,7 +334,9 @@ export function FieldVisits() {
             </label>
 
             <label className="block">
-              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Type</span>
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Type
+              </span>
               <select
                 className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
                 value={type}

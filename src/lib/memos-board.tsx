@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 
-import {
-  createStaffMemoRecord,
-  deleteStaffMemoRecord,
-  loadAppData,
-} from "@/lib/app-data.functions";
+import { createStaffMemoRecord, deleteStaffMemoRecord } from "@/lib/app-data.functions";
+import { listStaffMemos } from "@/lib/runtime-data.functions";
 
 export type StaffMemo = {
   id: string;
@@ -18,7 +15,7 @@ export type StaffMemo = {
 };
 
 export function useStaffMemos(enabled = true) {
-  const load = useServerFn(loadAppData);
+  const loadMemos = useServerFn(listStaffMemos);
   const createMemo = useServerFn(createStaffMemoRecord);
   const deleteMemoRecord = useServerFn(deleteStaffMemoRecord);
   const [memos, setMemos] = useState<StaffMemo[]>([]);
@@ -28,9 +25,8 @@ export function useStaffMemos(enabled = true) {
       setMemos([]);
       return;
     }
-    const data = await load();
-    setMemos(data.memos ?? []);
-  }, [enabled, load]);
+    setMemos(await loadMemos());
+  }, [enabled, loadMemos]);
 
   useEffect(() => {
     if (!enabled) {
@@ -43,13 +39,16 @@ export function useStaffMemos(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     const sync = () => {
+      if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 8000);
+    const timer = window.setInterval(sync, 20000);
     window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
     };
   }, [enabled, refresh]);
 

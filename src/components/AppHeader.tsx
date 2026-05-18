@@ -2,7 +2,6 @@ import { useStore, roleLabel, navForUser } from "@/lib/store";
 import { Bell, Search, Menu, X as IconX } from "lucide-react";
 import logoUrl from "@/assets/sauti-logo.png?url";
 import { useNotifications, useUnreadCommunicationCount } from "@/lib/notifications";
-import { useApprovals } from "@/lib/approvals";
 import { useReadIds } from "@/lib/read-state";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,6 +16,7 @@ import {
   Sparkles,
   IdCard,
   ShieldCheck,
+  KeyRound as KeyRoundSection,
   type LucideIcon,
 } from "lucide-react";
 
@@ -85,8 +85,19 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+const DIRECTOR_ENTRIES: Entry[] = [
+  {
+    id: "secret-keys",
+    to: "/secret-keys",
+    label: "System Secrets",
+    icon: KeyRoundSection,
+    section: "admin",
+    requires: [],
+  },
+];
+
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
-  const { currentUser } = useStore();
+  const { currentUser, loans } = useStore();
   const navigate = useNavigate();
   const notes = useNotifications();
   const { markRead } = useReadIds();
@@ -98,28 +109,13 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const path = useRouterState({ select: (r) => r.location.pathname });
   const activeSection = sectionForPath(path);
   const unreadComms = useUnreadCommunicationCount();
-  const { pendingCount } = useApprovals();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
-  const entries = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
-  const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
-
-  function onLogoTap() {
-    const now = Date.now();
-    const tap = tapsRef.current;
-    if (now - tap.first > 3000) {
-      tap.count = 0;
-      tap.first = now;
-    }
-    tap.count += 1;
-    if (tap.count >= 5) {
-      tapsRef.current = { count: 0, first: 0 };
-      if (currentUser.role === "director") {
-        setMobileNavOpen(false);
-        navigate({ to: "/secret-keys" });
-      }
-    }
-  }
+  const pendingCount = loans.filter((loan) => loan.status === "pending").length;
+  const entries = useMemo(() => {
+    const base = ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key)));
+    return currentUser.role === "director" ? [...base, ...DIRECTOR_ENTRIES] : base;
+  }, [allowed, currentUser.role]);
 
   const announceNotification = useCallback(
     ({ id, title: nextTitle, detail, urgent }: NotifyEventDetail) => {
@@ -319,10 +315,13 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={onLogoTap}
+                    onClick={() => {
+                      setMobileNavOpen(false);
+                      void navigate({ to: "/" });
+                    }}
                     className="shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    aria-label="Logo"
-                    title=""
+                    aria-label="Dashboard"
+                    title="Dashboard"
                   >
                     <img
                       src={logoUrl}

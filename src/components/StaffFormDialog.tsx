@@ -229,13 +229,18 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
                 <option value="director">Director</option>
               </select>
             </Field>
-            <Field label={editing ? "New temporary password" : "Temporary password"} required={!editing}>
+            <Field
+              label={editing ? "New temporary password" : "Temporary password"}
+              required={!editing}
+            >
               <div className="relative">
                 <input
                   type={showPwd ? "text" : "password"}
                   value={tempPassword}
                   onChange={(e) => setTempPassword(e.target.value)}
-                  placeholder={editing ? "Leave blank to keep the current password" : ">= 6 characters"}
+                  placeholder={
+                    editing ? "Leave blank to keep the current password" : ">= 6 characters"
+                  }
                   className={inputCls + " pr-10"}
                 />
                 <button

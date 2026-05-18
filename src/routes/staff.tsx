@@ -59,9 +59,10 @@ function StaffChat() {
 
   useEffect(() => {
     const sync = () => {
+      if (document.hidden) return;
       reloadStaffMessages().catch(() => {});
     };
-    const timer = window.setInterval(sync, 3000);
+    const timer = window.setInterval(sync, 10000);
     window.addEventListener("focus", sync);
     document.addEventListener("visibilitychange", sync);
     return () => {

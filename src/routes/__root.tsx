@@ -138,9 +138,11 @@ function RootComponent() {
 }
 
 function AppLayout() {
-  const { isAuthenticated, isHydrated, authMode } = useStore();
+  const { isAuthenticated, isHydrated, authMode, currentUser } = useStore();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
+  const canDrainMpesaQueue =
+    authMode === "staff" && (currentUser.role === "director" || currentUser.role === "manager");
 
   if (!isHydrated) {
     return (
@@ -188,7 +190,7 @@ function AppLayout() {
   return (
     <div className="flex min-h-screen w-full bg-background">
       <SplashScreen />
-      <MpesaQueueDrainer />
+      {canDrainMpesaQueue ? <MpesaQueueDrainer /> : null}
       <AppSidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Outlet />

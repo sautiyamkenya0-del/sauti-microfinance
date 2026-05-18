@@ -22,6 +22,7 @@ import {
   upsertAttendanceRecord,
 } from "@/lib/app-data.functions";
 import { signInMember, signInStaff, signOutSession } from "@/lib/auth.functions";
+import { listStaffMessages } from "@/lib/runtime-data.functions";
 
 export type Role = "director" | "manager" | "loan_officer";
 
@@ -331,8 +332,6 @@ const seedStaff: Staff[] = [
     id: "S1",
     name: "System Admin",
     role: "director",
-    email: "admin@sauti.co.ke",
-    tempPassword: "Sauti1234",
     canMarkAttendance: true,
   },
 ];
@@ -392,7 +391,9 @@ type Store = {
   addStaff: (s: Omit<Staff, "id">) => Promise<string>;
   updateStaff: (id: string, patch: Partial<Staff>) => Promise<void>;
   removeStaff: (id: string) => Promise<void>;
-  addLoan: (l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] }) => Promise<string>;
+  addLoan: (
+    l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] },
+  ) => Promise<string>;
   approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => Promise<void>;
   rejectLoan: (loanId: string, by: string, note?: string) => Promise<void>;
   recordTransaction: (t: Omit<Transaction, "id" | "date"> & { date?: string }) => Promise<string>;
@@ -432,6 +433,7 @@ const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
+  const loadStaffMessages = useServerFn(listStaffMessages);
   const authenticateMember = useServerFn(signInMember);
   const authenticateStaff = useServerFn(signInStaff);
   const signOut = useServerFn(signOutSession);
@@ -507,9 +509,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    refreshFromDatabase().catch((error: any) => {
-      toast.error(error?.message ?? "Failed to load database state.");
-    });
+    let active = true;
+    const hydrationGuard = window.setTimeout(() => {
+      if (active) setIsHydrated(true);
+    }, 1500);
+
+    refreshFromDatabase()
+      .catch((error: any) => {
+        toast.error(error?.message ?? "Failed to load database state.");
+      })
+      .finally(() => {
+        window.clearTimeout(hydrationGuard);
+      });
+
+    return () => {
+      active = false;
+      window.clearTimeout(hydrationGuard);
+    };
   }, []);
 
   useEffect(() => {
@@ -744,12 +760,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             attachment: message.attachment,
           },
         });
-        await refreshFromDatabase();
+        setStaffMessages(await loadStaffMessages());
         return result.id;
       },
       reloadStaffMessages: async () => {
-        const data = await load();
-        setStaffMessages(data.staffMessages ?? []);
+        setStaffMessages(await loadStaffMessages());
       },
       loginMember: async (memberNo, phone) => {
         const result = await authenticateMember({

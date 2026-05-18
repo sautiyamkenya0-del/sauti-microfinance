@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 
-import {
-  createApprovalRequestRecord,
-  decideApprovalRequestRecord,
-  loadAppData,
-} from "@/lib/app-data.functions";
+import { createApprovalRequestRecord, decideApprovalRequestRecord } from "@/lib/app-data.functions";
+import { listApprovalRequests } from "@/lib/runtime-data.functions";
 
 export type ApprovalKind =
   | "profile_update"
@@ -31,15 +28,14 @@ export type ApprovalRequest = {
 };
 
 export function useApprovals() {
-  const load = useServerFn(loadAppData);
+  const loadApprovals = useServerFn(listApprovalRequests);
   const createApproval = useServerFn(createApprovalRequestRecord);
   const decideApproval = useServerFn(decideApprovalRequestRecord);
   const [items, setItems] = useState<ApprovalRequest[]>([]);
 
   const refresh = useCallback(async () => {
-    const data = await load();
-    setItems(data.approvals ?? []);
-  }, [load]);
+    setItems(await loadApprovals());
+  }, [loadApprovals]);
 
   useEffect(() => {
     refresh().catch(() => {});
@@ -47,13 +43,16 @@ export function useApprovals() {
 
   useEffect(() => {
     const sync = () => {
+      if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 8000);
+    const timer = window.setInterval(sync, 15000);
     window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
     };
   }, [refresh]);
 
@@ -96,4 +95,42 @@ export function useApprovals() {
     decide,
     pendingCount: items.filter((item) => item.status === "pending").length,
   };
+}
+
+export function useApprovalActions() {
+  const createApproval = useServerFn(createApprovalRequestRecord);
+  const decideApproval = useServerFn(decideApprovalRequestRecord);
+
+  const submit = useCallback(
+    async (req: Omit<ApprovalRequest, "id" | "status" | "createdAt">) => {
+      const result = await createApproval({
+        data: {
+          kind: req.kind,
+          title: req.title,
+          detail: req.detail,
+          requestedBy: req.requestedBy,
+          requestedByName: req.requestedByName,
+          payload: req.payload,
+        },
+      });
+      return result.id;
+    },
+    [createApproval],
+  );
+
+  const decide = useCallback(
+    async (id: string, decision: "approved" | "rejected", by: string, note?: string) => {
+      await decideApproval({
+        data: {
+          id,
+          decision,
+          reviewedBy: by,
+          note,
+        },
+      });
+    },
+    [decideApproval],
+  );
+
+  return { submit, decide };
 }
