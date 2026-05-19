@@ -27,6 +27,7 @@ const TYPES = [
   "petty_cash",
   "investor_contribution",
   "fee_payment",
+  "mpesa_unallocated",
 ] as const;
 
 const INFLOWS: ReadonlyArray<string> = [
@@ -35,6 +36,7 @@ const INFLOWS: ReadonlyArray<string> = [
   "share_purchase",
   "investor_contribution",
   "fee_payment",
+  "mpesa_unallocated",
 ];
 const OUTFLOWS: ReadonlyArray<string> = ["withdrawal", "loan_disbursement", "petty_cash"];
 
@@ -190,16 +192,22 @@ function TxPage() {
                   </span>
                   {legacyDbStatus.mode === "bridge" && legacyDbStatus.bridgeUrl ? (
                     <>
-                      {" "}· URL <span className="font-mono text-foreground">{legacyDbStatus.bridgeUrl}</span>
+                      {" "}
+                      · URL{" "}
+                      <span className="font-mono text-foreground">{legacyDbStatus.bridgeUrl}</span>
                     </>
                   ) : legacyDbStatus.host ? (
                     <>
-                      {" "}· Host <span className="font-mono text-foreground">{legacyDbStatus.host}</span>
+                      {" "}
+                      · Host{" "}
+                      <span className="font-mono text-foreground">{legacyDbStatus.host}</span>
                     </>
                   ) : null}
                   {legacyDbStatus.database ? (
                     <>
-                      {" "}· DB <span className="font-mono text-foreground">{legacyDbStatus.database}</span>
+                      {" "}
+                      · DB{" "}
+                      <span className="font-mono text-foreground">{legacyDbStatus.database}</span>
                     </>
                   ) : null}
                 </div>
@@ -343,13 +351,15 @@ function TxPage() {
                   const m = members.find((x) => x.id === t.memberId);
                   const s = staff.find((x) => x.id === t.by);
                   const tone =
-                    t.type.includes("withdrawal") || t.type === "petty_cash"
+                    t.type === "mpesa_unallocated"
                       ? "warning"
-                      : t.type.includes("repayment")
-                        ? "success"
-                        : t.type.includes("disbursement")
-                          ? "destructive"
-                          : "default";
+                      : t.type.includes("withdrawal") || t.type === "petty_cash"
+                        ? "warning"
+                        : t.type.includes("repayment")
+                          ? "success"
+                          : t.type.includes("disbursement")
+                            ? "destructive"
+                            : "default";
                   const account = t.account ?? t.memberId ?? "—";
                   const displayName = t.payerName ?? m?.name ?? t.note ?? "—";
                   return (

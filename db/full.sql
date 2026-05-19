@@ -36,7 +36,7 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   create type public.tx_type           as enum (
     'deposit','withdrawal','loan_disbursement','loan_repayment',
-    'share_purchase','petty_cash','investor_contribution','fee_payment'
+    'share_purchase','petty_cash','investor_contribution','fee_payment','mpesa_unallocated'
   );
 exception when duplicate_object then null; end $$;
 

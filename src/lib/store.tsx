@@ -122,7 +122,8 @@ export type Transaction = {
     | "share_purchase"
     | "petty_cash"
     | "investor_contribution"
-    | "fee_payment";
+    | "fee_payment"
+    | "mpesa_unallocated";
   account?: string; // M-Pesa Paybill account = membership number
   payerName?: string; // payer name as read from Daraja
   amount: number;
@@ -1200,7 +1201,9 @@ export const SBC_UPFRONT_TABLE: SbcUpfrontTier[] = [
 export function upfrontTierForAmount(amount: number) {
   const normalized = Number(amount ?? 0);
   if (normalized <= 0) return undefined;
-  const directMatch = SBC_UPFRONT_TABLE.find((tier) => normalized >= tier.min && normalized <= tier.max);
+  const directMatch = SBC_UPFRONT_TABLE.find(
+    (tier) => normalized >= tier.min && normalized <= tier.max,
+  );
   if (directMatch) return directMatch;
   const highestTier = SBC_UPFRONT_TABLE[SBC_UPFRONT_TABLE.length - 1];
   if (highestTier && normalized >= highestTier.min) return highestTier;

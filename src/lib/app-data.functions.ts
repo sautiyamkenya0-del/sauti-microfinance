@@ -206,16 +206,37 @@ function memberNeedsStickerRow(member: {
 
 export async function findMemberByMembershipInput(account: string) {
   const candidates = membershipIdCandidates(account);
-  if (!candidates.length) return null;
+  const raw = String(account ?? "")
+    .trim()
+    .toUpperCase();
+  const lookupValues = Array.from(new Set([raw, ...candidates].filter(Boolean)));
+  if (!lookupValues.length) return null;
 
   const supabaseAdmin = await requireSupabaseAdmin();
-  const { data, error } = await supabaseAdmin.from("members").select("*").in("id", candidates);
+  const { data, error } = await supabaseAdmin.from("members").select("*").in("id", lookupValues);
   if (error) throw new Error(error.message);
 
-  for (const candidate of candidates) {
+  for (const candidate of lookupValues) {
     const match = (data ?? []).find((row) => row.id === candidate);
     if (match) return match;
   }
+
+  const { data: legacyMatches, error: legacyError } = await supabaseAdmin
+    .from("members")
+    .select("*")
+    .in("old_system_id", lookupValues);
+  if (legacyError) throw new Error(legacyError.message);
+
+  for (const candidate of lookupValues) {
+    const match = (legacyMatches ?? []).find(
+      (row) =>
+        String(row.old_system_id ?? "")
+          .trim()
+          .toUpperCase() === candidate,
+    );
+    if (match) return match;
+  }
+
   return null;
 }
 
@@ -363,6 +384,27 @@ async function markMpesaEventProcessed(eventId?: string, transactionId?: string 
   if (error) throw new Error(error.message);
 }
 
+async function createUnallocatedMpesaTransaction(args: {
+  account: string;
+  amount: number;
+  payerName?: string;
+  mpesaRef?: string;
+  note: string;
+  date?: string;
+}) {
+  return insertTransactionRow({
+    date: args.date,
+    type: "mpesa_unallocated",
+    amount: args.amount,
+    member_id: null,
+    by_staff: "MPESA",
+    note: args.note,
+    ref: args.mpesaRef ?? null,
+    account: args.account,
+    payer_name: args.payerName ?? null,
+  });
+}
+
 async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
   const policySettings = await loadRuntimePolicySettings(runtimeDb);
   const { data: loans, error: loansError } = await runtimeDb
@@ -421,6 +463,7 @@ export async function recordMpesaConfirmationEvent(args: {
   mpesaRef?: string;
   payerName?: string;
   phone?: string;
+  processed?: boolean;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const ref = args.mpesaRef?.trim() || undefined;
@@ -446,12 +489,115 @@ export async function recordMpesaConfirmationEvent(args: {
       payer_name: args.payerName ?? null,
       phone: args.phone ?? null,
       raw: args.raw as any,
-      processed: false,
+      processed: args.processed ?? false,
     })
     .select("id, processed, transaction_id")
     .single();
   if (error) throw new Error(error.message);
   return data;
+}
+
+export async function recordMpesaStkPushRequestEvent(args: {
+  raw: Record<string, unknown>;
+  account: string;
+  amount: number;
+  phone?: string;
+  checkoutRequestId?: string;
+  merchantRequestId?: string;
+}) {
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const checkoutRequestId = args.checkoutRequestId?.trim() || undefined;
+  const merchantRequestId = args.merchantRequestId?.trim() || undefined;
+
+  if (checkoutRequestId) {
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("id")
+      .eq("kind", "stkpush_request")
+      .eq("mpesa_ref", checkoutRequestId)
+      .limit(1)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (existing) return existing;
+  }
+
+  const raw = {
+    ...args.raw,
+    CheckoutRequestID: checkoutRequestId ?? null,
+    MerchantRequestID: merchantRequestId ?? null,
+  };
+
+  const { data, error } = await supabaseAdmin
+    .from("mpesa_events")
+    .insert({
+      kind: "stkpush_request",
+      account: args.account || null,
+      amount: args.amount || null,
+      mpesa_ref: checkoutRequestId ?? merchantRequestId ?? null,
+      payer_name: null,
+      phone: args.phone ?? null,
+      raw: raw as any,
+      processed: true,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function findMpesaStkPushRequestContext(args: {
+  checkoutRequestId?: string;
+  merchantRequestId?: string;
+  phone?: string;
+  amount?: number;
+}) {
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const checkoutRequestId = args.checkoutRequestId?.trim() || undefined;
+  const merchantRequestId = args.merchantRequestId?.trim() || undefined;
+  const phone = args.phone?.trim() || undefined;
+  const amount = Number(args.amount ?? 0);
+
+  if (checkoutRequestId) {
+    const { data, error } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("id, account, phone, amount, mpesa_ref, raw, created_at")
+      .eq("kind", "stkpush_request")
+      .eq("mpesa_ref", checkoutRequestId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) return data;
+  }
+
+  if (merchantRequestId) {
+    const { data, error } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("id, account, phone, amount, mpesa_ref, raw, created_at")
+      .eq("kind", "stkpush_request")
+      .contains("raw", { MerchantRequestID: merchantRequestId } as any)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) return data;
+  }
+
+  if (phone && amount > 0) {
+    const { data, error } = await supabaseAdmin
+      .from("mpesa_events")
+      .select("id, account, phone, amount, mpesa_ref, raw, created_at")
+      .eq("kind", "stkpush_request")
+      .eq("phone", phone)
+      .eq("amount", amount)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) return data;
+  }
+
+  return null;
 }
 
 export async function recordMpesaValidationEvent(args: {
@@ -493,31 +639,63 @@ export async function applyMpesaPaymentToDatabase(args: {
       .maybeSingle();
     if (eventError) throw new Error(eventError.message);
     if (event?.processed) {
+      let matched = true;
+      if (event.transaction_id) {
+        const { data: transaction, error: transactionError } = await supabaseAdmin
+          .from("transactions")
+          .select("type")
+          .eq("id", event.transaction_id)
+          .maybeSingle();
+        if (transactionError) throw new Error(transactionError.message);
+        matched = transaction?.type !== "mpesa_unallocated";
+      }
+
       return {
-        matched: true,
+        matched,
         account: norm,
         transactionId: event.transaction_id ?? undefined,
-        notes: ["M-Pesa event already processed."],
+        notes: [
+          matched
+            ? "M-Pesa event already processed."
+            : "M-Pesa event already recorded as an unallocated payment.",
+        ],
       };
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10);
   const membershipCandidates = membershipIdCandidates(norm);
   const member = await findMemberByMembershipInput(norm);
   if (!member) {
-    notes.push(
-      membershipCandidates.length
-        ? `No member matched account "${args.account}". Holding as suspense.`
-        : `Account "${args.account}" did not match SBC member pattern.`,
-    );
-    await markMpesaEventProcessed(args.eventId, null);
-    return { matched: false, account: norm, notes, transactionId: undefined };
+    const note = membershipCandidates.length
+      ? `No member matched account "${args.account}". Recorded as an unallocated M-Pesa payment.`
+      : `Account "${args.account}" did not match a known member reference. Recorded as an unallocated M-Pesa payment.`;
+    notes.push(note);
+    const unallocatedTransactionId = await createUnallocatedMpesaTransaction({
+      account: norm,
+      amount: Number(args.amount ?? 0),
+      payerName: args.payerName,
+      mpesaRef: args.mpesaRef,
+      note,
+      date: today,
+    });
+    await markMpesaEventProcessed(args.eventId, unallocatedTransactionId);
+    return {
+      matched: false,
+      account: norm,
+      notes,
+      transactionId: unallocatedTransactionId,
+      primary: {
+        type: "mpesa_unallocated",
+        amount: Number(args.amount ?? 0),
+        note,
+      },
+    };
   }
   const memberId = member.id;
   const memberCategory = resolveMemberCategory(member.member_category, member.is_investor);
 
   let remaining = Number(args.amount ?? 0);
-  const today = new Date().toISOString().slice(0, 10);
   const txBatch: Array<{
     date?: string;
     type: string;
@@ -637,7 +815,9 @@ export async function applyMpesaPaymentToDatabase(args: {
     membership_fee: {
       key: "fee_membership",
       label: "Membership fee",
-      amount: feeApplies("membership") ? feePolicyAmount(normalizedFeePolicies, "membership", 0) : 0,
+      amount: feeApplies("membership")
+        ? feePolicyAmount(normalizedFeePolicies, "membership", 0)
+        : 0,
       required: feeApplies("membership"),
     },
     card_fee: {
@@ -742,11 +922,7 @@ export async function applyMpesaPaymentToDatabase(args: {
 
   function queuePurposePoolContribution(applied: number, reason: string) {
     if (applied <= 0) return;
-    setPrimaryIfMissing(
-      "fee_payment",
-      applied,
-      `Purpose pool via Paybill ${norm}`,
-    );
+    setPrimaryIfMissing("fee_payment", applied, `Purpose pool via Paybill ${norm}`);
     txBatch.push({
       date: today,
       type: "fee_payment",
@@ -2290,7 +2466,8 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         | "share_purchase"
         | "petty_cash"
         | "investor_contribution"
-        | "fee_payment";
+        | "fee_payment"
+        | "mpesa_unallocated";
       account?: string;
       payerName?: string;
       amount: number;

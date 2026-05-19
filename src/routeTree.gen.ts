@@ -30,6 +30,8 @@ import { Route as AttendanceRouteImport } from './routes/attendance'
 import { Route as ApprovalsRouteImport } from './routes/approvals'
 import { Route as AiRouteImport } from './routes/ai'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiValidationRouteImport } from './routes/api/validation'
+import { Route as ApiConfirmationRouteImport } from './routes/api/confirmation'
 import { Route as ApiMpesaQueueRouteImport } from './routes/api/mpesa.queue'
 import { Route as ApiAiScanMpesaRouteImport } from './routes/api/ai.scan-mpesa'
 import { Route as ApiAiChatRouteImport } from './routes/api/ai.chat'
@@ -143,6 +145,16 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiValidationRoute = ApiValidationRouteImport.update({
+  id: '/api/validation',
+  path: '/api/validation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiConfirmationRoute = ApiConfirmationRouteImport.update({
+  id: '/api/confirmation',
+  path: '/api/confirmation',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMpesaQueueRoute = ApiMpesaQueueRouteImport.update({
   id: '/api/mpesa/queue',
   path: '/api/mpesa/queue',
@@ -203,6 +215,8 @@ export interface FileRoutesByFullPath {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/api/confirmation': typeof ApiConfirmationRoute
+  '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
@@ -233,6 +247,8 @@ export interface FileRoutesByTo {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/api/confirmation': typeof ApiConfirmationRoute
+  '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
@@ -264,6 +280,8 @@ export interface FileRoutesById {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/api/confirmation': typeof ApiConfirmationRoute
+  '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
@@ -296,6 +314,8 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/api/confirmation'
+    | '/api/validation'
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
@@ -326,6 +346,8 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/api/confirmation'
+    | '/api/validation'
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
@@ -356,6 +378,8 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/api/confirmation'
+    | '/api/validation'
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
@@ -387,6 +411,8 @@ export interface RootRouteChildren {
   StaffMgmtRoute: typeof StaffMgmtRoute
   SupportInboxRoute: typeof SupportInboxRoute
   TransactionsRoute: typeof TransactionsRoute
+  ApiConfirmationRoute: typeof ApiConfirmationRoute
+  ApiValidationRoute: typeof ApiValidationRoute
   ApiAiChatRoute: typeof ApiAiChatRoute
   ApiAiScanMpesaRoute: typeof ApiAiScanMpesaRoute
   ApiMpesaQueueRoute: typeof ApiMpesaQueueRoute
@@ -545,6 +571,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/validation': {
+      id: '/api/validation'
+      path: '/api/validation'
+      fullPath: '/api/validation'
+      preLoaderRoute: typeof ApiValidationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/confirmation': {
+      id: '/api/confirmation'
+      path: '/api/confirmation'
+      fullPath: '/api/confirmation'
+      preLoaderRoute: typeof ApiConfirmationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mpesa/queue': {
       id: '/api/mpesa/queue'
       path: '/api/mpesa/queue'
@@ -619,6 +659,8 @@ const rootRouteChildren: RootRouteChildren = {
   StaffMgmtRoute: StaffMgmtRoute,
   SupportInboxRoute: SupportInboxRoute,
   TransactionsRoute: TransactionsRoute,
+  ApiConfirmationRoute: ApiConfirmationRoute,
+  ApiValidationRoute: ApiValidationRoute,
   ApiAiChatRoute: ApiAiChatRoute,
   ApiAiScanMpesaRoute: ApiAiScanMpesaRoute,
   ApiMpesaQueueRoute: ApiMpesaQueueRoute,

@@ -972,7 +972,8 @@ export type Database = {
         | "share_purchase"
         | "petty_cash"
         | "investor_contribution"
-        | "fee_payment";
+        | "fee_payment"
+        | "mpesa_unallocated";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -1120,6 +1121,7 @@ export const Constants = {
         "petty_cash",
         "investor_contribution",
         "fee_payment",
+        "mpesa_unallocated",
       ],
     },
   },

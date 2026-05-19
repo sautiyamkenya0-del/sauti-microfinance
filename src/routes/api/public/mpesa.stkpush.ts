@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
+import { recordMpesaStkPushRequestEvent } from "@/lib/app-data.functions";
 import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
 import { formatMembershipNumber } from "@/lib/membership";
 import { getSecret } from "@/lib/runtime-secrets.server";
@@ -113,7 +114,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
           const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
           const origin = new URL(request.url).origin;
-          const callback = `${origin}/api/public/mpesa/confirmation`;
+          const callback = `${origin}/api/confirmation`;
 
           const stkRes = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
             method: "POST",
@@ -160,6 +161,26 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
               { ok: false, error: errorMessage, details: stkJson },
               { status: 502 },
             );
+          }
+
+          try {
+            await recordMpesaStkPushRequestEvent({
+              raw: {
+                callback,
+                accountRef,
+                amount,
+                phone: msisdn,
+                description,
+                response: stkJson as Record<string, unknown>,
+              },
+              account: accountRef.toUpperCase(),
+              amount,
+              phone: msisdn,
+              checkoutRequestId: String((stkJson as any)?.CheckoutRequestID ?? "").trim() || undefined,
+              merchantRequestId: String((stkJson as any)?.MerchantRequestID ?? "").trim() || undefined,
+            });
+          } catch (trackingError) {
+            console.error("stkpush request tracking error", trackingError);
           }
 
           return Response.json({ ok: true, ...(stkJson as object) });
