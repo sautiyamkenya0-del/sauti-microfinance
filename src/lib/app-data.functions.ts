@@ -35,6 +35,7 @@ import {
   type PolicySettingKey,
   type PolicySettingRow,
 } from "@/lib/policy-settings";
+import { summarizeLegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -60,6 +61,20 @@ async function requireSupabaseAdmin() {
   }
   return supabaseAdmin;
 }
+
+export const getLegacyDbStatus = createServerFn({ method: "POST" }).handler(async () => {
+  const { getLegacyDbEnvStatus } = await import("@/lib/legacy-db.server");
+  const legacyStatus = getLegacyDbEnvStatus();
+  return {
+    ok: legacyStatus.ok,
+    mode: legacyStatus.mode,
+    missing: legacyStatus.missing,
+    bridgeUrl: legacyStatus.bridgeUrl,
+    host: legacyStatus.host,
+    database: legacyStatus.database,
+    table: legacyStatus.table,
+  };
+});
 
 function toNumber(value: number | string | null | undefined) {
   return Number(value ?? 0);
@@ -347,6 +362,7 @@ async function markMpesaEventProcessed(eventId?: string, transactionId?: string 
 }
 
 async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
+  const policySettings = await loadRuntimePolicySettings(runtimeDb);
   const { data: loans, error: loansError } = await runtimeDb
     .from("member_carryover_loans")
     .select("*")
@@ -356,23 +372,35 @@ async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
 
   const sorted = (loans ?? []) as Array<Record<string, unknown>>;
   const firstLoanStartDate = sorted[0]?.start_date ? String(sorted[0].start_date) : null;
-  const closedDates = sorted
-    .map((loan) => String(loan.closed_on ?? loan.due_date ?? ""))
+  const loanSummaries = sorted.map((loan) => {
+    const summary = summarizeLegacyCarryoverLoan(
+      {
+        principal: Number(loan.principal ?? 0),
+        interestRatePct: Number(loan.interest_rate_pct ?? 0),
+        termDays: Number(loan.term_days ?? 30) as 7 | 14 | 30 | 60 | 90,
+        dailySavingsAmount: Number(loan.daily_savings_amount ?? 0),
+        startDate: String(loan.start_date ?? ""),
+        dueDate: loan.due_date ? String(loan.due_date) : undefined,
+        paidToDate: Number(loan.paid_to_date ?? 0),
+        status: String(loan.status ?? "active") as "active" | "closed" | "defaulted",
+        finished: loan.finished === true,
+        penaltyWaivedAmount: Number(loan.penalty_waived_amount ?? 0),
+      },
+      policySettings,
+    );
+    return { loan, summary };
+  });
+  const closedDates = loanSummaries
+    .map(({ loan, summary }) => String(loan.closed_on ?? summary.dueDate ?? ""))
     .filter(Boolean)
     .sort();
   const lastLoanEndDate = closedDates.length > 0 ? closedDates[closedDates.length - 1] : null;
-  const completedLoanCycles = sorted.filter(
-    (loan) => loan.status === "closed" || loan.finished === true,
+  const completedLoanCycles = loanSummaries.filter(
+    ({ loan, summary }) => loan.status === "closed" || loan.finished === true || summary.isFinished,
   ).length;
-  const pendingBalance = sorted
-    .filter((loan) => loan.status !== "closed")
-    .reduce((sum, loan) => {
-      const principal = Number(loan.principal ?? 0);
-      const ratePct = Number(loan.interest_rate_pct ?? 0);
-      const paidToDate = Number(loan.paid_to_date ?? 0);
-      const totalDue = principal + principal * (ratePct / 100);
-      return sum + Math.max(0, totalDue - paidToDate);
-    }, 0);
+  const pendingBalance = loanSummaries
+    .filter(({ loan, summary }) => loan.status !== "closed" && !summary.isFinished)
+    .reduce((sum, { summary }) => sum + summary.totalOwedNow, 0);
 
   const { error: profileError } = await runtimeDb.from("member_carryover_profiles").upsert({
     member_id: memberId,
@@ -3392,12 +3420,10 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const derivedTotal =
-      data.totalCollected > 0
-        ? data.totalCollected
-        : data.feesPaidTotal +
-          data.loanRepaymentsTotal +
-          data.investmentBalance +
-          data.otherCollectedTotal;
+      data.feesPaidTotal +
+      data.loanRepaymentsTotal +
+      data.investmentBalance +
+      data.otherCollectedTotal;
 
     const { error } = await runtimeDb.from("member_carryover_profiles").upsert({
       member_id: data.memberId,
@@ -3408,14 +3434,14 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
       investment_balance: data.investmentBalance,
       other_collected_total: data.otherCollectedTotal,
       total_collected: derivedTotal,
-      pending_balance: data.pendingBalance,
+      pending_balance: Math.max(0, Number(data.pendingBalance ?? 0)),
       penalties_outstanding: data.penaltiesOutstanding,
       penalties_waived_total: data.penaltiesWaivedTotal,
       membership_fee_paid: data.membershipFeePaid,
       card_fee_paid: data.cardFeePaid,
       sticker_fee_paid: data.stickerFeePaid,
       first_upfront_paid: data.firstUpfrontPaid,
-      completed_loan_cycles: data.completedLoanCycles,
+      completed_loan_cycles: Math.max(0, Math.floor(Number(data.completedLoanCycles ?? 0))),
       first_loan_start_date: data.firstLoanStartDate ?? null,
       last_loan_end_date: data.lastLoanEndDate ?? null,
       collection_breakdown: data.collectionBreakdown,
@@ -3437,6 +3463,8 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
       })
       .eq("id", data.memberId);
     if (memberError) throw new Error(memberError.message);
+
+    await refreshCarryoverMemberSummary(runtimeDb, data.memberId);
 
     await auditAction({
       actor,
@@ -3502,9 +3530,30 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
     }
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const policySettings = await loadRuntimePolicySettings(runtimeDb);
     const id = data.id ?? makeId("LLN");
     const dueDate = data.dueDate ?? addDaysIso(data.startDate, data.termDays);
-    const status = data.finished && data.status === "active" ? "closed" : data.status;
+    const computedSummary = summarizeLegacyCarryoverLoan(
+      {
+        principal: data.principal,
+        interestRatePct: data.interestRatePct,
+        termDays: data.termDays as 7 | 14 | 30 | 60 | 90,
+        dailySavingsAmount: data.dailySavingsAmount,
+        startDate: data.startDate,
+        dueDate,
+        paidToDate: data.paidToDate,
+        status: data.status,
+        finished: data.finished,
+        penaltyWaivedAmount: data.penaltyWaivedAmount,
+      },
+      policySettings,
+    );
+    const status =
+      data.finished || computedSummary.balance <= 0
+        ? "closed"
+        : data.status === "closed"
+          ? "closed"
+          : data.status;
     const { error } = await runtimeDb.from("member_carryover_loans").upsert({
       id,
       member_id: data.memberId,
@@ -3519,7 +3568,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       closed_on: data.closedOn ?? (status === "closed" ? dueDate : null),
       paid_to_date: data.paidToDate,
       status,
-      finished: data.finished || status === "closed",
+      finished: data.finished || status === "closed" || computedSummary.balance <= 0,
       penalty_waived_amount: data.penaltyWaivedAmount,
       notes: data.notes ?? null,
       created_by: actor.id,

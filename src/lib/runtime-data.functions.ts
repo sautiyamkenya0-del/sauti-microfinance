@@ -370,6 +370,18 @@ export const loadMemberCarryover = createServerFn({ method: "POST" })
     };
   });
 
+export const listAllCarryoverLoans = createServerFn({ method: "POST" }).handler(async () => {
+  await requireDirectorActor();
+  const runtimeDb = requireSupabaseAdmin() as any;
+  const { data, error } = await runtimeDb
+    .from("member_carryover_loans")
+    .select("*")
+    .order("start_date", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row: DbRow) => mapCarryoverLoanRow(row));
+});
+
 export const listReportSnapshots = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();
   const runtimeDb = requireSupabaseAdmin() as any;

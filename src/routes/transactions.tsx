@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownCircle, ArrowUpCircle, Database, RefreshCw, Scale } from "lucide-react";
 import { toast } from "sonner";
 
-import { syncLegacyTopupsRecord } from "@/lib/app-data.functions";
+import { getLegacyDbStatus, syncLegacyTopupsRecord } from "@/lib/app-data.functions";
 import { type LegacyTopupImport } from "@/lib/legacy-finance";
 import { listLegacyTopupImports } from "@/lib/runtime-data.functions";
 
@@ -48,6 +48,16 @@ function TxPage() {
   const [memberFilter, setMemberFilter] = useState<string>("");
   const [legacyImports, setLegacyImports] = useState<LegacyTopupImport[]>([]);
   const [syncingLegacy, setSyncingLegacy] = useState(false);
+  const loadLegacyDbStatus = useServerFn(getLegacyDbStatus);
+  const [legacyDbStatus, setLegacyDbStatus] = useState<{
+    ok: boolean;
+    mode?: "bridge" | "direct";
+    missing: string[];
+    bridgeUrl?: string;
+    host?: string;
+    database?: string;
+    table?: string;
+  } | null>(null);
 
   const refreshLegacyImports = useCallback(async () => {
     try {
@@ -60,6 +70,12 @@ function TxPage() {
   useEffect(() => {
     refreshLegacyImports().catch(() => {});
   }, [refreshLegacyImports]);
+
+  useEffect(() => {
+    loadLegacyDbStatus()
+      .then((status) => setLegacyDbStatus(status))
+      .catch(() => setLegacyDbStatus({ ok: false, missing: [] }));
+  }, [loadLegacyDbStatus]);
 
   const list = useMemo(
     () =>
@@ -147,7 +163,7 @@ function TxPage() {
                       setSyncingLegacy(false);
                     }
                   }}
-                  disabled={syncingLegacy}
+                  disabled={syncingLegacy || legacyDbStatus?.ok !== true}
                   className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
                 >
                   <Database className="h-3.5 w-3.5" />
@@ -166,6 +182,35 @@ function TxPage() {
               The old `api_topup` source is read-only. Sync only reads rows, stores a local audit
               copy, and uses the SBC account/member number to distribute funds through the existing
               waterfall.
+              {legacyDbStatus?.ok ? (
+                <div className="mt-2">
+                  Mode:{" "}
+                  <span className="font-medium text-foreground">
+                    {legacyDbStatus.mode === "bridge" ? "Bridge server" : "Direct MySQL"}
+                  </span>
+                  {legacyDbStatus.mode === "bridge" && legacyDbStatus.bridgeUrl ? (
+                    <>
+                      {" "}· URL <span className="font-mono text-foreground">{legacyDbStatus.bridgeUrl}</span>
+                    </>
+                  ) : legacyDbStatus.host ? (
+                    <>
+                      {" "}· Host <span className="font-mono text-foreground">{legacyDbStatus.host}</span>
+                    </>
+                  ) : null}
+                  {legacyDbStatus.database ? (
+                    <>
+                      {" "}· DB <span className="font-mono text-foreground">{legacyDbStatus.database}</span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+              {legacyDbStatus?.ok === false ? (
+                <div className="mt-2 text-xs text-destructive">
+                  Legacy DB sync is not configured for this deployment. Set `OLD_DB_BRIDGE_URL` to a
+                  running bridge server, or set `OLD_DB_HOST`, `OLD_DB_NAME`, `OLD_DB_USER`, and
+                  `OLD_DB_PASS` on a host that can reach the cPanel MySQL database directly.
+                </div>
+              ) : null}
             </div>
             <div className="overflow-x-auto border-t border-border">
               <table className="w-full text-sm">

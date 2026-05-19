@@ -1116,7 +1116,18 @@ export function sbcDeductions(principal: number) {
   };
 }
 
-export const SBC_UPFRONT_TABLE = [
+export type SbcUpfrontTier = {
+  range: string;
+  min: number;
+  max: number;
+  minShares: number;
+  sharesPct: number;
+  minSavings: number;
+  savingsPct: number;
+  notes: string;
+};
+
+export const SBC_UPFRONT_TABLE: SbcUpfrontTier[] = [
   {
     range: "5,000 – 10,000",
     min: 5000,
@@ -1168,6 +1179,28 @@ export const SBC_UPFRONT_TABLE = [
     notes: "Full mandatory payment",
   },
 ];
+
+export function upfrontTierForAmount(amount: number) {
+  const normalized = Number(amount ?? 0);
+  if (normalized <= 0) return undefined;
+  const directMatch = SBC_UPFRONT_TABLE.find((tier) => normalized >= tier.min && normalized <= tier.max);
+  if (directMatch) return directMatch;
+  const highestTier = SBC_UPFRONT_TABLE[SBC_UPFRONT_TABLE.length - 1];
+  if (highestTier && normalized >= highestTier.min) return highestTier;
+  return undefined;
+}
+
+export function upfrontRequirementForAmount(amount: number) {
+  const tier = upfrontTierForAmount(amount);
+  const sharesAmount = tier?.minShares ?? 0;
+  const savingsAmount = tier?.minSavings ?? 0;
+  return {
+    tier,
+    sharesAmount,
+    savingsAmount,
+    total: sharesAmount + savingsAmount,
+  };
+}
 
 /** Base navigation per role. Additional director-only pages are filtered in `navForUser`. */
 export const ROLE_NAV: Record<Role, string[]> = {

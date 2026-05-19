@@ -43,21 +43,35 @@ function toPort(value: string | undefined, fallback: number) {
   return Number.isFinite(next) && next > 0 ? Math.floor(next) : fallback;
 }
 
+function toTimeout(value: string | undefined, fallback: number) {
+  const next = Number(value ?? fallback);
+  return Number.isFinite(next) && next >= 1000 ? Math.floor(next) : fallback;
+}
+
 export function getLegacyDbEnvStatus() {
+  const bridgeUrl = readServerEnv("OLD_DB_BRIDGE_URL");
+  const bridgeKey = readServerEnv("OLD_DB_BRIDGE_KEY");
   const host = readServerEnv("OLD_DB_HOST");
   const database = readServerEnv("OLD_DB_NAME");
   const user = readServerEnv("OLD_DB_USER");
   const password = readServerEnv("OLD_DB_PASS");
   const port = toPort(readServerEnv("OLD_DB_PORT"), 3306);
   const table = readServerEnv("OLD_DB_TOPUP_TABLE") || "api_topup";
-  const missing = [
-    ...(!host ? ["OLD_DB_HOST"] : []),
-    ...(!database ? ["OLD_DB_NAME"] : []),
-    ...(!user ? ["OLD_DB_USER"] : []),
-    ...(!password ? ["OLD_DB_PASS"] : []),
-  ];
+  const mode = bridgeUrl ? "bridge" : "direct";
+  const missing =
+    mode === "bridge"
+      ? []
+      : [
+          ...(!host ? ["OLD_DB_HOST"] : []),
+          ...(!database ? ["OLD_DB_NAME"] : []),
+          ...(!user ? ["OLD_DB_USER"] : []),
+          ...(!password ? ["OLD_DB_PASS"] : []),
+        ];
 
   return {
+    mode,
+    bridgeUrl,
+    bridgeKey,
     host,
     database,
     user,
@@ -65,7 +79,7 @@ export function getLegacyDbEnvStatus() {
     port,
     table,
     missing,
-    ok: missing.length === 0,
+    ok: mode === "bridge" || missing.length === 0,
   };
 }
 
@@ -83,7 +97,14 @@ let legacyPool: Pool | undefined;
 
 function createLegacyPool() {
   const env = getLegacyDbEnvStatus();
-  if (!env.ok || !env.host || !env.database || !env.user || !env.password) {
+  if (
+    env.mode !== "direct" ||
+    !env.ok ||
+    !env.host ||
+    !env.database ||
+    !env.user ||
+    !env.password
+  ) {
     throw new Error(
       `Old database access is unavailable until these values are configured: ${env.missing.join(", ")}.`,
     );
@@ -102,13 +123,32 @@ function createLegacyPool() {
     multipleStatements: false,
     supportBigNumbers: true,
     decimalNumbers: true,
+    connectTimeout: toTimeout(readServerEnv("OLD_DB_CONNECT_TIMEOUT_MS"), 10000),
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
   });
 }
 
 export function getLegacyPoolOrNull() {
-  if (!getLegacyDbEnvStatus().ok) return null;
+  const env = getLegacyDbEnvStatus();
+  if (!env.ok || env.mode !== "direct") return null;
   if (!legacyPool) legacyPool = createLegacyPool();
   return legacyPool;
+}
+
+function legacyQueryTimeout() {
+  return toTimeout(readServerEnv("OLD_DB_QUERY_TIMEOUT_MS"), 15000);
+}
+
+async function queryLegacy(
+  pool: Pool,
+  sql: string,
+  values?: unknown[],
+): Promise<[unknown, FieldPacket[]]> {
+  return (await pool.query({ sql, timeout: legacyQueryTimeout() } as any, values)) as [
+    unknown,
+    FieldPacket[],
+  ];
 }
 
 function normalizeColumnName(value: string) {
@@ -241,19 +281,103 @@ function rowToTopup(
   } satisfies LegacyTopupSourceRow;
 }
 
+async function loadLegacyTopupRowsFromBridge(
+  bridgeUrl: string,
+  bridgeKey: string | undefined,
+  limit: number,
+): Promise<LegacyTopupSourceScan> {
+  const baseUrl = bridgeUrl.replace(/\/+$/, "");
+  const controller = new AbortController();
+  const timeoutMs = toTimeout(readServerEnv("OLD_DB_BRIDGE_TIMEOUT_MS"), 15000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/topups?limit=${Math.max(1, Math.min(500, limit))}`, {
+      headers: {
+        Accept: "application/json",
+        ...(bridgeKey ? { Authorization: `Bearer ${bridgeKey}` } : {}),
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Legacy bridge request failed (${response.status}).`);
+    }
+
+    const payload = (await response.json()) as Partial<LegacyTopupSourceScan>;
+    return {
+      columns: Array.isArray(payload.columns)
+        ? payload.columns.map((column) => String(column))
+        : [],
+      mappings:
+        payload.mappings && typeof payload.mappings === "object"
+          ? {
+              id: typeof payload.mappings.id === "string" ? payload.mappings.id : undefined,
+              amount:
+                typeof payload.mappings.amount === "string" ? payload.mappings.amount : undefined,
+              account:
+                typeof payload.mappings.account === "string" ? payload.mappings.account : undefined,
+              memberHint:
+                typeof payload.mappings.memberHint === "string"
+                  ? payload.mappings.memberHint
+                  : undefined,
+              ref: typeof payload.mappings.ref === "string" ? payload.mappings.ref : undefined,
+              phone:
+                typeof payload.mappings.phone === "string" ? payload.mappings.phone : undefined,
+              payerName:
+                typeof payload.mappings.payerName === "string"
+                  ? payload.mappings.payerName
+                  : undefined,
+              createdAt:
+                typeof payload.mappings.createdAt === "string"
+                  ? payload.mappings.createdAt
+                  : undefined,
+              status:
+                typeof payload.mappings.status === "string" ? payload.mappings.status : undefined,
+            }
+          : {},
+      rows: Array.isArray(payload.rows)
+        ? payload.rows.map((row) => ({
+            sourceKey: String(row.sourceKey ?? ""),
+            sourceTable: String(row.sourceTable ?? "api_topup"),
+            sourceCreatedAt:
+              typeof row.sourceCreatedAt === "string" ? row.sourceCreatedAt : undefined,
+            sourceAccount: typeof row.sourceAccount === "string" ? row.sourceAccount : undefined,
+            sourceMemberHint:
+              typeof row.sourceMemberHint === "string" ? row.sourceMemberHint : undefined,
+            sourcePayerName:
+              typeof row.sourcePayerName === "string" ? row.sourcePayerName : undefined,
+            sourcePhone: typeof row.sourcePhone === "string" ? row.sourcePhone : undefined,
+            sourceAmount: Number(row.sourceAmount ?? 0),
+            sourceRef: typeof row.sourceRef === "string" ? row.sourceRef : undefined,
+            raw: row.raw && typeof row.raw === "object" ? row.raw : {},
+            mappingNotes: Array.isArray(row.mappingNotes)
+              ? row.mappingNotes.map((note) => String(note))
+              : [],
+          }))
+        : [],
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function loadLegacyTopupRows(limit: number = 100): Promise<LegacyTopupSourceScan> {
+  const env = getLegacyDbEnvStatus();
+  if (env.mode === "bridge" && env.bridgeUrl) {
+    return loadLegacyTopupRowsFromBridge(env.bridgeUrl, env.bridgeKey, limit);
+  }
+
   const pool = getLegacyPoolOrNull();
   if (!pool) {
-    const env = getLegacyDbEnvStatus();
     throw new Error(
       `Old database access is unavailable until these values are configured: ${env.missing.join(", ")}.`,
     );
   }
 
-  const env = getLegacyDbEnvStatus();
   const sourceTable = requireSafeIdentifier(env.table, "old database table");
   const escapedTable = mysql.escapeId(sourceTable);
-  const [rows, fields] = await pool.query(`SELECT * FROM ${escapedTable} LIMIT 1`);
+  const [, fields] = await queryLegacy(pool, `SELECT * FROM ${escapedTable} LIMIT 1`);
   const columns = ((fields as FieldPacket[]) ?? []).map((field) => field.name);
   if (!columns.length) {
     return {
@@ -330,7 +454,8 @@ export async function loadLegacyTopupRows(limit: number = 100): Promise<LegacyTo
   const orderColumn = mappings.createdAt ?? mappings.id ?? columns[0];
   const safeOrderColumn = requireSafeIdentifier(orderColumn, "old database order column");
   const batchSize = Math.max(1, Math.min(500, Math.floor(limit || 100)));
-  const [fullRows] = await pool.query(
+  const [fullRows] = await queryLegacy(
+    pool,
     `SELECT * FROM ${escapedTable} ORDER BY ${mysql.escapeId(safeOrderColumn)} DESC LIMIT ?`,
     [batchSize],
   );

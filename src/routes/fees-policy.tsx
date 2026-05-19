@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -63,8 +64,14 @@ import {
   type WaterfallRule,
   type WaterfallScenario,
 } from "@/lib/policy-settings";
-import { loadMemberCarryover } from "@/lib/runtime-data.functions";
-import { fmtKES, loanSummary, useStore } from "@/lib/store";
+import { listAllCarryoverLoans, loadMemberCarryover } from "@/lib/runtime-data.functions";
+import {
+  fmtKES,
+  loanSummary,
+  SBC_UPFRONT_TABLE,
+  upfrontRequirementForAmount,
+  useStore,
+} from "@/lib/store";
 
 type PolicyCenterTab = "fees" | "percentages" | "interest" | "waterfall" | "clients" | "targets";
 
@@ -107,6 +114,7 @@ function PolicyCenterPage() {
   const deleteFee = useServerFn(deleteFeePolicyRecord);
   const savePolicySetting = useServerFn(upsertPolicySettingRecord);
   const loadCarryover = useServerFn(loadMemberCarryover);
+  const loadAllCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const saveCarryoverProfile = useServerFn(upsertMemberCarryoverProfileRecord);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const deleteCarryoverLoan = useServerFn(deleteMemberCarryoverLoanRecord);
@@ -132,6 +140,7 @@ function PolicyCenterPage() {
     blankCarryoverProfile(""),
   );
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [allCarryoverLoans, setAllCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [carryoverLoanDraft, setCarryoverLoanDraft] = useState<LegacyCarryoverLoan>(() =>
     blankCarryoverLoan("", 1),
   );
@@ -147,6 +156,16 @@ function PolicyCenterPage() {
   useEffect(() => {
     if (!clientId && memberAccounts[0]?.id) setClientId(memberAccounts[0].id);
   }, [clientId, memberAccounts]);
+
+  const refreshAllCarryoverLoans = useCallback(async () => {
+    setAllCarryoverLoans(await loadAllCarryoverLoans());
+  }, [loadAllCarryoverLoans]);
+
+  useEffect(() => {
+    refreshAllCarryoverLoans().catch((error: any) => {
+      toast.error(error?.message ?? "Failed to load carryover loan summaries.");
+    });
+  }, [refreshAllCarryoverLoans]);
 
   useEffect(() => {
     if (!clientId) {
@@ -204,6 +223,16 @@ function PolicyCenterPage() {
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
+  const allCarryoverLoanSummaries = allCarryoverLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
+  const carryoverLoanDraftSummary = summarizeLegacyCarryoverLoan(carryoverLoanDraft, policySettings);
+  const derivedCarryoverTotalCollected =
+    carryoverProfile.feesPaidTotal +
+    carryoverProfile.loanRepaymentsTotal +
+    carryoverProfile.investmentBalance +
+    carryoverProfile.otherCollectedTotal;
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
     0,
@@ -239,11 +268,87 @@ function PolicyCenterPage() {
       ].includes(transaction.type),
     )
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const combinedCollections = totalCollections + carryoverProfile.totalCollected;
+  const combinedCollections = totalCollections + derivedCarryoverTotalCollected;
   const combinedOutstandingBalance = totalBalance + carryoverBalance;
   const clientRating = selectedClient
     ? buildClientRating(selectedClient, selectedClientLoans, selectedClientPenalties)
     : null;
+  const selectedClientDailyTarget =
+    clientLoansSummary
+      .filter(({ loan }) => loan.status === "active")
+      .reduce((sum, row) => sum + row.summary.dailyInstallment, 0) +
+    carryoverLoanSummaries
+      .filter(({ loan, summary }) => loan.status !== "closed" && !summary.isFinished)
+      .reduce((sum, row) => sum + row.summary.dailyInclusive, 0);
+  const openLiveLoans = loans.filter((loan) => loan.status === "active" || loan.status === "defaulted");
+  const openLiveLoanSummaries = openLiveLoans.map((loan) => ({
+    loan,
+    summary: loanSummary(loan),
+  }));
+  const openCarryoverPortfolio = allCarryoverLoanSummaries.filter(
+    ({ loan, summary }) => loan.status !== "closed" && !summary.isFinished,
+  );
+  const portfolioRemainingCollections =
+    openLiveLoanSummaries.reduce((sum, row) => sum + row.summary.balance, 0) +
+    openCarryoverPortfolio.reduce((sum, row) => sum + row.summary.totalOwedNow, 0);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const systemTargetRows = useMemo(
+    () =>
+      ([
+        { label: "Today", period: "daily" as const },
+        { label: "Next 7 days", period: "weekly" as const },
+        { label: "Next 30 days", period: "monthly" as const },
+      ]).map(({ label, period }) => {
+        const window = targetWindow(period, todayIso);
+        const expectedValue = scheduledRepaymentsForWindow(
+          window.start,
+          window.end,
+          openLiveLoanSummaries,
+          openCarryoverPortfolio,
+        );
+        const actualValue = calculateTargetActual(
+          {
+            id: `system-${period}`,
+            metric: "loan_repayments",
+            period,
+            expectedValue,
+            startOn: todayIso,
+            createdAt: todayIso,
+            updatedAt: todayIso,
+          },
+          { members, loans, transactions },
+        );
+        const progressPct = expectedValue > 0 ? (actualValue / expectedValue) * 100 : 0;
+        return {
+          key: period,
+          label,
+          window,
+          expectedValue,
+          actualValue,
+          gap: actualValue - expectedValue,
+          progressPct,
+        };
+      }),
+    [loans, members, openCarryoverPortfolio, openLiveLoanSummaries, todayIso, transactions],
+  );
+  const collectionsToday = calculateTargetActual(
+    {
+      id: "system-collections-today",
+      metric: "collections_total",
+      period: "daily",
+      expectedValue: 0,
+      startOn: todayIso,
+      createdAt: todayIso,
+      updatedAt: todayIso,
+    },
+    { members, loans, transactions },
+  );
+  const suggestedTargetValue = suggestTargetExpectedValue(
+    targetDraft.metric,
+    targetDraft.period,
+    systemTargetRows,
+    openLiveLoanSummaries.length + openCarryoverPortfolio.length,
+  );
 
   const enrichedTargets = useMemo(
     () =>
@@ -288,7 +393,16 @@ function PolicyCenterPage() {
 
   async function saveCarryoverProfileDraft() {
     if (!selectedClient) return;
-    await saveCarryoverProfile({ data: carryoverProfile });
+    await saveCarryoverProfile({
+      data: {
+        ...carryoverProfile,
+        totalCollected: derivedCarryoverTotalCollected,
+        pendingBalance: carryoverLoanSummaries.reduce((sum, row) => sum + row.summary.totalOwedNow, 0),
+        completedLoanCycles: carryoverLoanSummaries.filter(
+          ({ loan, summary }) => loan.status === "closed" || summary.isFinished,
+        ).length,
+      },
+    });
     await reloadAppData();
     await refreshCarryoverDetails(selectedClient.id);
     toast.success("Carryover balances saved");
@@ -298,6 +412,7 @@ function PolicyCenterPage() {
     if (!selectedClient) return;
     await saveCarryoverLoan({ data: carryoverLoanDraft });
     await refreshCarryoverDetails(selectedClient.id);
+    await refreshAllCarryoverLoans();
     toast.success(carryoverLoanDraft.id ? "Carryover loan updated" : "Carryover loan saved");
   }
 
@@ -349,13 +464,13 @@ function PolicyCenterPage() {
             tone="warning"
           />
           <StatCard
-            label="Default Upfront"
-            value={fmtKES(policySettings.percentages.firstUpfrontAmount)}
+            label="Upfront Bands"
+            value={`${SBC_UPFRONT_TABLE.length} tiers`}
             icon={<Save className="h-5 w-5" />}
           />
           <StatCard
-            label="Live Targets"
-            value={enrichedTargets.length}
+            label="Tracked Targets"
+            value={enrichedTargets.length + systemTargetRows.length}
             icon={<Target className="h-5 w-5" />}
             tone="accent"
           />
@@ -592,7 +707,7 @@ function PolicyCenterPage() {
 
         {tab === "percentages" && (
           <Section
-            title="Percentages and fixed values"
+            title="Percentages and thresholds"
             action={
               <button
                 onClick={() =>
@@ -646,13 +761,6 @@ function PolicyCenterPage() {
                 }
               />
               <NumberField
-                label="First Upfront (KES)"
-                value={percentagesDraft.firstUpfrontAmount}
-                onChange={(value) =>
-                  setPercentagesDraft((current) => ({ ...current, firstUpfrontAmount: value }))
-                }
-              />
-              <NumberField
                 label="Savings Threshold (KES)"
                 value={percentagesDraft.mandatorySavingsThreshold}
                 onChange={(value) =>
@@ -673,9 +781,35 @@ function PolicyCenterPage() {
                 }
               />
             </div>
+            <div className="border-t border-border px-5 py-4">
+              <div className="text-sm font-medium">Tiered upfront reference</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Premium upfront is no longer treated as one fixed figure here. It follows the
+                shared SBC loan bands already used by the simulator and first-time application
+                flow.
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {SBC_UPFRONT_TABLE.map((tier) => {
+                  const requirement = upfrontRequirementForAmount(tier.min);
+                  return (
+                    <div key={tier.range} className="rounded-lg border border-border bg-muted/20 p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {tier.range}
+                      </div>
+                      <div className="mt-1 font-medium">{fmtKES(requirement.total)}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Shares {fmtKES(requirement.sharesAmount)} · Savings{" "}
+                        {fmtKES(requirement.savingsAmount)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              These values now drive loan deductions, penalty previews, first-upfront prompts, and
-              the M-Pesa round-off behavior across the app.
+              These values now drive loan deductions, penalty previews, savings qualification, and
+              the M-Pesa round-off behavior across the app. Premium upfront values are derived from
+              the shared loan-band table instead of a fixed policy-center amount.
             </div>
           </Section>
         )}
@@ -924,6 +1058,11 @@ function PolicyCenterPage() {
                     value={fmtKES(combinedCollections)}
                     tone="accent"
                   />
+                  <StatCard
+                    label="Daily target"
+                    value={fmtKES(selectedClientDailyTarget)}
+                    tone="warning"
+                  />
                 </div>
 
                 <Section title="Client balances and history">
@@ -1044,20 +1183,6 @@ function PolicyCenterPage() {
                       }
                     />
                     <NumberField
-                      label="Total collected"
-                      value={carryoverProfile.totalCollected}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({ ...current, totalCollected: value }))
-                      }
-                    />
-                    <NumberField
-                      label="Pending balance"
-                      value={carryoverProfile.pendingBalance}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({ ...current, pendingBalance: value }))
-                      }
-                    />
-                    <NumberField
                       label="Penalties outstanding"
                       value={carryoverProfile.penaltiesOutstanding}
                       onChange={(value) =>
@@ -1074,16 +1199,6 @@ function PolicyCenterPage() {
                         setCarryoverProfile((current) => ({
                           ...current,
                           penaltiesWaivedTotal: value,
-                        }))
-                      }
-                    />
-                    <NumberField
-                      label="Completed loan cycles"
-                      value={carryoverProfile.completedLoanCycles}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({
-                          ...current,
-                          completedLoanCycles: Math.max(0, Math.floor(value)),
                         }))
                       }
                     />
@@ -1167,6 +1282,21 @@ function PolicyCenterPage() {
                         className="input"
                       />
                     </Field>
+                    <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-3">
+                      <MetricCard label="Derived total collected" value={fmtKES(derivedCarryoverTotalCollected)} />
+                      <MetricCard
+                        label="Derived pending balance"
+                        value={fmtKES(
+                          carryoverLoanSummaries.reduce((sum, row) => sum + row.summary.totalOwedNow, 0),
+                        )}
+                      />
+                      <MetricCard
+                        label="Completed carryover cycles"
+                        value={carryoverLoanSummaries
+                          .filter(({ loan, summary }) => loan.status === "closed" || summary.isFinished)
+                          .length.toFixed(0)}
+                      />
+                    </div>
                     <Field label="Notes" className="md:col-span-2 xl:col-span-4">
                       <textarea
                         rows={3}
@@ -1182,9 +1312,9 @@ function PolicyCenterPage() {
                     </Field>
                   </div>
                   <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-                    Saving carryover balances also updates the member's live savings, share units,
-                    and fee-status flags so the current system reflects the corrected starting
-                    position.
+                    Saving carryover balances updates the member's live savings, share units, and
+                    fee-status flags. Carryover totals, balances, and completed cycles are derived
+                    from the figures above plus the saved carryover loans so the page stays in sync.
                   </div>
                 </Section>
 
@@ -1257,7 +1387,7 @@ function PolicyCenterPage() {
                       </select>
                     </Field>
                     <NumberField
-                      label="Interest rate %"
+                      label="Interest rate override %"
                       value={carryoverLoanDraft.interestRatePct}
                       onChange={(value) =>
                         setCarryoverLoanDraft((current) => ({
@@ -1289,7 +1419,7 @@ function PolicyCenterPage() {
                         className="input"
                       />
                     </Field>
-                    <Field label="Due date">
+                    <Field label="Due date override">
                       <input
                         type="date"
                         value={carryoverLoanDraft.dueDate ?? ""}
@@ -1377,11 +1507,30 @@ function PolicyCenterPage() {
                         className="input"
                       />
                     </Field>
+                    <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <MetricCard
+                        label="Rate used"
+                        value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
+                      />
+                      <MetricCard
+                        label="Auto due date"
+                        value={carryoverLoanDraftSummary.dueDate}
+                      />
+                      <MetricCard
+                        label="Repayment total"
+                        value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
+                      />
+                      <MetricCard
+                        label="Owed now"
+                        value={fmtKES(carryoverLoanDraftSummary.totalOwedNow)}
+                      />
+                    </div>
                   </div>
                   <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-                    Use this like the simulator: principal + days + daily savings + amount already
-                    paid. If the loan is not finished, the system shows the remaining balance,
-                    arrears, penalty estimate, and what is owed now.
+                    Start with principal, term, daily savings, start date, and amount already paid.
+                    Leave the override rate at 0 to use the current policy rate for that term. The
+                    balance, penalties, due date, and completion status are calculated from the
+                    saved carryover loan record.
                   </div>
                   <div className="space-y-4 border-t border-border p-5">
                     {carryoverLoading && (
@@ -1428,6 +1577,7 @@ function PolicyCenterPage() {
                               onClick={async () => {
                                 await deleteCarryoverLoan({ data: { id: loan.id } });
                                 await refreshCarryoverDetails(selectedClient.id);
+                                await refreshAllCarryoverLoans();
                                 toast.success("Carryover loan deleted");
                               }}
                               className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
@@ -1544,7 +1694,69 @@ function PolicyCenterPage() {
 
         {tab === "targets" && (
           <>
-            <Section title="Create or edit progressive target">
+            <Section title="Live loan-book baseline">
+              <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                <StatCard label="Open live loans" value={openLiveLoanSummaries.length} />
+                <StatCard label="Open carryover loans" value={openCarryoverPortfolio.length} />
+                <StatCard
+                  label="Remaining collectible"
+                  value={fmtKES(portfolioRemainingCollections)}
+                  tone="accent"
+                />
+                <StatCard
+                  label="Due today"
+                  value={fmtKES(systemTargetRows[0]?.expectedValue ?? 0)}
+                  tone="warning"
+                />
+              </div>
+              <div className="overflow-x-auto border-t border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-5 py-3 text-left">Window</th>
+                      <th className="px-5 py-3 text-right">Scheduled</th>
+                      <th className="px-5 py-3 text-right">Actual repayments</th>
+                      <th className="px-5 py-3 text-right">Gap</th>
+                      <th className="px-5 py-3 text-right">Progress</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {systemTargetRows.map((target) => (
+                      <tr key={target.key}>
+                        <td className="px-5 py-3">
+                          <div className="font-medium">{target.label}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {target.window.start} {"->"} {target.window.end}
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-right font-medium">
+                          {fmtKES(target.expectedValue)}
+                        </td>
+                        <td className="px-5 py-3 text-right">{fmtKES(target.actualValue)}</td>
+                        <td
+                          className={`px-5 py-3 text-right font-medium ${
+                            target.gap >= 0 ? "text-success" : "text-destructive"
+                          }`}
+                        >
+                          {target.gap >= 0 ? "+" : ""}
+                          {fmtKES(target.gap)}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {target.progressPct.toFixed(1)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+                These targets are auto-generated from the current live and carryover loan book so
+                the policy center always shows what should be collectible now before any manual
+                director targets are added.
+              </div>
+            </Section>
+
+            <Section title="Create or edit manual target">
               <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-5">
                 <Field label="Metric">
                   <select
@@ -1594,6 +1806,9 @@ function PolicyCenterPage() {
                     }
                     className="input"
                   />
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Suggested from the live book: {formatTargetValue(targetDraft.metric, suggestedTargetValue)}
+                  </div>
                 </Field>
                 <Field label="Start date">
                   <input
@@ -1664,7 +1879,8 @@ function PolicyCenterPage() {
                           colSpan={7}
                           className="px-5 py-8 text-center text-sm text-muted-foreground"
                         >
-                          No targets saved yet.
+                          No manual targets saved yet. The live loan-book baseline above is still
+                          updating automatically.
                         </td>
                       </tr>
                     )}
@@ -1953,6 +2169,76 @@ function targetWindow(period: TargetPeriod, startOn: string) {
 
 function formatTargetValue(metric: TargetMetric, value: number) {
   return TARGET_METRIC_META[metric].unit === "amount" ? fmtKES(value) : value.toFixed(0);
+}
+
+function dateOnlyValue(value: string) {
+  return value.slice(0, 10);
+}
+
+function overlapDaysInclusive(
+  startDate: string,
+  endDate: string,
+  windowStart: string,
+  windowEnd: string,
+) {
+  const start = dateOnlyValue(startDate);
+  const end = dateOnlyValue(endDate);
+  const overlapStart = start > windowStart ? start : windowStart;
+  const overlapEnd = end < windowEnd ? end : windowEnd;
+  if (overlapStart > overlapEnd) return 0;
+
+  const startMs = new Date(`${overlapStart}T00:00:00`).getTime();
+  const endMs = new Date(`${overlapEnd}T00:00:00`).getTime();
+  return Math.floor((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function scheduledRepaymentsForWindow(
+  windowStart: string,
+  windowEnd: string,
+  liveLoans: Array<{
+    loan: ReturnType<typeof useStore>["loans"][number];
+    summary: ReturnType<typeof loanSummary>;
+  }>,
+  carryoverLoans: Array<{
+    loan: LegacyCarryoverLoan;
+    summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+  }>,
+) {
+  const liveDue = liveLoans.reduce((sum, row) => {
+    const activeDays = overlapDaysInclusive(
+      row.loan.startDate,
+      row.summary.dueDate,
+      windowStart,
+      windowEnd,
+    );
+    return sum + activeDays * row.summary.dailyInstallment;
+  }, 0);
+
+  const carryoverDue = carryoverLoans.reduce((sum, row) => {
+    const activeDays = overlapDaysInclusive(
+      row.loan.startDate,
+      row.summary.dueDate,
+      windowStart,
+      windowEnd,
+    );
+    return sum + activeDays * row.summary.dailyInclusive;
+  }, 0);
+
+  return liveDue + carryoverDue;
+}
+
+function suggestTargetExpectedValue(
+  metric: TargetMetric,
+  period: TargetPeriod,
+  systemTargets: Array<{ key: string; expectedValue: number }>,
+  activeLoanCount: number,
+) {
+  if (metric === "loan_repayments" || metric === "collections_total") {
+    const match = systemTargets.find((target) => target.key === period);
+    return match?.expectedValue ?? 0;
+  }
+  if (metric === "new_loans_count") return activeLoanCount;
+  return 0;
 }
 
 function buildClientRating(

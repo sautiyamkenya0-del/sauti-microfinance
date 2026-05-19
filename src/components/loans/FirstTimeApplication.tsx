@@ -12,8 +12,8 @@ import {
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
-  SBC_UPFRONT_TABLE,
   termPeriodsFromDays,
+  upfrontRequirementForAmount,
 } from "@/lib/store";
 import { Input, Select, Row, inputCss } from "./atoms";
 import { useEffect, useMemo, useState } from "react";
@@ -121,7 +121,7 @@ export function FirstTimeApplication({
       termPeriodsFromDays(termDays),
     );
     const ded = sbcDeductions(f.loanAmount);
-    const upfront = SBC_UPFRONT_TABLE.find((u) => f.loanAmount >= u.min && f.loanAmount <= u.max);
+    const upfront = upfrontRequirementForAmount(f.loanAmount).tier;
     return {
       ratePct,
       termDays,

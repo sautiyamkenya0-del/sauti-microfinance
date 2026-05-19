@@ -6,6 +6,7 @@ import {
   formatMembershipNumber,
   isInvestorOnlyCategory,
   memberNeedsSticker,
+  upfrontRequirementForAmount,
   type Member,
 } from "@/lib/store";
 import { toast } from "sonner";
@@ -21,7 +22,7 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
 export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
-  const { loans, feePolicies, policySettings } = useStore();
+  const { loans, feePolicies } = useStore();
   const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
   const [busy, setBusy] = useState(false);
 
@@ -42,6 +43,11 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const defaultPurpose: Purpose = investorOnly ? "investment" : activeLoan ? "loan" : "savings";
   const [purpose, setPurpose] = useState<Purpose>(mode === "officer" ? "upfront" : defaultPurpose);
   const [amount, setAmount] = useState<number>(0);
+  const [plannedLoanAmount, setPlannedLoanAmount] = useState<number>(5000);
+  const upfrontRequirement = useMemo(
+    () => upfrontRequirementForAmount(plannedLoanAmount),
+    [plannedLoanAmount],
+  );
 
   const purposeOptions: { value: Purpose; label: string; disabled?: boolean }[] = useMemo(() => {
     const opts: { value: Purpose; label: string; disabled?: boolean }[] = [
@@ -56,12 +62,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const previewAmount = useMemo(() => {
     if (mode === "officer") {
-      if (purpose === "upfront") return feesDue + policySettings.percentages.firstUpfrontAmount;
+      if (purpose === "upfront") return feesDue + upfrontRequirement.total;
       if (purpose === "fees") return feesDue;
       return 0;
     }
     return Math.max(0, Math.floor(amount || 0));
-  }, [amount, feesDue, mode, policySettings.percentages.firstUpfrontAmount, purpose]);
+  }, [amount, feesDue, mode, purpose, upfrontRequirement.total]);
 
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
@@ -241,9 +247,34 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 </div>
               ))}
               {purpose === "upfront" && (
+                <label className="block border-t border-border pt-2">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Planned loan amount
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={plannedLoanAmount || ""}
+                    onChange={(e) => setPlannedLoanAmount(Number(e.target.value) || 0)}
+                    className="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+                  />
+                </label>
+              )}
+              {purpose === "upfront" && (
                 <div className="mt-1 flex justify-between border-t border-border pt-1">
-                  <span>First daily installment</span>
-                  <span>{fmtKES(policySettings.percentages.firstUpfrontAmount)}</span>
+                  <span>Tiered upfront reference</span>
+                  <span>{fmtKES(upfrontRequirement.total)}</span>
+                </div>
+              )}
+              {purpose === "upfront" && upfrontRequirement.tier && (
+                <div className="text-muted-foreground">
+                  {upfrontRequirement.tier.range}: shares {fmtKES(upfrontRequirement.sharesAmount)} ·
+                  savings {fmtKES(upfrontRequirement.savingsAmount)}
+                </div>
+              )}
+              {purpose === "upfront" && !upfrontRequirement.tier && (
+                <div className="text-muted-foreground">
+                  No premium upfront tier is configured for this loan amount yet.
                 </div>
               )}
             </div>

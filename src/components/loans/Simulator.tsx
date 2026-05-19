@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Section } from "@/components/ui-bits";
-import { fmtKES, loanRateForTerm, roundUpKES, sbcDeductions, SBC_UPFRONT_TABLE, useStore } from "@/lib/store";
+import {
+  fmtKES,
+  loanRateForTerm,
+  roundUpKES,
+  sbcDeductions,
+  upfrontRequirementForAmount,
+  useStore,
+} from "@/lib/store";
 
 type LoanType = "standard" | "premium";
 
@@ -28,10 +35,6 @@ const DAY_OPTIONS: Record<LoanType, number[]> = {
 };
 
 const SAVINGS_OPTIONS = [50, 100];
-
-function tierFor(amount: number) {
-  return SBC_UPFRONT_TABLE.find((t) => amount >= t.min && amount <= t.max);
-}
 
 function fmtDate(d: Date) {
   return d.toLocaleDateString("en-GB", {
@@ -75,8 +78,8 @@ export function Simulator() {
     const totalSavingsAccrued = dailySavings * days;
     const grandTotalCollected = dailyInclusive * days;
 
-    const tier = tierFor(amount);
-    const upfront = tier ? tier.minShares + tier.minSavings : 0;
+    const upfrontRequirement = upfrontRequirementForAmount(amount);
+    const upfront = upfrontRequirement.total;
     const totalUpfrontNow = upfront + registration + membership + sticker;
     const netDisbursed = amount - deductions.total;
 
@@ -106,7 +109,7 @@ export function Simulator() {
       totalUpfrontNow,
       netDisbursed,
       dueDates,
-      tier,
+      tier: upfrontRequirement.tier,
     };
   }, [amount, dailySavings, days, feePolicies, startDate, stickerOn]);
 
