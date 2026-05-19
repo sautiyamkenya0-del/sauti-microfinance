@@ -4,7 +4,7 @@ import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server
 import { recordMpesaStkPushRequestEvent } from "@/lib/app-data.functions";
 import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
 import { formatMembershipNumber } from "@/lib/membership";
-import { getSecret } from "@/lib/runtime-secrets.server";
+import { getDarajaAccessToken } from "@/lib/mpesa-config.server";
 import { toComparableKenyanPhone } from "@/lib/utils";
 
 /** Daraja STK Push trigger.
@@ -64,16 +64,17 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
             }
           }
 
-          const consumerKey = await getSecret("MPESA_CONSUMER_KEY");
-          const consumerSecret = await getSecret("MPESA_CONSUMER_SECRET");
-          const shortcode = await getSecret("MPESA_SHORTCODE");
-          const passkey = await getSecret("MPESA_PASSKEY");
-          const env = ((await getSecret("MPESA_ENV")) ?? "production").toLowerCase();
+          const tokenResult = await getDarajaAccessToken();
+          const adminEnv = getSupabaseAdminEnvStatus();
+          const activeConfig = tokenResult.ok ? tokenResult.config : tokenResult.variants.effective;
+          const shortcode = activeConfig.shortcode;
+          const passkey = activeConfig.passkey;
           const base =
-            env === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";
+            activeConfig.normalizedEnv === "sandbox"
+              ? "https://sandbox.safaricom.co.ke"
+              : "https://api.safaricom.co.ke";
 
-          if (!consumerKey || !consumerSecret || !shortcode || !passkey) {
-            const adminEnv = getSupabaseAdminEnvStatus();
+          if (!shortcode || !passkey || !activeConfig.completeness.oauthReady) {
             return Response.json(
               {
                 ok: false,
@@ -81,35 +82,34 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                 hint: adminEnv.ok
                   ? "Set MPESA_ENV, MPESA_SHORTCODE, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_PASSKEY in the secret vault or hosting environment."
                   : `The runtime secret table cannot be read because ${adminEnv.missing.join(", ")} is missing on the server. Add the missing server env and restart/redeploy, or place the MPESA_* values directly in the hosting environment.`,
+                details: {
+                  resolutionMode: tokenResult.variants.resolutionMode,
+                  activeSource: activeConfig.sources,
+                },
               },
               { status: 503 },
             );
           }
 
-          const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-          const tokenRes = await fetch(`${base}/oauth/v2/generate?grant_type=client_credentials`, {
-            headers: { Authorization: `Basic ${auth}` },
-          });
-
-          if (!tokenRes.ok) {
-            const details = await tokenRes.text();
-            console.error("Daraja oauth failed", tokenRes.status, details);
+          if (!tokenResult.ok) {
+            const lastAttempt = tokenResult.attempts[tokenResult.attempts.length - 1];
+            console.error("Daraja oauth failed", tokenResult.status, tokenResult.attempts);
             return Response.json(
               {
                 ok: false,
-                error: `M-Pesa authentication failed (${tokenRes.status}).`,
+                error: `M-Pesa authentication failed (${tokenResult.status ?? "unknown"}).`,
                 hint:
-                  tokenRes.status === 400
-                    ? "Check that the consumer key, consumer secret, and MPESA_ENV match the same Daraja environment. Also verify that no saved /secret-keys value is overriding Vercel and that the Vercel values do not include wrapping quotes or extra whitespace."
+                  tokenResult.status === 400 || tokenResult.status === 401
+                    ? "Check that the consumer key, consumer secret, and MPESA_ENV match the same Daraja environment. If Vercel has the right values but /secret-keys is stale, set SAUTI_MPESA_SECRET_SOURCE=env-first or delete the stale runtime MPESA_* keys."
                     : "Check the configured Daraja credentials and try again.",
-                daraja: details,
+                daraja: lastAttempt?.body ?? tokenResult.error,
+                attempts: tokenResult.attempts,
               },
               { status: 502 },
             );
           }
 
-          const tokenJson = (await tokenRes.json()) as { access_token: string };
-          const accessToken = tokenJson.access_token;
+          const accessToken = tokenResult.accessToken;
 
           const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
           const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");

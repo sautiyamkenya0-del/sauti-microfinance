@@ -10,8 +10,9 @@ type RuntimeSecretActor = {
   actorRole?: string;
 };
 
-export type SecretInspection = {
-  key: string;
+export type SecretResolutionMode = "runtime-first" | "env-first" | "runtime-only" | "env-only";
+
+export type SecretValueInspection = {
   source: "runtime_vault" | "process.env" | "import.meta.env" | "missing";
   rawLength: number;
   normalizedLength: number;
@@ -20,7 +21,22 @@ export type SecretInspection = {
   value?: string;
 };
 
-function normalizeSecretValue(raw: string | undefined): Omit<SecretInspection, "key" | "source"> {
+export type SecretInspection = {
+  key: string;
+  source: SecretValueInspection["source"];
+  rawLength: number;
+  normalizedLength: number;
+  hadOuterWhitespace: boolean;
+  hadWrappingQuotes: boolean;
+  value?: string;
+  resolutionMode: SecretResolutionMode;
+  candidates: {
+    runtimeVault: SecretValueInspection;
+    hostingEnv: SecretValueInspection;
+  };
+};
+
+function normalizeSecretValue(raw: string | undefined): Omit<SecretValueInspection, "source"> {
   if (typeof raw !== "string") {
     return {
       rawLength: 0,
@@ -49,6 +65,57 @@ function normalizeSecretValue(raw: string | undefined): Omit<SecretInspection, "
   };
 }
 
+function inspectRuntimeSecretValue(raw: string | undefined): SecretValueInspection {
+  return {
+    source: raw == null ? "missing" : "runtime_vault",
+    ...normalizeSecretValue(raw),
+  };
+}
+
+function normalizeResolutionMode(raw: string | undefined): SecretResolutionMode | undefined {
+  const value = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!value) return undefined;
+  if (value === "runtime-first" || value === "env-first" || value === "runtime-only" || value === "env-only") {
+    return value;
+  }
+  if (value === "runtime") return "runtime-only";
+  if (value === "env" || value === "hosting-env" || value === "hosting_env") return "env-only";
+  return undefined;
+}
+
+function secretResolutionModeForKey(key: string): SecretResolutionMode {
+  const normalizedKey = key.toUpperCase();
+  const mpesaOverride =
+    normalizedKey.startsWith("MPESA_")
+      ? readServerEnv("SAUTI_MPESA_SECRET_SOURCE") ?? readServerEnv("MPESA_SECRET_SOURCE")
+      : undefined;
+  return (
+    normalizeResolutionMode(mpesaOverride) ??
+    normalizeResolutionMode(readServerEnv("SAUTI_SECRET_SOURCE")) ??
+    "runtime-first"
+  );
+}
+
+function resolveSecretCandidate(
+  mode: SecretResolutionMode,
+  runtimeDetails: SecretValueInspection,
+  envDetails: SecretValueInspection,
+) {
+  switch (mode) {
+    case "env-only":
+      return envDetails;
+    case "runtime-only":
+      return runtimeDetails;
+    case "env-first":
+      return envDetails.value ? envDetails : runtimeDetails;
+    case "runtime-first":
+    default:
+      return runtimeDetails.value ? runtimeDetails : envDetails;
+  }
+}
+
 /** Server-only: read a runtime secret value (or undefined). */
 export async function getRuntimeSecret(key: string): Promise<string | undefined> {
   const supabaseAdmin = getSupabaseAdminOrNull();
@@ -62,26 +129,35 @@ export async function getRuntimeSecret(key: string): Promise<string | undefined>
   return data?.value ?? undefined;
 }
 
-export async function inspectSecret(key: string): Promise<SecretInspection> {
+export async function inspectSecretCandidates(key: string) {
   const normalizedKey = key.toUpperCase();
-  const runtimeDetails = normalizeSecretValue(await getRuntimeSecret(normalizedKey));
-  if (runtimeDetails.value) {
-    return {
-      key: normalizedKey,
-      source: "runtime_vault",
-      ...runtimeDetails,
-    };
-  }
-
-  const envDetails = inspectServerEnv(normalizedKey);
+  const runtimeVault = inspectRuntimeSecretValue(await getRuntimeSecret(normalizedKey));
+  const hostingEnv = inspectServerEnv(normalizedKey);
   return {
     key: normalizedKey,
-    source: envDetails.source,
-    rawLength: envDetails.rawLength,
-    normalizedLength: envDetails.normalizedLength,
-    hadOuterWhitespace: envDetails.hadOuterWhitespace,
-    hadWrappingQuotes: envDetails.hadWrappingQuotes,
-    value: envDetails.value,
+    runtimeVault,
+    hostingEnv,
+    resolutionMode: secretResolutionModeForKey(normalizedKey),
+  };
+}
+
+export async function inspectSecret(key: string): Promise<SecretInspection> {
+  const { key: normalizedKey, runtimeVault, hostingEnv, resolutionMode } =
+    await inspectSecretCandidates(key);
+  const effective = resolveSecretCandidate(resolutionMode, runtimeVault, hostingEnv);
+  return {
+    key: normalizedKey,
+    source: effective.source,
+    rawLength: effective.rawLength,
+    normalizedLength: effective.normalizedLength,
+    hadOuterWhitespace: effective.hadOuterWhitespace,
+    hadWrappingQuotes: effective.hadWrappingQuotes,
+    value: effective.value,
+    resolutionMode,
+    candidates: {
+      runtimeVault,
+      hostingEnv,
+    },
   };
 }
 

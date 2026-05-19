@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { requireDirectorActor } from "@/lib/auth.server";
+import { getDarajaAccessToken, loadMpesaConfigVariants } from "@/lib/mpesa-config.server";
 import { inspectSecret } from "@/lib/runtime-secrets.server";
 import { readServerEnv } from "@/lib/server-env";
 
@@ -14,15 +16,37 @@ function summarizeSecret(
     return {
       status: "MISSING",
       source: details.source,
+      resolutionMode: details.resolutionMode,
+      candidates: {
+        runtimeVault: {
+          source: details.candidates.runtimeVault.source,
+          normalizedLength: details.candidates.runtimeVault.normalizedLength,
+        },
+        hostingEnv: {
+          source: details.candidates.hostingEnv.source,
+          normalizedLength: details.candidates.hostingEnv.normalizedLength,
+        },
+      },
     };
   }
 
   return {
     status: "set",
     source: details.source,
+    resolutionMode: details.resolutionMode,
     normalizedLength: details.normalizedLength,
     hadOuterWhitespace: details.hadOuterWhitespace,
     hadWrappingQuotes: details.hadWrappingQuotes,
+    candidates: {
+      runtimeVault: {
+        source: details.candidates.runtimeVault.source,
+        normalizedLength: details.candidates.runtimeVault.normalizedLength,
+      },
+      hostingEnv: {
+        source: details.candidates.hostingEnv.source,
+        normalizedLength: details.candidates.hostingEnv.normalizedLength,
+      },
+    },
     ...(options?.preview ? { prefix: details.value.slice(0, 4) } : {}),
   };
 }
@@ -44,16 +68,17 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
 
         await requireDirectorActor();
         const adminEnv = getSupabaseAdminEnvStatus();
-        const envDetails = await inspectSecret("MPESA_ENV");
-        const consumerKeyDetails = await inspectSecret("MPESA_CONSUMER_KEY");
-        const consumerSecretDetails = await inspectSecret("MPESA_CONSUMER_SECRET");
-        const shortcodeDetails = await inspectSecret("MPESA_SHORTCODE");
-        const passkeyDetails = await inspectSecret("MPESA_PASSKEY");
+        const [envDetails, consumerKeyDetails, consumerSecretDetails, shortcodeDetails, passkeyDetails] =
+          await Promise.all([
+            inspectSecret("MPESA_ENV"),
+            inspectSecret("MPESA_CONSUMER_KEY"),
+            inspectSecret("MPESA_CONSUMER_SECRET"),
+            inspectSecret("MPESA_SHORTCODE"),
+            inspectSecret("MPESA_PASSKEY"),
+          ]);
 
-        const ck = consumerKeyDetails.value ?? "";
-        const cs = consumerSecretDetails.value ?? "";
+        const configVariants = await loadMpesaConfigVariants();
         const sc = shortcodeDetails.value ?? "";
-        const pk = passkeyDetails.value ?? "";
         const env = (envDetails.value ?? "production").toLowerCase();
         const base =
           env === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";
@@ -66,6 +91,17 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
             normalizedLength: envDetails.normalizedLength,
             hadOuterWhitespace: envDetails.hadOuterWhitespace,
             hadWrappingQuotes: envDetails.hadWrappingQuotes,
+            resolutionMode: envDetails.resolutionMode,
+            candidates: {
+              runtimeVault: {
+                source: envDetails.candidates.runtimeVault.source,
+                normalizedLength: envDetails.candidates.runtimeVault.normalizedLength,
+              },
+              hostingEnv: {
+                source: envDetails.candidates.hostingEnv.source,
+                normalizedLength: envDetails.candidates.hostingEnv.normalizedLength,
+              },
+            },
           },
           MPESA_CONSUMER_KEY: summarizeSecret(consumerKeyDetails, { preview: true }),
           MPESA_CONSUMER_SECRET: summarizeSecret(consumerSecretDetails),
@@ -75,53 +111,74 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
           },
           MPESA_PASSKEY: summarizeSecret(passkeyDetails),
           base,
-          precedence: "runtime_vault overrides hosting env",
+          precedence: `${configVariants.resolutionMode} (primary) with automatic alternate-source retry for OAuth`,
+          variants: {
+            effective: {
+              env: configVariants.effective.normalizedEnv,
+              sources: configVariants.effective.sources,
+              oauthReady: configVariants.effective.completeness.oauthReady,
+              stkReady: configVariants.effective.completeness.stkReady,
+            },
+            hosting_env: {
+              env: configVariants.hostingEnv.normalizedEnv,
+              sources: configVariants.hostingEnv.sources,
+              oauthReady: configVariants.hostingEnv.completeness.oauthReady,
+              stkReady: configVariants.hostingEnv.completeness.stkReady,
+            },
+            runtime_vault: {
+              env: configVariants.runtimeVault.normalizedEnv,
+              sources: configVariants.runtimeVault.sources,
+              oauthReady: configVariants.runtimeVault.completeness.oauthReady,
+              stkReady: configVariants.runtimeVault.completeness.stkReady,
+            },
+          },
           runtime_vault: adminEnv.ok
             ? "available"
             : `unavailable (missing ${adminEnv.missing.join(", ")})`,
         };
 
-        if (!ck || !cs)
+        if (!configVariants.effective.completeness.oauthReady) {
           return Response.json({
             ok: false,
             stage: "presence",
             presence,
             error: "Consumer key/secret missing",
           });
+        }
 
         try {
-          const auth = Buffer.from(`${ck}:${cs}`).toString("base64");
-          const res = await fetch(`${base}/oauth/v2/generate?grant_type=client_credentials`, {
-            headers: { Authorization: `Basic ${auth}` },
-          });
-          const text = await res.text();
-          let body: any;
-          try {
-            body = JSON.parse(text);
-          } catch {
-            body = { raw: text };
-          }
-          if (!res.ok) {
+          const authResult = await getDarajaAccessToken();
+          if (!authResult.ok) {
             return Response.json({
               ok: false,
               stage: "oauth",
-              status: res.status,
+              status: authResult.status,
               presence,
-              response: body,
+              attempts: authResult.attempts,
               hint:
-                res.status === 400
-                  ? "Likely causes: the Daraja consumer key/secret do not match MPESA_ENV, a saved /secret-keys value is overriding Vercel, or the Vercel values were pasted with wrapping quotes/whitespace."
+                authResult.status === 400 || authResult.status === 401
+                  ? "Likely causes: the Daraja consumer key/secret do not match MPESA_ENV, the wrong source won the secret lookup, or the configured values include wrapping quotes/whitespace."
                   : undefined,
             });
           }
+
           return Response.json({
             ok: true,
             stage: "oauth",
-            status: res.status,
+            status: 200,
             presence,
-            access_token_prefix: String(body.access_token ?? "").slice(0, 12) + "…",
-            expires_in: body.expires_in,
-            note: "OAuth is working. If STK Push still returns 404.001.03 Invalid Access Token, the Daraja app is authenticated but not provisioned for Lipa Na M-Pesa Online / STK Push in this environment.",
+            attempts: authResult.attempts,
+            active_variant: {
+              label: authResult.config.label,
+              env: authResult.config.normalizedEnv,
+              sources: authResult.config.sources,
+            },
+            access_token_prefix: String(authResult.accessToken ?? "").slice(0, 12) + "...",
+            expires_in: authResult.expiresIn,
+            note:
+              authResult.config.label === "hosting_env" || authResult.config.label === "runtime_vault"
+                ? `OAuth succeeded after switching to ${authResult.config.label}. If this is the desired long-term source, set SAUTI_MPESA_SECRET_SOURCE=${authResult.config.label === "hosting_env" ? "env-first" : "runtime-first"} or clean up the conflicting MPESA_* values.`
+                : "OAuth is working. If STK Push still returns 404.001.03 Invalid Access Token, the Daraja app is authenticated but not provisioned for Lipa Na M-Pesa Online / STK Push in this environment.",
           });
         } catch (e: any) {
           return Response.json({

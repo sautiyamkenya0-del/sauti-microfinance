@@ -405,7 +405,9 @@ function SecretKeysPage() {
               </div>
               <div>
                 M-Pesa keys saved here override the build-time secrets and can be swapped without
-                redeploying. The diagnostic endpoint is disabled in production unless{" "}
+                redeploying unless the server sets <span className="font-mono">SAUTI_MPESA_SECRET_SOURCE=env-first</span>{" "}
+                or <span className="font-mono">env-only</span> to force hosting env values. The
+                diagnostic endpoint is disabled in production unless{" "}
                 <span className="font-mono">SAUTI_ENABLE_MPESA_DIAGNOSTICS=true</span>.
               </div>
             </div>

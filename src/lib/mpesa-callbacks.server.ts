@@ -7,8 +7,8 @@ import {
   recordMpesaConfirmationEvent,
   recordMpesaValidationEvent,
 } from "@/lib/app-data.functions";
+import { listConfiguredMpesaShortcodes } from "@/lib/mpesa-config.server";
 import { sendMpesaReceiptSms } from "@/lib/mpesa.server";
-import { getSecret } from "@/lib/runtime-secrets.server";
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
@@ -175,11 +175,11 @@ export async function handleMpesaConfirmationRequest(request: Request) {
   try {
     const body = await readBodyObject(request);
     const normalized = await normalizeConfirmationBody(body);
-    const expected = await getSecret("MPESA_SHORTCODE");
+    const expectedShortcodes = await listConfiguredMpesaShortcodes();
     if (
-      expected &&
+      expectedShortcodes.length > 0 &&
       normalized.businessShortCode &&
-      String(normalized.businessShortCode) !== String(expected)
+      !expectedShortcodes.includes(String(normalized.businessShortCode).trim())
     ) {
       return Response.json(
         { ResultCode: 1, ResultDesc: "Wrong shortcode" },
