@@ -86,7 +86,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           }
 
           const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-          const tokenRes = await fetch(`${base}/oauth/v1/generate?grant_type=client_credentials`, {
+          const tokenRes = await fetch(`${base}/oauth/v2/generate?grant_type=client_credentials`, {
             headers: { Authorization: `Basic ${auth}` },
           });
 

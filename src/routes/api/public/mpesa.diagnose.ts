@@ -91,7 +91,7 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
 
         try {
           const auth = Buffer.from(`${ck}:${cs}`).toString("base64");
-          const res = await fetch(`${base}/oauth/v1/generate?grant_type=client_credentials`, {
+          const res = await fetch(`${base}/oauth/v2/generate?grant_type=client_credentials`, {
             headers: { Authorization: `Basic ${auth}` },
           });
           const text = await res.text();
