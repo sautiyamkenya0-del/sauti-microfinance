@@ -99,7 +99,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                 error: `M-Pesa authentication failed (${tokenRes.status}).`,
                 hint:
                   tokenRes.status === 400
-                    ? "Check that the consumer key, consumer secret, and MPESA_ENV match the correct Daraja environment."
+                    ? "Check that the consumer key, consumer secret, and MPESA_ENV match the same Daraja environment. Also verify that no saved /secret-keys value is overriding Vercel and that the Vercel values do not include wrapping quotes or extra whitespace."
                     : "Check the configured Daraja credentials and try again.",
                 daraja: details,
               },

@@ -1,8 +1,31 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server";
 import { requireDirectorActor } from "@/lib/auth.server";
-import { getSecret } from "@/lib/runtime-secrets.server";
+import { inspectSecret } from "@/lib/runtime-secrets.server";
 import { readServerEnv } from "@/lib/server-env";
+
+function summarizeSecret(
+  details: Awaited<ReturnType<typeof inspectSecret>>,
+  options?: {
+    preview?: boolean;
+  },
+) {
+  if (!details.value) {
+    return {
+      status: "MISSING",
+      source: details.source,
+    };
+  }
+
+  return {
+    status: "set",
+    source: details.source,
+    normalizedLength: details.normalizedLength,
+    hadOuterWhitespace: details.hadOuterWhitespace,
+    hadWrappingQuotes: details.hadWrappingQuotes,
+    ...(options?.preview ? { prefix: details.value.slice(0, 4) } : {}),
+  };
+}
 
 /** GET /api/public/mpesa/diagnose
  *  Returns whether each MPESA_* secret is set + tries an OAuth token call.
@@ -21,21 +44,38 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
 
         await requireDirectorActor();
         const adminEnv = getSupabaseAdminEnvStatus();
-        const ck = (await getSecret("MPESA_CONSUMER_KEY")) ?? "";
-        const cs = (await getSecret("MPESA_CONSUMER_SECRET")) ?? "";
-        const sc = (await getSecret("MPESA_SHORTCODE")) ?? "";
-        const pk = (await getSecret("MPESA_PASSKEY")) ?? "";
-        const env = ((await getSecret("MPESA_ENV")) ?? "production").toLowerCase();
+        const envDetails = await inspectSecret("MPESA_ENV");
+        const consumerKeyDetails = await inspectSecret("MPESA_CONSUMER_KEY");
+        const consumerSecretDetails = await inspectSecret("MPESA_CONSUMER_SECRET");
+        const shortcodeDetails = await inspectSecret("MPESA_SHORTCODE");
+        const passkeyDetails = await inspectSecret("MPESA_PASSKEY");
+
+        const ck = consumerKeyDetails.value ?? "";
+        const cs = consumerSecretDetails.value ?? "";
+        const sc = shortcodeDetails.value ?? "";
+        const pk = passkeyDetails.value ?? "";
+        const env = (envDetails.value ?? "production").toLowerCase();
         const base =
           env === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";
 
         const presence = {
-          MPESA_ENV: env,
-          MPESA_CONSUMER_KEY: ck ? `set (len ${ck.length}, prefix ${ck.slice(0, 4)})` : "MISSING",
-          MPESA_CONSUMER_SECRET: cs ? `set (len ${cs.length})` : "MISSING",
-          MPESA_SHORTCODE: sc || "MISSING",
-          MPESA_PASSKEY: pk ? `set (len ${pk.length})` : "MISSING",
+          MPESA_ENV: {
+            status: envDetails.value ? "set" : "defaulted",
+            source: envDetails.value ? envDetails.source : "default",
+            effectiveValue: env,
+            normalizedLength: envDetails.normalizedLength,
+            hadOuterWhitespace: envDetails.hadOuterWhitespace,
+            hadWrappingQuotes: envDetails.hadWrappingQuotes,
+          },
+          MPESA_CONSUMER_KEY: summarizeSecret(consumerKeyDetails, { preview: true }),
+          MPESA_CONSUMER_SECRET: summarizeSecret(consumerSecretDetails),
+          MPESA_SHORTCODE: {
+            ...summarizeSecret(shortcodeDetails),
+            ...(sc ? { effectiveValue: sc } : {}),
+          },
+          MPESA_PASSKEY: summarizeSecret(passkeyDetails),
           base,
+          precedence: "runtime_vault overrides hosting env",
           runtime_vault: adminEnv.ok
             ? "available"
             : `unavailable (missing ${adminEnv.missing.join(", ")})`,
@@ -70,7 +110,7 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
               response: body,
               hint:
                 res.status === 400
-                  ? "Likely cause: keys are for the WRONG environment. If these are sandbox keys, set MPESA_ENV=sandbox; if production, ensure they are activated."
+                  ? "Likely causes: the Daraja consumer key/secret do not match MPESA_ENV, a saved /secret-keys value is overriding Vercel, or the Vercel values were pasted with wrapping quotes/whitespace."
                   : undefined,
             });
           }
