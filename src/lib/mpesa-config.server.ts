@@ -208,6 +208,25 @@ function variantFingerprint(config: MpesaConfigVariant) {
   });
 }
 
+export function getMpesaConfigCandidateOrder(
+  variants: Awaited<ReturnType<typeof loadMpesaConfigVariants>>,
+) {
+  const orderedCandidates: MpesaConfigVariant[] = [variants.effective];
+  if (variants.resolutionMode === "runtime-first" || variants.resolutionMode === "env-first") {
+    for (const variant of [variants.hostingEnv, variants.runtimeVault]) {
+      if (
+        variant.completeness.oauthReady &&
+        !orderedCandidates.some(
+          (existing) => variantFingerprint(existing) === variantFingerprint(variant),
+        )
+      ) {
+        orderedCandidates.push(variant);
+      }
+    }
+  }
+  return orderedCandidates;
+}
+
 async function fetchDarajaToken(
   config: MpesaConfigVariant,
 ): Promise<DarajaTokenAttempt & { accessToken?: string; expiresIn?: unknown }> {
@@ -276,6 +295,10 @@ async function fetchDarajaToken(
   }
 }
 
+export async function getDarajaAccessTokenForConfig(config: MpesaConfigVariant) {
+  return fetchDarajaToken(config);
+}
+
 export async function loadMpesaConfigVariants() {
   const [
     envDetails,
@@ -333,19 +356,7 @@ export async function loadMpesaConfigVariants() {
 
 export async function getDarajaAccessToken() {
   const variants = await loadMpesaConfigVariants();
-  const orderedCandidates: MpesaConfigVariant[] = [variants.effective];
-  if (variants.resolutionMode === "runtime-first" || variants.resolutionMode === "env-first") {
-    for (const variant of [variants.hostingEnv, variants.runtimeVault]) {
-      if (
-        variant.completeness.oauthReady &&
-        !orderedCandidates.some(
-          (existing) => variantFingerprint(existing) === variantFingerprint(variant),
-        )
-      ) {
-        orderedCandidates.push(variant);
-      }
-    }
-  }
+  const orderedCandidates = getMpesaConfigCandidateOrder(variants);
 
   const attempts: DarajaTokenAttempt[] = [];
   for (const variant of orderedCandidates) {

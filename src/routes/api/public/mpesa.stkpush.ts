@@ -6,7 +6,10 @@ import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
 import { formatMembershipNumber } from "@/lib/membership";
 import {
   fetchMpesaDaraja,
-  getDarajaAccessToken,
+  getDarajaAccessTokenForConfig,
+  getMpesaConfigCandidateOrder,
+  loadMpesaConfigVariants,
+  type MpesaConfigVariant,
   MpesaRequestTimeoutError,
 } from "@/lib/mpesa-config.server";
 import { toComparableKenyanPhone } from "@/lib/utils";
@@ -44,6 +47,56 @@ function callbackUrlFromConfig(configuredUrl: string | undefined, requestUrl: st
   const configured = String(configuredUrl ?? "").trim();
   if (configured) return configured;
   return `${new URL(requestUrl).origin}/api/public/mpesa/confirmation`;
+}
+
+async function sendDarajaStkPush(args: {
+  config: MpesaConfigVariant;
+  accessToken: string;
+  requestUrl: string;
+  msisdn: string;
+  amount: number;
+  accountRef: string;
+  description: string;
+}) {
+  const shortcode = args.config.shortcode ?? "";
+  const passkey = args.config.passkey ?? "";
+  const timestamp = darajaTimestamp();
+  const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
+  const callback = callbackUrlFromConfig(args.config.callbackUrl, args.requestUrl);
+  const base =
+    args.config.normalizedEnv === "sandbox"
+      ? "https://sandbox.safaricom.co.ke"
+      : "https://api.safaricom.co.ke";
+
+  const response = await fetchMpesaDaraja(`${base}/mpesa/stkpush/v1/processrequest`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${args.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      BusinessShortCode: shortcode,
+      Password: password,
+      Timestamp: timestamp,
+      TransactionType: "CustomerPayBillOnline",
+      Amount: args.amount,
+      PartyA: args.msisdn,
+      PartyB: shortcode,
+      PhoneNumber: args.msisdn,
+      CallBackURL: callback,
+      AccountReference: args.accountRef,
+      TransactionDesc: args.description,
+    }),
+  });
+
+  const body = asRecord(await response.json().catch(() => ({})));
+  return {
+    ok: response.ok,
+    status: response.status,
+    body,
+    callback,
+    timestampZone: "Africa/Nairobi",
+  };
 }
 
 /** Daraja STK Push trigger.
@@ -103,17 +156,14 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
             }
           }
 
-          const tokenResult = await getDarajaAccessToken();
           const adminEnv = getSupabaseAdminEnvStatus();
-          const activeConfig = tokenResult.ok ? tokenResult.config : tokenResult.variants.effective;
-          const shortcode = activeConfig.shortcode;
-          const passkey = activeConfig.passkey;
-          const base =
-            activeConfig.normalizedEnv === "sandbox"
-              ? "https://sandbox.safaricom.co.ke"
-              : "https://api.safaricom.co.ke";
+          const variants = await loadMpesaConfigVariants();
+          const candidates = getMpesaConfigCandidateOrder(variants);
+          const stkReadyCandidates = candidates.filter(
+            (candidate) => candidate.completeness.stkReady,
+          );
 
-          if (!shortcode || !passkey || !activeConfig.completeness.oauthReady) {
+          if (stkReadyCandidates.length === 0) {
             return Response.json(
               {
                 ok: false,
@@ -122,24 +172,142 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                   ? "Set MPESA_ENV, MPESA_SHORTCODE, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_PASSKEY in the secret vault or hosting environment."
                   : `The runtime secret table cannot be read because ${adminEnv.missing.join(", ")} is missing on the server. Add the missing server env and restart/redeploy, or place the MPESA_* values directly in the hosting environment.`,
                 details: {
-                  resolutionMode: tokenResult.variants.resolutionMode,
-                  activeSource: activeConfig.sources,
+                  resolutionMode: variants.resolutionMode,
+                  candidates: candidates.map((candidate) => ({
+                    label: candidate.label,
+                    env: candidate.normalizedEnv,
+                    stkReady: candidate.completeness.stkReady,
+                    sources: candidate.sources,
+                  })),
                 },
               },
               { status: 503 },
             );
           }
 
-          if (!tokenResult.ok) {
-            const lastAttempt = tokenResult.attempts[tokenResult.attempts.length - 1];
-            console.error("Daraja oauth failed", tokenResult.status, tokenResult.attempts);
-            if (lastAttempt?.timeoutMs) {
+          const authAttempts: unknown[] = [];
+          const stkAttempts: unknown[] = [];
+
+          for (const config of stkReadyCandidates) {
+            const tokenAttempt = await getDarajaAccessTokenForConfig(config);
+            authAttempts.push(tokenAttempt);
+
+            if (!tokenAttempt.ok || !tokenAttempt.accessToken) {
+              if (tokenAttempt.timeoutMs) {
+                console.error("Daraja oauth timed out", tokenAttempt);
+                return Response.json(
+                  {
+                    ok: false,
+                    error: "M-Pesa authentication timed out before Daraja responded.",
+                    hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
+                    attempts: authAttempts,
+                  },
+                  { status: 504 },
+                );
+              }
+              continue;
+            }
+
+            let stkResult: Awaited<ReturnType<typeof sendDarajaStkPush>>;
+            try {
+              stkResult = await sendDarajaStkPush({
+                config,
+                accessToken: tokenAttempt.accessToken,
+                requestUrl: request.url,
+                msisdn,
+                amount,
+                accountRef,
+                description,
+              });
+            } catch (error) {
+              if (error instanceof MpesaRequestTimeoutError) {
+                return Response.json(
+                  {
+                    ok: false,
+                    error: "M-Pesa STK request timed out before Daraja responded.",
+                    hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
+                    timeoutMs: error.timeoutMs,
+                    attempts: stkAttempts,
+                  },
+                  { status: 504 },
+                );
+              }
+              throw error;
+            }
+
+            if (stkResult.ok) {
+              try {
+                await recordMpesaStkPushRequestEvent({
+                  raw: {
+                    callback: stkResult.callback,
+                    accountRef,
+                    amount,
+                    phone: msisdn,
+                    description,
+                    response: stkResult.body,
+                    configLabel: config.label,
+                    configSources: config.sources,
+                  },
+                  account: accountRef.toUpperCase(),
+                  amount,
+                  phone: msisdn,
+                  checkoutRequestId:
+                    String(stkResult.body.CheckoutRequestID ?? "").trim() || undefined,
+                  merchantRequestId:
+                    String(stkResult.body.MerchantRequestID ?? "").trim() || undefined,
+                });
+              } catch (trackingError) {
+                console.error("stkpush request tracking error", trackingError);
+              }
+
+              return Response.json({
+                ok: true,
+                ...stkResult.body,
+                configLabel: config.label,
+              });
+            }
+
+            const errorCode = String(stkResult.body.errorCode ?? "");
+            const errorMessage = String(stkResult.body.errorMessage ?? "STK push failed");
+            const requestId = String(stkResult.body.requestId ?? "");
+            const attempt = {
+              label: config.label,
+              env: config.normalizedEnv,
+              status: stkResult.status,
+              errorCode,
+              errorMessage,
+              requestId,
+              shortcode: config.shortcode,
+              sources: config.sources,
+              callback: stkResult.callback,
+              timestampZone: stkResult.timestampZone,
+              body: stkResult.body,
+            };
+            stkAttempts.push(attempt);
+            console.error("Daraja stkpush failed", attempt);
+
+            if (errorCode === "404.001.03") {
+              continue;
+            }
+
+            return Response.json(
+              { ok: false, error: errorMessage, details: stkResult.body, attempts: stkAttempts },
+              { status: 502 },
+            );
+          }
+
+          const successfulAuth = authAttempts.some((attempt) => asRecord(attempt).ok === true);
+
+          if (!successfulAuth) {
+            console.error("Daraja oauth failed for all M-Pesa candidates", authAttempts);
+            const lastAttempt = asRecord(authAttempts[authAttempts.length - 1]);
+            if (lastAttempt.timeoutMs) {
               return Response.json(
                 {
                   ok: false,
                   error: "M-Pesa authentication timed out before Daraja responded.",
                   hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
-                  attempts: tokenResult.attempts,
+                  attempts: authAttempts,
                 },
                 { status: 504 },
               );
@@ -147,119 +315,27 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
             return Response.json(
               {
                 ok: false,
-                error: `M-Pesa authentication failed (${tokenResult.status ?? "unknown"}).`,
+                error: `M-Pesa authentication failed (${lastAttempt.status ?? "unknown"}).`,
                 hint:
-                  tokenResult.status === 400 || tokenResult.status === 401
+                  lastAttempt.status === 400 || lastAttempt.status === 401
                     ? "Check that the consumer key, consumer secret, and MPESA_ENV match the same Daraja environment. If Vercel has the right values but /secret-keys is stale, set SAUTI_MPESA_SECRET_SOURCE=env-first or delete the stale runtime MPESA_* keys."
                     : "Check the configured Daraja credentials and try again.",
-                daraja: lastAttempt?.body ?? tokenResult.error,
-                attempts: tokenResult.attempts,
+                daraja: lastAttempt.body ?? lastAttempt.error,
+                attempts: authAttempts,
               },
               { status: 502 },
             );
           }
 
-          const accessToken = tokenResult.accessToken;
-
-          const timestamp = darajaTimestamp();
-          const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
-          const callback = callbackUrlFromConfig(activeConfig.callbackUrl, request.url);
-
-          let stkRes: Response;
-          try {
-            stkRes = await fetchMpesaDaraja(`${base}/mpesa/stkpush/v1/processrequest`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                BusinessShortCode: shortcode,
-                Password: password,
-                Timestamp: timestamp,
-                TransactionType: "CustomerPayBillOnline",
-                Amount: amount,
-                PartyA: msisdn,
-                PartyB: shortcode,
-                PhoneNumber: msisdn,
-                CallBackURL: callback,
-                AccountReference: accountRef,
-                TransactionDesc: description,
-              }),
-            });
-          } catch (error) {
-            if (error instanceof MpesaRequestTimeoutError) {
-              return Response.json(
-                {
-                  ok: false,
-                  error: "M-Pesa STK request timed out before Daraja responded.",
-                  hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
-                  timeoutMs: error.timeoutMs,
-                },
-                { status: 504 },
-              );
-            }
-            throw error;
-          }
-
-          const stkJson = asRecord(await stkRes.json().catch(() => ({})));
-          if (!stkRes.ok) {
-            console.error("Daraja stkpush failed", stkRes.status, stkJson);
-
-            const errorCode = String(stkJson.errorCode ?? "");
-            const errorMessage = String(stkJson.errorMessage ?? "STK push failed");
-            const requestId = String(stkJson.requestId ?? "");
-
-            if (errorCode === "404.001.03") {
-              return Response.json(
-                {
-                  ok: false,
-                  error: "Daraja rejected the configured M-Pesa app/token for STK Push.",
-                  hint: "If these production values work on the old site, this deployment is probably using different effective MPESA_* values from /secret-keys or the hosting env. Check /secret-keys, then set SAUTI_MPESA_SECRET_SOURCE=env-first or delete stale runtime MPESA_* keys.",
-                  details: {
-                    ...stkJson,
-                    requestId,
-                    errorCode,
-                    errorMessage,
-                    activeVariant: activeConfig.label,
-                    env: activeConfig.normalizedEnv,
-                    shortcode,
-                    sources: activeConfig.sources,
-                    callback,
-                    timestampZone: "Africa/Nairobi",
-                  },
-                },
-                { status: 502 },
-              );
-            }
-
-            return Response.json(
-              { ok: false, error: errorMessage, details: stkJson },
-              { status: 502 },
-            );
-          }
-
-          try {
-            await recordMpesaStkPushRequestEvent({
-              raw: {
-                callback,
-                accountRef,
-                amount,
-                phone: msisdn,
-                description,
-                response: stkJson,
-              },
-              account: accountRef.toUpperCase(),
-              amount,
-              phone: msisdn,
-              checkoutRequestId: String(stkJson.CheckoutRequestID ?? "").trim() || undefined,
-              merchantRequestId: String(stkJson.MerchantRequestID ?? "").trim() || undefined,
-            });
-          } catch (trackingError) {
-            console.error("stkpush request tracking error", trackingError);
-          }
-
-          return Response.json({ ok: true, ...stkJson });
+          return Response.json(
+            {
+              ok: false,
+              error: "Daraja rejected every configured M-Pesa app/token for STK Push.",
+              hint: "The server tried each configured M-Pesa source. Put the exact old-site production values in hosting env, set SAUTI_MPESA_SECRET_SOURCE=env-first, redeploy, and remove stale MPESA_* values from /secret-keys.",
+              attempts: stkAttempts,
+            },
+            { status: 502 },
+          );
         } catch (error) {
           console.error("stkpush handler error", error);
           return Response.json(
