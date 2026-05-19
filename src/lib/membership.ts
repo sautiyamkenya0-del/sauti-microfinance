@@ -44,7 +44,7 @@ export function isMembershipAccountReference(value: string | number | null | und
   const raw = String(value ?? "")
     .trim()
     .toUpperCase();
-  return /^SBC\d{3,}K?$/.test(raw) || /^M\d+$/.test(raw);
+  return /^SBC\d{3,}K?$/.test(raw) || /^M\d+$/.test(raw) || /^\d+$/.test(raw);
 }
 
 export function legacyMemberIdFromSequence(value: string | number | null | undefined) {

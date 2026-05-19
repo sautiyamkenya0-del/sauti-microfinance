@@ -2,8 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import {
   applyMpesaPaymentToDatabase,
+  findMemberByMembershipInput,
   recordMpesaConfirmationEvent,
 } from "@/lib/app-data.functions";
+import { sendMpesaReceiptSms } from "@/lib/mpesa.server";
 import { getSecret } from "@/lib/runtime-secrets.server";
 
 const NO_STORE_HEADERS = {
@@ -31,11 +33,14 @@ export const Route = createFileRoute("/api/public/mpesa/confirmation")({
           }
 
           const mpesaRef = String(body.TransID || "").trim() || undefined;
-          const account = String(body.BillRefNumber || "").toUpperCase();
+          const account = String(body.BillRefNumber || "")
+            .trim()
+            .toUpperCase();
           const amount = Number(body.TransAmount) || 0;
           const payerName = [body.FirstName, body.MiddleName, body.LastName]
             .filter(Boolean)
             .join(" ");
+          const payerPhone = body.MSISDN ? String(body.MSISDN) : undefined;
 
           const event = await recordMpesaConfirmationEvent({
             raw: body,
@@ -43,12 +48,13 @@ export const Route = createFileRoute("/api/public/mpesa/confirmation")({
             amount,
             mpesaRef,
             payerName,
-            phone: body.MSISDN ? String(body.MSISDN) : undefined,
+            phone: payerPhone,
           });
 
+          let processedResult: Awaited<ReturnType<typeof applyMpesaPaymentToDatabase>> | undefined;
           if (!event.processed) {
             try {
-              await applyMpesaPaymentToDatabase({
+              processedResult = await applyMpesaPaymentToDatabase({
                 eventId: event.id,
                 account,
                 amount,
@@ -57,6 +63,21 @@ export const Route = createFileRoute("/api/public/mpesa/confirmation")({
               });
             } catch (processingError) {
               console.error("mpesa confirmation processing error", processingError);
+            }
+          }
+
+          if (processedResult?.matched) {
+            try {
+              const member = await findMemberByMembershipInput(account);
+              await sendMpesaReceiptSms({
+                member,
+                amount,
+                mpesaRef,
+                account,
+                payerPhone,
+              });
+            } catch (smsError) {
+              console.error("mpesa receipt sms error", smsError);
             }
           }
 

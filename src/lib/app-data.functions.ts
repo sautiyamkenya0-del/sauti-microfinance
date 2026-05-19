@@ -204,7 +204,7 @@ function memberNeedsStickerRow(member: {
   return !!member.fee_has_shop;
 }
 
-async function findMemberByMembershipInput(account: string) {
+export async function findMemberByMembershipInput(account: string) {
   const candidates = membershipIdCandidates(account);
   if (!candidates.length) return null;
 
@@ -452,6 +452,26 @@ export async function recordMpesaConfirmationEvent(args: {
     .single();
   if (error) throw new Error(error.message);
   return data;
+}
+
+export async function recordMpesaValidationEvent(args: {
+  raw: Record<string, unknown>;
+  account: string;
+  amount?: number;
+  payerName?: string;
+  phone?: string;
+}) {
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const { error } = await supabaseAdmin.from("mpesa_events").insert({
+    kind: "validation",
+    account: args.account || null,
+    amount: Number.isFinite(args.amount) ? args.amount : null,
+    payer_name: args.payerName ?? null,
+    phone: args.phone ?? null,
+    raw: args.raw as any,
+    processed: true,
+  });
+  if (error) throw new Error(error.message);
 }
 
 export async function applyMpesaPaymentToDatabase(args: {

@@ -92,6 +92,37 @@ const SUGGESTED: Suggested[] = [
     help: "STK Push passkey for the shortcode.",
   },
   {
+    key: "MPESA_SMS_URL",
+    group: "M-Pesa",
+    label: "MPESA_SMS_URL (optional)",
+    help: "HTTP endpoint used to send member receipt SMS after C2B confirmation.",
+  },
+  {
+    key: "MPESA_SMS_USERNAME",
+    group: "M-Pesa",
+    label: "MPESA_SMS_USERNAME (optional)",
+    help: "SMS gateway username for post-payment receipt messages.",
+  },
+  {
+    key: "MPESA_SMS_PASSWORD",
+    group: "M-Pesa",
+    secret: true,
+    label: "MPESA_SMS_PASSWORD (optional)",
+    help: "SMS gateway password for post-payment receipt messages.",
+  },
+  {
+    key: "MPESA_SMS_SOURCE",
+    group: "M-Pesa",
+    label: "MPESA_SMS_SOURCE (optional)",
+    help: "Sender ID/source shown on the outgoing receipt SMS.",
+  },
+  {
+    key: "MPESA_SMS_FALLBACK_PHONE",
+    group: "M-Pesa",
+    label: "MPESA_SMS_FALLBACK_PHONE (optional)",
+    help: "Fallback 2547XXXXXXXX destination if the matched member has no phone.",
+  },
+  {
     key: "MPESA_INITIATOR_NAME",
     group: "M-Pesa",
     label: "MPESA_INITIATOR_NAME",
