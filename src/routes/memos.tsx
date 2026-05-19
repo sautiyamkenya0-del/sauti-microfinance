@@ -5,7 +5,7 @@ import { CommsTabs } from "./staff";
 import { useStore } from "@/lib/store";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { StickyNote, Trash2, Plus } from "lucide-react";
+import { Download, Plus, StickyNote, Trash2 } from "lucide-react";
 import { useStaffMemos } from "@/lib/memos-board";
 import { useReadIds } from "@/lib/read-state";
 
@@ -43,6 +43,17 @@ function MemosPage() {
     setTitle("");
     setBody("");
     toast.success("Memo posted");
+  }
+
+  function downloadMemo(memo: (typeof memos)[number]) {
+    const payload = JSON.stringify(memo, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${memo.date}-${memo.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "memo"}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -92,12 +103,21 @@ function MemosPage() {
                       {m.date} · by {m.by}
                     </div>
                   </div>
-                  <button
-                    onClick={() => void removeMemo(m.id)}
-                    className="text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => downloadMemo(m)}
+                      className="text-muted-foreground hover:text-foreground"
+                      title="Download memo"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => void removeMemo(m.id)}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm mt-2 whitespace-pre-wrap">{m.body}</p>
               </div>

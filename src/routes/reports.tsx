@@ -1,8 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
 import { fmtKES, isMemberCategory, loanSummary, sbcDeductions, useStore } from "@/lib/store";
+import { createReportSnapshotRecord } from "@/lib/app-data.functions";
+import { type ReportSnapshot } from "@/lib/legacy-finance";
+import { listReportSnapshots } from "@/lib/runtime-data.functions";
 import {
   Bar,
   BarChart,
@@ -14,7 +18,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Building2, Scale, TrendingUp, Wallet } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Building2, Download, RefreshCw, Save, Scale, TrendingUp, Wallet } from "lucide-react";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/reports")({
   head: () => ({ meta: [{ title: "Reports - Sauti Microfinance" }] }),
@@ -30,6 +36,8 @@ type BookRow = {
 };
 
 function ReportsPage() {
+  const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
+  const loadSnapshots = useServerFn(listReportSnapshots);
   const {
     loans,
     members,
@@ -41,6 +49,20 @@ function ReportsPage() {
     roundOff,
     staff,
   } = useStore();
+  const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+
+  const refreshSnapshots = useCallback(async () => {
+    try {
+      setSnapshots(await loadSnapshots());
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load archived report snapshots.");
+    }
+  }, [loadSnapshots]);
+
+  useEffect(() => {
+    refreshSnapshots().catch(() => {});
+  }, [refreshSnapshots]);
 
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const disbursedLoans = loans.filter(
@@ -211,6 +233,23 @@ function ReportsPage() {
     pettyCash,
   });
   const officerBreakdown = summarizeOfficerPerformance(loans, staff);
+  const transactionSummary = [
+    "deposit",
+    "withdrawal",
+    "loan_disbursement",
+    "loan_repayment",
+    "share_purchase",
+    "petty_cash",
+    "investor_contribution",
+    "fee_payment",
+  ].map((type) => {
+    const rows = transactions.filter((transaction) => transaction.type === type);
+    return {
+      type,
+      count: rows.length,
+      total: rows.reduce((sum, transaction) => sum + transaction.amount, 0),
+    };
+  });
 
   return (
     <>
@@ -334,6 +373,115 @@ function ReportsPage() {
           </Section>
         </div>
 
+        <Section
+          title="Archive snapshots"
+          action={
+            <div className="flex gap-2">
+              <button
+                onClick={() => void refreshSnapshots()}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Refresh
+              </button>
+              <button
+                disabled={savingSnapshot}
+                onClick={async () => {
+                  try {
+                    setSavingSnapshot(true);
+                    const window = snapshotWindow();
+                    await saveReportSnapshot({
+                      data: {
+                        title: `Reports snapshot ${new Date().toISOString().slice(0, 10)}`,
+                        periodStart: window.start,
+                        periodEnd: window.end,
+                        filters: { source: "reports-page" },
+                        summary: {
+                          totalRevenue,
+                          netOperating,
+                          portfolio,
+                          expenses,
+                          memberSavings,
+                          shareCap,
+                          investorCap,
+                          liabilities,
+                          companyBookRows,
+                          feeBookRows,
+                          penaltyBookRows,
+                          transactionSummary,
+                        },
+                        chartData: {
+                          monthly,
+                          officerBreakdown,
+                        },
+                      },
+                    });
+                    await refreshSnapshots();
+                    toast.success("Report snapshot archived");
+                  } catch (error: any) {
+                    toast.error(error?.message ?? "Failed to archive the report snapshot.");
+                  } finally {
+                    setSavingSnapshot(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60"
+              >
+                <Save className="h-3.5 w-3.5" />
+                {savingSnapshot ? "Saving..." : "Archive current charts"}
+              </button>
+            </div>
+          }
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Snapshot</th>
+                  <th className="px-5 py-3 text-left">Period</th>
+                  <th className="px-5 py-3 text-left">Created</th>
+                  <th className="px-5 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {snapshots.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-5 py-8 text-center text-sm text-muted-foreground">
+                      No archived report snapshots yet.
+                    </td>
+                  </tr>
+                )}
+                {snapshots.map((snapshot) => (
+                  <tr key={snapshot.id}>
+                    <td className="px-5 py-3">
+                      <div className="font-medium">{snapshot.title}</div>
+                      <div className="text-xs text-muted-foreground">{snapshot.reportKey}</div>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {snapshot.periodStart} {"->"} {snapshot.periodEnd}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {snapshot.createdAt}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => downloadReportSnapshot(snapshot)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Download JSON
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+            Snapshots store compact report totals plus chart data, which keeps Supabase egress lower
+            than archiving rendered images while still giving you a durable download years later.
+          </div>
+        </Section>
+
         <Section title="Balance Sheet Snapshot">
           <div className="grid divide-border gap-0 md:grid-cols-2 md:divide-x md:divide-y-0">
             <div className="p-5">
@@ -367,33 +515,41 @@ function ReportsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {[
-                "deposit",
-                "withdrawal",
-                "loan_disbursement",
-                "loan_repayment",
-                "share_purchase",
-                "petty_cash",
-                "investor_contribution",
-                "fee_payment",
-              ].map((type) => {
-                const rows = transactions.filter((transaction) => transaction.type === type);
-                return (
-                  <tr key={type}>
-                    <td className="px-5 py-3 capitalize">{type.replace(/_/g, " ")}</td>
-                    <td className="px-5 py-3 text-right">{rows.length}</td>
-                    <td className="px-5 py-3 text-right font-semibold">
-                      {fmtKES(rows.reduce((sum, transaction) => sum + transaction.amount, 0))}
-                    </td>
-                  </tr>
-                );
-              })}
+              {transactionSummary.map((row) => (
+                <tr key={row.type}>
+                  <td className="px-5 py-3 capitalize">{row.type.replace(/_/g, " ")}</td>
+                  <td className="px-5 py-3 text-right">{row.count}</td>
+                  <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.total)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </Section>
       </main>
     </>
   );
+}
+
+function snapshotWindow() {
+  const end = new Date().toISOString().slice(0, 10);
+  const start = new Date();
+  start.setDate(1);
+  start.setMonth(start.getMonth() - 5);
+  return {
+    start: start.toISOString().slice(0, 10),
+    end,
+  };
+}
+
+function downloadReportSnapshot(snapshot: ReportSnapshot) {
+  const payload = JSON.stringify(snapshot, null, 2);
+  const blob = new Blob([payload], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${snapshot.reportKey}-${snapshot.periodStart}-to-${snapshot.periodEnd}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function BookTable({

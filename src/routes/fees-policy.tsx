@@ -27,9 +27,18 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
 import {
   deleteFeePolicyRecord,
+  deleteMemberCarryoverLoanRecord,
+  upsertMemberCarryoverLoanRecord,
+  upsertMemberCarryoverProfileRecord,
   upsertFeePolicyRecord,
   upsertPolicySettingRecord,
+  waivePenaltyRecord,
 } from "@/lib/app-data.functions";
+import {
+  type LegacyCarryoverLoan,
+  type LegacyCarryoverProfile,
+  summarizeLegacyCarryoverLoan,
+} from "@/lib/legacy-finance";
 import {
   DEFAULT_FEE_POLICIES,
   isFeeActive,
@@ -54,15 +63,10 @@ import {
   type WaterfallRule,
   type WaterfallScenario,
 } from "@/lib/policy-settings";
+import { loadMemberCarryover } from "@/lib/runtime-data.functions";
 import { fmtKES, loanSummary, useStore } from "@/lib/store";
 
-type PolicyCenterTab =
-  | "fees"
-  | "percentages"
-  | "interest"
-  | "waterfall"
-  | "clients"
-  | "targets";
+type PolicyCenterTab = "fees" | "percentages" | "interest" | "waterfall" | "clients" | "targets";
 
 type TargetDraft = {
   id?: string;
@@ -102,6 +106,11 @@ function PolicyCenterPage() {
   const saveFee = useServerFn(upsertFeePolicyRecord);
   const deleteFee = useServerFn(deleteFeePolicyRecord);
   const savePolicySetting = useServerFn(upsertPolicySettingRecord);
+  const loadCarryover = useServerFn(loadMemberCarryover);
+  const saveCarryoverProfile = useServerFn(upsertMemberCarryoverProfileRecord);
+  const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
+  const deleteCarryoverLoan = useServerFn(deleteMemberCarryoverLoanRecord);
+  const waivePenalty = useServerFn(waivePenaltyRecord);
   const { rows: targetRows, upsertTarget, removeTarget } = usePerformanceTargetActions();
 
   const [tab, setTab] = useState<PolicyCenterTab>("fees");
@@ -118,6 +127,16 @@ function PolicyCenterPage() {
   );
   const [clientId, setClientId] = useState<string>(memberAccounts[0]?.id ?? "");
   const [targetDraft, setTargetDraft] = useState<TargetDraft>(() => blankTarget());
+  const [carryoverLoading, setCarryoverLoading] = useState(false);
+  const [carryoverProfile, setCarryoverProfile] = useState<LegacyCarryoverProfile>(() =>
+    blankCarryoverProfile(""),
+  );
+  const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [carryoverLoanDraft, setCarryoverLoanDraft] = useState<LegacyCarryoverLoan>(() =>
+    blankCarryoverLoan("", 1),
+  );
+  const [waiverNote, setWaiverNote] = useState("");
+  const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setPercentagesDraft(policySettings.percentages);
@@ -129,7 +148,36 @@ function PolicyCenterPage() {
     if (!clientId && memberAccounts[0]?.id) setClientId(memberAccounts[0].id);
   }, [clientId, memberAccounts]);
 
-  if (currentUser.role !== "director") return <Navigate to="/" />;
+  useEffect(() => {
+    if (!clientId) {
+      setCarryoverProfile(blankCarryoverProfile(""));
+      setCarryoverLoans([]);
+      setCarryoverLoanDraft(blankCarryoverLoan("", 1));
+      return;
+    }
+
+    let active = true;
+    setCarryoverLoading(true);
+    loadCarryover({ data: { memberId: clientId } })
+      .then((result) => {
+        if (!active) return;
+        const profile = result.profile ?? blankCarryoverProfile(clientId);
+        setCarryoverProfile(profile);
+        setCarryoverLoans(result.loans);
+        setCarryoverLoanDraft(blankCarryoverLoan(clientId, result.loans.length + 1));
+      })
+      .catch((error: any) => {
+        if (!active) return;
+        toast.error(error?.message ?? "Failed to load legacy carryover details.");
+      })
+      .finally(() => {
+        if (active) setCarryoverLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [clientId, loadCarryover]);
 
   const selectedClient = memberAccounts.find((member) => member.id === clientId) ?? null;
   const selectedClientLoans = loans.filter((loan) => loan.memberId === clientId);
@@ -152,14 +200,30 @@ function PolicyCenterPage() {
     loan,
     summary: loanSummary(loan),
   }));
+  const carryoverLoanSummaries = carryoverLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
     0,
   );
+  const carryoverBorrowed = carryoverLoans.reduce((sum, loan) => sum + loan.principal, 0);
   const totalInterest = clientLoansSummary.reduce((sum, row) => sum + row.summary.interest, 0);
+  const carryoverInterest = carryoverLoanSummaries.reduce(
+    (sum, row) => sum + row.summary.interest,
+    0,
+  );
   const totalBalance = clientLoansSummary.reduce((sum, row) => sum + row.summary.balance, 0);
+  const carryoverBalance = carryoverLoanSummaries.reduce(
+    (sum, row) => sum + row.summary.totalOwedNow,
+    0,
+  );
   const penaltiesPaid = selectedClientPenalties
     .filter((penalty) => penalty.status === "paid")
+    .reduce((sum, penalty) => sum + penalty.amount, 0);
+  const penaltiesWaived = selectedClientPenalties
+    .filter((penalty) => penalty.status === "waived")
     .reduce((sum, penalty) => sum + penalty.amount, 0);
   const penaltiesOutstanding = selectedClientPenalties
     .filter((penalty) => penalty.status === "outstanding")
@@ -175,6 +239,8 @@ function PolicyCenterPage() {
       ].includes(transaction.type),
     )
     .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const combinedCollections = totalCollections + carryoverProfile.totalCollected;
+  const combinedOutstandingBalance = totalBalance + carryoverBalance;
   const clientRating = selectedClient
     ? buildClientRating(selectedClient, selectedClientLoans, selectedClientPenalties)
     : null;
@@ -189,6 +255,8 @@ function PolicyCenterPage() {
       }),
     [loans, members, targetRows, transactions],
   );
+
+  if (currentUser.role !== "director") return <Navigate to="/" />;
 
   async function saveFeeDraft() {
     if (!editingFee) return;
@@ -211,6 +279,50 @@ function PolicyCenterPage() {
     toast.success(message);
   }
 
+  async function refreshCarryoverDetails(nextMemberId: string) {
+    const result = await loadCarryover({ data: { memberId: nextMemberId } });
+    setCarryoverProfile(result.profile ?? blankCarryoverProfile(nextMemberId));
+    setCarryoverLoans(result.loans);
+    setCarryoverLoanDraft(blankCarryoverLoan(nextMemberId, result.loans.length + 1));
+  }
+
+  async function saveCarryoverProfileDraft() {
+    if (!selectedClient) return;
+    await saveCarryoverProfile({ data: carryoverProfile });
+    await reloadAppData();
+    await refreshCarryoverDetails(selectedClient.id);
+    toast.success("Carryover balances saved");
+  }
+
+  async function saveCarryoverLoanDraft() {
+    if (!selectedClient) return;
+    await saveCarryoverLoan({ data: carryoverLoanDraft });
+    await refreshCarryoverDetails(selectedClient.id);
+    toast.success(carryoverLoanDraft.id ? "Carryover loan updated" : "Carryover loan saved");
+  }
+
+  function beginEditCarryoverLoan(loan: LegacyCarryoverLoan) {
+    setCarryoverLoanDraft(loan);
+  }
+
+  function clearCarryoverLoanDraft(memberId: string) {
+    setCarryoverLoanDraft(blankCarryoverLoan(memberId, carryoverLoans.length + 1));
+  }
+
+  async function applyPenaltyWaiver(penaltyId: string, fullAmount: number) {
+    const waiveAmount = waiverAmounts[penaltyId] ?? fullAmount;
+    await waivePenalty({
+      data: {
+        penaltyId,
+        amount: waiveAmount,
+        note: waiverNote || undefined,
+      },
+    });
+    await reloadAppData();
+    if (selectedClient) await refreshCarryoverDetails(selectedClient.id);
+    toast.success("Penalty waiver saved");
+  }
+
   const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
   const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
   const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
@@ -225,7 +337,11 @@ function PolicyCenterPage() {
         <SectionTabs section="admin" />
 
         <div className="grid gap-4 lg:grid-cols-4">
-          <StatCard label="Active Fees" value={activeFees.length} icon={<Wallet className="h-5 w-5" />} />
+          <StatCard
+            label="Active Fees"
+            value={activeFees.length}
+            icon={<Wallet className="h-5 w-5" />}
+          />
           <StatCard
             label="Penalty Rate"
             value={`${policySettings.percentages.penaltyDailyPct}%`}
@@ -355,7 +471,9 @@ function PolicyCenterPage() {
             </Section>
 
             {editingFee && (
-              <Section title={creatingFee ? "New fee" : `Edit - ${editingFee.label || editingFee.key}`}>
+              <Section
+                title={creatingFee ? "New fee" : `Edit - ${editingFee.label || editingFee.key}`}
+              >
                 <div className="grid max-w-3xl gap-4 p-5 sm:grid-cols-2">
                   <Field label="Label">
                     <input
@@ -548,13 +666,16 @@ function PolicyCenterPage() {
                 label="Round-off Step (KES)"
                 value={percentagesDraft.roundOffStep}
                 onChange={(value) =>
-                  setPercentagesDraft((current) => ({ ...current, roundOffStep: Math.max(1, value) }))
+                  setPercentagesDraft((current) => ({
+                    ...current,
+                    roundOffStep: Math.max(1, value),
+                  }))
                 }
               />
             </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              These values now drive loan deductions, penalty previews, first-upfront prompts, and the
-              M-Pesa round-off behavior across the app.
+              These values now drive loan deductions, penalty previews, first-upfront prompts, and
+              the M-Pesa round-off behavior across the app.
             </div>
           </Section>
         )}
@@ -565,7 +686,11 @@ function PolicyCenterPage() {
             action={
               <button
                 onClick={() =>
-                  void persistPolicySettings("interest_rates", interestDraft, "Interest rates updated")
+                  void persistPolicySettings(
+                    "interest_rates",
+                    interestDraft,
+                    "Interest rates updated",
+                  )
                 }
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
               >
@@ -633,14 +758,16 @@ function PolicyCenterPage() {
                   </select>
                 </Field>
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  The second dropdowns only show destinations allowed for the selected scenario. This
-                  lets the flow change when you switch between a client with a loan, without a loan,
-                  or an investor-only account.
+                  The second dropdowns only show destinations allowed for the selected scenario.
+                  This lets the flow change when you switch between a client with a loan, without a
+                  loan, or an investor-only account.
                 </div>
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
                   <div className="mb-1 font-medium text-foreground">Current path</div>
                   <div className="text-muted-foreground">
-                    {currentWaterfall.steps.map((step) => WATERFALL_DESTINATION_LABELS[step]).join(" -> ")}
+                    {currentWaterfall.steps
+                      .map((step) => WATERFALL_DESTINATION_LABELS[step])
+                      .join(" -> ")}
                   </div>
                 </div>
               </div>
@@ -685,21 +812,27 @@ function PolicyCenterPage() {
                     </Field>
                     <div className="flex items-end gap-2">
                       <button
-                        onClick={() => moveWaterfallStep(waterfallScenario, index, -1, setWaterfallDraft)}
+                        onClick={() =>
+                          moveWaterfallStep(waterfallScenario, index, -1, setWaterfallDraft)
+                        }
                         disabled={index === 0}
                         className="rounded-md border border-border px-2 py-2 text-xs hover:bg-muted disabled:opacity-40"
                       >
                         <ArrowUp className="h-3.5 w-3.5" />
                       </button>
                       <button
-                        onClick={() => moveWaterfallStep(waterfallScenario, index, 1, setWaterfallDraft)}
+                        onClick={() =>
+                          moveWaterfallStep(waterfallScenario, index, 1, setWaterfallDraft)
+                        }
                         disabled={index === currentWaterfall.steps.length - 1}
                         className="rounded-md border border-border px-2 py-2 text-xs hover:bg-muted disabled:opacity-40"
                       >
                         <ArrowDown className="h-3.5 w-3.5" />
                       </button>
                       <button
-                        onClick={() => removeWaterfallStep(waterfallScenario, index, setWaterfallDraft)}
+                        onClick={() =>
+                          removeWaterfallStep(waterfallScenario, index, setWaterfallDraft)
+                        }
                         disabled={currentWaterfall.steps.length <= 1}
                         className="rounded-md border border-destructive/30 px-2 py-2 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
                       >
@@ -752,7 +885,8 @@ function PolicyCenterPage() {
                   <div className="rounded-xl border border-border bg-muted/20 p-4">
                     <div className="text-sm font-semibold">{selectedClient.name}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Rating: <span className="font-medium text-foreground">{clientRating.label}</span> -{" "}
+                      Rating:{" "}
+                      <span className="font-medium text-foreground">{clientRating.label}</span> -{" "}
                       {clientRating.detail}
                     </div>
                   </div>
@@ -763,16 +897,33 @@ function PolicyCenterPage() {
             {selectedClient && (
               <>
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  <StatCard label="Total Loans" value={selectedClientLoans.length} />
-                  <StatCard label="Total Borrowed" value={fmtKES(totalBorrowed)} />
-                  <StatCard label="Total Interest" value={fmtKES(totalInterest)} />
-                  <StatCard label="Outstanding Balance" value={fmtKES(totalBalance)} tone="warning" />
+                  <StatCard
+                    label="Total Loans"
+                    value={selectedClientLoans.length + carryoverLoans.length}
+                  />
+                  <StatCard
+                    label="Total Borrowed"
+                    value={fmtKES(totalBorrowed + carryoverBorrowed)}
+                  />
+                  <StatCard
+                    label="Total Interest"
+                    value={fmtKES(totalInterest + carryoverInterest)}
+                  />
+                  <StatCard
+                    label="Outstanding Balance"
+                    value={fmtKES(combinedOutstandingBalance)}
+                    tone="warning"
+                  />
                   <StatCard
                     label="Penalties"
-                    value={`${fmtKES(penaltiesOutstanding)} open / ${fmtKES(penaltiesPaid)} paid`}
+                    value={`${fmtKES(penaltiesOutstanding)} open / ${fmtKES(penaltiesPaid)} paid / ${fmtKES(penaltiesWaived)} waived`}
                     tone={penaltiesOutstanding > 0 ? "destructive" : "success"}
                   />
-                  <StatCard label="Collections Logged" value={fmtKES(totalCollections)} tone="accent" />
+                  <StatCard
+                    label="Collections Logged"
+                    value={fmtKES(combinedCollections)}
+                    tone="accent"
+                  />
                 </div>
 
                 <Section title="Client balances and history">
@@ -786,7 +937,9 @@ function PolicyCenterPage() {
                     </div>
                     <div className="space-y-3">
                       {clientLoansSummary.length === 0 && (
-                        <div className="text-sm text-muted-foreground">No loans recorded for this client.</div>
+                        <div className="text-sm text-muted-foreground">
+                          No loans recorded for this client.
+                        </div>
                       )}
                       {clientLoansSummary.map(({ loan, summary }) => (
                         <div key={loan.id} className="rounded-xl border border-border p-4">
@@ -816,6 +969,568 @@ function PolicyCenterPage() {
                             <MetricCard label="Interest" value={fmtKES(summary.interest)} />
                             <MetricCard label="Balance" value={fmtKES(summary.balance)} />
                             <MetricCard label="Due Date" value={summary.dueDate} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Section>
+
+                <Section
+                  title="Carryover balances"
+                  action={
+                    <button
+                      onClick={() => void saveCarryoverProfileDraft()}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      Save carryover
+                    </button>
+                  }
+                >
+                  <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                    <NumberField
+                      label="Savings balance"
+                      value={carryoverProfile.savingsBalance}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({ ...current, savingsBalance: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Share units"
+                      value={carryoverProfile.shareUnits}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          shareUnits: Math.max(0, Math.floor(value)),
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Fees paid total"
+                      value={carryoverProfile.feesPaidTotal}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({ ...current, feesPaidTotal: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Loan repayments total"
+                      value={carryoverProfile.loanRepaymentsTotal}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          loanRepaymentsTotal: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Investment balance"
+                      value={carryoverProfile.investmentBalance}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          investmentBalance: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Other collected"
+                      value={carryoverProfile.otherCollectedTotal}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          otherCollectedTotal: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Total collected"
+                      value={carryoverProfile.totalCollected}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({ ...current, totalCollected: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Pending balance"
+                      value={carryoverProfile.pendingBalance}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({ ...current, pendingBalance: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Penalties outstanding"
+                      value={carryoverProfile.penaltiesOutstanding}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          penaltiesOutstanding: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Penalties waived total"
+                      value={carryoverProfile.penaltiesWaivedTotal}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          penaltiesWaivedTotal: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Completed loan cycles"
+                      value={carryoverProfile.completedLoanCycles}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          completedLoanCycles: Math.max(0, Math.floor(value)),
+                        }))
+                      }
+                    />
+                    <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={carryoverProfile.membershipFeePaid}
+                          onChange={(event) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              membershipFeePaid: event.target.checked,
+                            }))
+                          }
+                        />
+                        Membership fee already paid
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={carryoverProfile.cardFeePaid}
+                          onChange={(event) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              cardFeePaid: event.target.checked,
+                            }))
+                          }
+                        />
+                        Card fee already paid
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={carryoverProfile.stickerFeePaid}
+                          onChange={(event) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              stickerFeePaid: event.target.checked,
+                            }))
+                          }
+                        />
+                        Sticker fee already paid
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={carryoverProfile.firstUpfrontPaid}
+                          onChange={(event) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              firstUpfrontPaid: event.target.checked,
+                            }))
+                          }
+                        />
+                        First upfront already covered
+                      </label>
+                    </div>
+                    <Field label="First loan start date">
+                      <input
+                        type="date"
+                        value={carryoverProfile.firstLoanStartDate ?? ""}
+                        onChange={(event) =>
+                          setCarryoverProfile((current) => ({
+                            ...current,
+                            firstLoanStartDate: event.target.value || undefined,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <Field label="Last loan end date">
+                      <input
+                        type="date"
+                        value={carryoverProfile.lastLoanEndDate ?? ""}
+                        onChange={(event) =>
+                          setCarryoverProfile((current) => ({
+                            ...current,
+                            lastLoanEndDate: event.target.value || undefined,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <Field label="Notes" className="md:col-span-2 xl:col-span-4">
+                      <textarea
+                        rows={3}
+                        value={carryoverProfile.notes ?? ""}
+                        onChange={(event) =>
+                          setCarryoverProfile((current) => ({
+                            ...current,
+                            notes: event.target.value,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                  </div>
+                  <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+                    Saving carryover balances also updates the member's live savings, share units,
+                    and fee-status flags so the current system reflects the corrected starting
+                    position.
+                  </div>
+                </Section>
+
+                <Section
+                  title="Carryover loans"
+                  action={
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => clearCarryoverLoanDraft(selectedClient.id)}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                      >
+                        Clear
+                      </button>
+                      <button
+                        onClick={() => void saveCarryoverLoanDraft()}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        Save loan
+                      </button>
+                    </div>
+                  }
+                >
+                  <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                    <Field label="Label">
+                      <input
+                        value={carryoverLoanDraft.label}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            label: event.target.value,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <NumberField
+                      label="Loan cycle #"
+                      value={carryoverLoanDraft.loanCycleNumber}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({
+                          ...current,
+                          loanCycleNumber: Math.max(1, Math.floor(value)),
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Principal"
+                      value={carryoverLoanDraft.principal}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({ ...current, principal: value }))
+                      }
+                    />
+                    <Field label="Term days">
+                      <select
+                        value={carryoverLoanDraft.termDays}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            termDays: Number(event.target.value) as 7 | 14 | 30 | 60 | 90,
+                          }))
+                        }
+                        className="input"
+                      >
+                        {[7, 14, 30, 60, 90].map((days) => (
+                          <option key={days} value={days}>
+                            {days} days
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <NumberField
+                      label="Interest rate %"
+                      value={carryoverLoanDraft.interestRatePct}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({
+                          ...current,
+                          interestRatePct: value,
+                        }))
+                      }
+                    />
+                    <NumberField
+                      label="Daily savings amount"
+                      value={carryoverLoanDraft.dailySavingsAmount}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({
+                          ...current,
+                          dailySavingsAmount: value,
+                        }))
+                      }
+                    />
+                    <Field label="Start date">
+                      <input
+                        type="date"
+                        value={carryoverLoanDraft.startDate}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            startDate: event.target.value,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <Field label="Due date">
+                      <input
+                        type="date"
+                        value={carryoverLoanDraft.dueDate ?? ""}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            dueDate: event.target.value || undefined,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <NumberField
+                      label="Amount already paid"
+                      value={carryoverLoanDraft.paidToDate}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({ ...current, paidToDate: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Penalty waived"
+                      value={carryoverLoanDraft.penaltyWaivedAmount}
+                      onChange={(value) =>
+                        setCarryoverLoanDraft((current) => ({
+                          ...current,
+                          penaltyWaivedAmount: value,
+                        }))
+                      }
+                    />
+                    <Field label="Status">
+                      <select
+                        value={carryoverLoanDraft.status}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            status: event.target.value as "active" | "closed" | "defaulted",
+                          }))
+                        }
+                        className="input"
+                      >
+                        <option value="active">Active</option>
+                        <option value="closed">Closed</option>
+                        <option value="defaulted">Defaulted</option>
+                      </select>
+                    </Field>
+                    <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={carryoverLoanDraft.finished}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              finished: event.target.checked,
+                              status: event.target.checked ? "closed" : current.status,
+                            }))
+                          }
+                        />
+                        Mark this legacy loan as finished
+                      </label>
+                      <Field label="Closed on">
+                        <input
+                          type="date"
+                          value={carryoverLoanDraft.closedOn ?? ""}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              closedOn: event.target.value || undefined,
+                            }))
+                          }
+                          className="input"
+                        />
+                      </Field>
+                    </div>
+                    <Field label="Notes" className="md:col-span-2 xl:col-span-4">
+                      <textarea
+                        rows={3}
+                        value={carryoverLoanDraft.notes ?? ""}
+                        onChange={(event) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            notes: event.target.value,
+                          }))
+                        }
+                        className="input"
+                      />
+                    </Field>
+                  </div>
+                  <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+                    Use this like the simulator: principal + days + daily savings + amount already
+                    paid. If the loan is not finished, the system shows the remaining balance,
+                    arrears, penalty estimate, and what is owed now.
+                  </div>
+                  <div className="space-y-4 border-t border-border p-5">
+                    {carryoverLoading && (
+                      <div className="text-sm text-muted-foreground">
+                        Loading carryover loans...
+                      </div>
+                    )}
+                    {!carryoverLoading && carryoverLoanSummaries.length === 0 && (
+                      <div className="text-sm text-muted-foreground">
+                        No legacy loans saved for this client yet.
+                      </div>
+                    )}
+                    {carryoverLoanSummaries.map(({ loan, summary }) => (
+                      <div key={loan.id} className="rounded-xl border border-border p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium">
+                              {loan.label} · Cycle {loan.loanCycleNumber}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {fmtKES(loan.principal)} · {summary.ratePct}% · {summary.termDays}{" "}
+                              days · start {loan.startDate}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Badge
+                              tone={
+                                loan.status === "closed"
+                                  ? "success"
+                                  : loan.status === "defaulted"
+                                    ? "destructive"
+                                    : "warning"
+                              }
+                            >
+                              {loan.status}
+                            </Badge>
+                            <button
+                              onClick={() => beginEditCarryoverLoan(loan)}
+                              className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await deleteCarryoverLoan({ data: { id: loan.id } });
+                                await refreshCarryoverDetails(selectedClient.id);
+                                toast.success("Carryover loan deleted");
+                              }}
+                              className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                          <MetricCard
+                            label="Total Repayment"
+                            value={fmtKES(summary.totalRepayment)}
+                          />
+                          <MetricCard
+                            label="Daily Inclusive"
+                            value={fmtKES(summary.dailyInclusive)}
+                          />
+                          <MetricCard label="Paid To Date" value={fmtKES(loan.paidToDate)} />
+                          <MetricCard label="Balance" value={fmtKES(summary.balance)} />
+                          <MetricCard label="Due Date" value={summary.dueDate} />
+                          <MetricCard label="Owed Now" value={fmtKES(summary.totalOwedNow)} />
+                        </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-4">
+                          <MetricCard label="Arrears" value={fmtKES(summary.arrears)} />
+                          <MetricCard label="Past Due Days" value={`${summary.daysPastDue}`} />
+                          <MetricCard
+                            label="Penalty Estimate"
+                            value={fmtKES(summary.estimatedPenaltyNow)}
+                          />
+                          <MetricCard
+                            label="Savings Accrued"
+                            value={fmtKES(summary.totalSavingsAccrued)}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+
+                <Section title="Penalty control">
+                  <div className="grid gap-4 p-5 lg:grid-cols-[280px,1fr]">
+                    <div className="space-y-3">
+                      <Field label="Waiver note">
+                        <textarea
+                          rows={4}
+                          value={waiverNote}
+                          onChange={(event) => setWaiverNote(event.target.value)}
+                          placeholder="Reason for the waiver"
+                          className="input"
+                        />
+                      </Field>
+                    </div>
+                    <div className="space-y-3">
+                      {selectedClientPenalties.length === 0 && (
+                        <div className="text-sm text-muted-foreground">
+                          No penalties recorded for this client.
+                        </div>
+                      )}
+                      {selectedClientPenalties.map((penalty) => (
+                        <div key={penalty.id} className="rounded-xl border border-border p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="font-medium">{penalty.reason}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {penalty.id} · {penalty.date}
+                              </div>
+                            </div>
+                            <Badge
+                              tone={
+                                penalty.status === "paid"
+                                  ? "success"
+                                  : penalty.status === "waived"
+                                    ? "accent"
+                                    : "warning"
+                              }
+                            >
+                              {penalty.status}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 grid gap-3 md:grid-cols-[1fr,180px,auto]">
+                            <MetricCard label="Amount" value={fmtKES(penalty.amount)} />
+                            <Field label="Waive amount">
+                              <input
+                                type="number"
+                                value={waiverAmounts[penalty.id] ?? penalty.amount}
+                                onChange={(event) =>
+                                  setWaiverAmounts((current) => ({
+                                    ...current,
+                                    [penalty.id]: Number(event.target.value),
+                                  }))
+                                }
+                                className="input"
+                              />
+                            </Field>
+                            <div className="flex items-end">
+                              <button
+                                disabled={penalty.status !== "outstanding"}
+                                onClick={() => void applyPenaltyWaiver(penalty.id, penalty.amount)}
+                                className="rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                              >
+                                Waive penalty
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -945,7 +1660,10 @@ function PolicyCenterPage() {
                   <tbody className="divide-y divide-border">
                     {enrichedTargets.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted-foreground">
+                        <td
+                          colSpan={7}
+                          className="px-5 py-8 text-center text-sm text-muted-foreground"
+                        >
                           No targets saved yet.
                         </td>
                       </tr>
@@ -953,7 +1671,9 @@ function PolicyCenterPage() {
                     {enrichedTargets.map((target) => (
                       <tr key={target.id}>
                         <td className="px-5 py-3">
-                          <div className="font-medium">{TARGET_METRIC_META[target.metric].label}</div>
+                          <div className="font-medium">
+                            {TARGET_METRIC_META[target.metric].label}
+                          </div>
                           <div className="text-xs text-muted-foreground">
                             {TARGET_PERIOD_LABELS[target.period]}
                           </div>
@@ -969,7 +1689,9 @@ function PolicyCenterPage() {
                         </td>
                         <td className="px-5 py-3 text-right">
                           <div className="inline-flex min-w-[120px] flex-col items-end gap-1">
-                            <div className="text-xs font-medium">{target.progressPct.toFixed(1)}%</div>
+                            <div className="text-xs font-medium">
+                              {target.progressPct.toFixed(1)}%
+                            </div>
                             <div className="h-2 w-full rounded-full bg-muted">
                               <div
                                 className={`h-2 rounded-full ${
@@ -979,7 +1701,9 @@ function PolicyCenterPage() {
                                       ? "bg-primary"
                                       : "bg-warning"
                                 }`}
-                                style={{ width: `${Math.min(100, Math.max(0, target.progressPct))}%` }}
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, target.progressPct))}%`,
+                                }}
                               />
                             </div>
                           </div>
@@ -1021,8 +1745,8 @@ function PolicyCenterPage() {
                 </table>
               </div>
               <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-                Sticker issued currently follows recorded sticker fee payments until a dedicated issue
-                timestamp is added to the database.
+                Sticker issued currently follows recorded sticker fee payments until a dedicated
+                issue timestamp is added to the database.
               </div>
             </Section>
           </>
@@ -1055,6 +1779,46 @@ function blankTarget(): TargetDraft {
   };
 }
 
+function blankCarryoverProfile(memberId: string): LegacyCarryoverProfile {
+  return {
+    memberId,
+    savingsBalance: 0,
+    shareUnits: 0,
+    feesPaidTotal: 0,
+    loanRepaymentsTotal: 0,
+    investmentBalance: 0,
+    otherCollectedTotal: 0,
+    totalCollected: 0,
+    pendingBalance: 0,
+    penaltiesOutstanding: 0,
+    penaltiesWaivedTotal: 0,
+    membershipFeePaid: false,
+    cardFeePaid: false,
+    stickerFeePaid: false,
+    firstUpfrontPaid: false,
+    completedLoanCycles: 0,
+    collectionBreakdown: {},
+  };
+}
+
+function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryoverLoan {
+  return {
+    id: "",
+    memberId,
+    label: "Legacy loan",
+    loanCycleNumber: Math.max(1, cycleNumber),
+    principal: 0,
+    interestRatePct: 0,
+    termDays: 30,
+    dailySavingsAmount: 0,
+    startDate: new Date().toISOString().slice(0, 10),
+    paidToDate: 0,
+    status: "active",
+    finished: false,
+    penaltyWaivedAmount: 0,
+  };
+}
+
 function addWaterfallStep(
   scenario: WaterfallScenario,
   setDraft: Dispatch<SetStateAction<WaterfallRule[]>>,
@@ -1063,7 +1827,8 @@ function addWaterfallStep(
     current.map((rule) => {
       if (rule.scenario !== scenario) return rule;
       const choices = waterfallOptionsForScenario(scenario);
-      const next = choices.find((choice) => !rule.steps.includes(choice)) ?? choices[choices.length - 1];
+      const next =
+        choices.find((choice) => !rule.steps.includes(choice)) ?? choices[choices.length - 1];
       return { ...rule, steps: [...rule.steps, next] };
     }),
   );
@@ -1119,19 +1884,27 @@ function calculateTargetActual(
     case "collections_total":
       return data.transactions
         .filter((transaction) =>
-          ["deposit", "loan_repayment", "share_purchase", "fee_payment", "investor_contribution"].includes(
-            transaction.type,
-          ),
+          [
+            "deposit",
+            "loan_repayment",
+            "share_purchase",
+            "fee_payment",
+            "investor_contribution",
+          ].includes(transaction.type),
         )
         .filter((transaction) => inWindow(transaction.date))
         .reduce((sum, transaction) => sum + transaction.amount, 0);
     case "loan_repayments":
       return data.transactions
-        .filter((transaction) => transaction.type === "loan_repayment" && inWindow(transaction.date))
+        .filter(
+          (transaction) => transaction.type === "loan_repayment" && inWindow(transaction.date),
+        )
         .reduce((sum, transaction) => sum + transaction.amount, 0);
     case "loan_disbursements":
       return data.transactions
-        .filter((transaction) => transaction.type === "loan_disbursement" && inWindow(transaction.date))
+        .filter(
+          (transaction) => transaction.type === "loan_disbursement" && inWindow(transaction.date),
+        )
         .reduce((sum, transaction) => sum + transaction.amount, 0);
     case "new_loans_count":
       return data.loans.filter(
@@ -1191,7 +1964,9 @@ function buildClientRating(
   const closedLoans = loans.filter((loan) => loan.status === "closed").length;
   const defaultedLoans = loans.filter((loan) => loan.status === "defaulted").length;
   const overdueLoans = loans.filter((loan) => loanSummary(loan).isOverdue).length;
-  const outstandingPenalties = penalties.filter((penalty) => penalty.status === "outstanding").length;
+  const outstandingPenalties = penalties.filter(
+    (penalty) => penalty.status === "outstanding",
+  ).length;
 
   score -= defaultedLoans * 25;
   score -= overdueLoans * 15;
@@ -1200,7 +1975,8 @@ function buildClientRating(
   if (closedLoans > 0) score += 5;
 
   if (score >= 90) return { label: "A - Strong", detail: "Good history, low current risk." };
-  if (score >= 75) return { label: "B - Stable", detail: "Mostly healthy, keep watching collections." };
+  if (score >= 75)
+    return { label: "B - Stable", detail: "Mostly healthy, keep watching collections." };
   if (score >= 55) return { label: "C - Watch", detail: "Emerging repayment or penalty pressure." };
   return { label: "D - High Risk", detail: "Frequent arrears, penalties, or unresolved balances." };
 }

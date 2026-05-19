@@ -65,6 +65,18 @@ function toNumber(value: number | string | null | undefined) {
   return Number(value ?? 0);
 }
 
+function addDaysIso(date: string, days: number) {
+  const next = new Date(`${String(date).slice(0, 10)}T00:00:00`);
+  next.setDate(next.getDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+function asJsonObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -334,6 +346,44 @@ async function markMpesaEventProcessed(eventId?: string, transactionId?: string 
   if (error) throw new Error(error.message);
 }
 
+async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
+  const { data: loans, error: loansError } = await runtimeDb
+    .from("member_carryover_loans")
+    .select("*")
+    .eq("member_id", memberId)
+    .order("start_date", { ascending: true });
+  if (loansError) throw new Error(loansError.message);
+
+  const sorted = (loans ?? []) as Array<Record<string, unknown>>;
+  const firstLoanStartDate = sorted[0]?.start_date ? String(sorted[0].start_date) : null;
+  const closedDates = sorted
+    .map((loan) => String(loan.closed_on ?? loan.due_date ?? ""))
+    .filter(Boolean)
+    .sort();
+  const lastLoanEndDate = closedDates.length > 0 ? closedDates[closedDates.length - 1] : null;
+  const completedLoanCycles = sorted.filter(
+    (loan) => loan.status === "closed" || loan.finished === true,
+  ).length;
+  const pendingBalance = sorted
+    .filter((loan) => loan.status !== "closed")
+    .reduce((sum, loan) => {
+      const principal = Number(loan.principal ?? 0);
+      const ratePct = Number(loan.interest_rate_pct ?? 0);
+      const paidToDate = Number(loan.paid_to_date ?? 0);
+      const totalDue = principal + principal * (ratePct / 100);
+      return sum + Math.max(0, totalDue - paidToDate);
+    }, 0);
+
+  const { error: profileError } = await runtimeDb.from("member_carryover_profiles").upsert({
+    member_id: memberId,
+    completed_loan_cycles: completedLoanCycles,
+    first_loan_start_date: firstLoanStartDate,
+    last_loan_end_date: lastLoanEndDate,
+    pending_balance: pendingBalance,
+  });
+  if (profileError) throw new Error(profileError.message);
+}
+
 export async function recordMpesaConfirmationEvent(args: {
   raw: Record<string, unknown>;
   account: string;
@@ -396,6 +446,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       return {
         matched: true,
         account: norm,
+        transactionId: event.transaction_id ?? undefined,
         notes: ["M-Pesa event already processed."],
       };
     }
@@ -410,7 +461,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         : `Account "${args.account}" did not match SBC member pattern.`,
     );
     await markMpesaEventProcessed(args.eventId, null);
-    return { matched: false, account: norm, notes };
+    return { matched: false, account: norm, notes, transactionId: undefined };
   }
   const memberId = member.id;
   const memberCategory = resolveMemberCategory(member.member_category, member.is_investor);
@@ -475,6 +526,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       memberId,
       account: norm,
       primary,
+      transactionId: primaryTransactionId,
       toRoundOff: 0,
       penaltiesCleared: [],
       notes,
@@ -537,12 +589,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   const scenario = activeLoan ? "member_with_loan" : "member_without_loan";
   const waterfall = waterfallRuleForScenario(scenario, policySettings).steps;
 
-  function setPrimaryIfMissing(
-    type: string,
-    amount: number,
-    note: string,
-    loanId?: string,
-  ) {
+  function setPrimaryIfMissing(type: string, amount: number, note: string, loanId?: string) {
     if (primary) return;
     primary = { type, amount, note, loanId };
   }
@@ -567,7 +614,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       payer_name: args.payerName,
       note: `Paybill ${norm} - ${args.payerName ?? ""}`,
     });
-    memberPatch.savings_balance = Number(memberPatch.savings_balance ?? member.savings_balance ?? 0) + applied;
+    memberPatch.savings_balance =
+      Number(memberPatch.savings_balance ?? member.savings_balance ?? 0) + applied;
     if (surplus > 0) toRoundOff += surplus;
     if (Number(memberPatch.savings_balance ?? 0) < mandatorySavingsThreshold) {
       notes.push(
@@ -732,6 +780,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     memberId,
     account: norm,
     primary,
+    transactionId: primaryTransactionId,
     toRoundOff,
     penaltiesCleared,
     notes,
@@ -2928,13 +2977,11 @@ export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
   });
 
 export const upsertPolicySettingRecord = createServerFn({ method: "POST" })
-  .inputValidator(
-    (data: { key: PolicySettingKey; value: unknown; notes?: string }) => ({
-      key: (data?.key ?? "percentages") as PolicySettingKey,
-      value: data?.value ?? {},
-      notes: data?.notes?.trim() || undefined,
-    }),
-  )
+  .inputValidator((data: { key: PolicySettingKey; value: unknown; notes?: string }) => ({
+    key: (data?.key ?? "percentages") as PolicySettingKey,
+    value: data?.value ?? {},
+    notes: data?.notes?.trim() || undefined,
+  }))
   .handler(async ({ data }) => {
     const actor = await requireDirectorActor();
     if (!(data.key in POLICY_SETTING_LABELS)) {
@@ -3066,6 +3113,594 @@ export const deletePerformanceTargetRecord = createServerFn({ method: "POST" })
       },
     });
     return { ok: true };
+  });
+
+export const syncLegacyTopupsRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { limit?: number }) => ({
+    limit: Math.max(1, Math.min(500, Math.floor(Number(data?.limit ?? 100) || 100))),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { loadLegacyTopupRows } = await import("@/lib/legacy-db.server");
+    const scan = await loadLegacyTopupRows(data.limit);
+    const runId = makeId("LSYNC");
+    const now = new Date().toISOString();
+
+    const { error: runInsertError } = await runtimeDb.from("legacy_import_sync_runs").insert({
+      id: runId,
+      source_table: scan.rows[0]?.sourceTable ?? "api_topup",
+      created_by: actor.id,
+      status: "success",
+      note: `Detected columns: ${scan.columns.join(", ") || "none"}`,
+    });
+    if (runInsertError) throw new Error(runInsertError.message);
+
+    try {
+      const sourceKeys = scan.rows.map((row) => row.sourceKey);
+      const refs = Array.from(new Set(scan.rows.map((row) => row.sourceRef).filter(Boolean)));
+
+      const existingImportsResult = sourceKeys.length
+        ? await runtimeDb
+            .from("legacy_topup_imports")
+            .select(
+              "id, source_row_key, allocation_status, allocated_transaction_id, matched_member_id",
+            )
+            .in("source_row_key", sourceKeys)
+        : { data: [], error: null };
+      if (existingImportsResult.error) throw new Error(existingImportsResult.error.message);
+
+      const existingTransactionsResult = refs.length
+        ? await runtimeDb
+            .from("transactions")
+            .select("id, ref, amount, member_id, account")
+            .in("ref", refs)
+        : { data: [], error: null };
+      if (existingTransactionsResult.error)
+        throw new Error(existingTransactionsResult.error.message);
+
+      const existingByKey = new Map(
+        (existingImportsResult.data ?? []).map((row: any) => [row.source_row_key as string, row]),
+      );
+      const existingTransactionsByRef = new Map<string, any[]>();
+      for (const row of existingTransactionsResult.data ?? []) {
+        const ref = String(row.ref ?? "").trim();
+        if (!ref) continue;
+        const list = existingTransactionsByRef.get(ref) ?? [];
+        list.push(row);
+        existingTransactionsByRef.set(ref, list);
+      }
+
+      let upsertedRows = 0;
+      let appliedRows = 0;
+      let heldRows = 0;
+      let skippedRows = 0;
+      let erroredRows = 0;
+
+      for (const row of scan.rows) {
+        const existing = existingByKey.get(row.sourceKey) as
+          | {
+              id?: string;
+              allocation_status?: string;
+              allocated_transaction_id?: string | null;
+              matched_member_id?: string | null;
+            }
+          | undefined;
+
+        const accountOrHint = row.sourceAccount ?? row.sourceMemberHint ?? undefined;
+        const notes = [...row.mappingNotes];
+        let allocationStatus: "pending" | "applied" | "held" | "error" = "pending";
+        let matchedMemberId = existing?.matched_member_id ?? null;
+        let allocatedTransactionId = existing?.allocated_transaction_id ?? null;
+        let allocatedAt: string | null = null;
+
+        if (existing?.allocation_status === "applied" && existing.allocated_transaction_id) {
+          skippedRows += 1;
+          allocationStatus = "applied";
+          notes.push("Already imported earlier; kept the existing allocation.");
+        } else {
+          const duplicate = row.sourceRef
+            ? (existingTransactionsByRef.get(row.sourceRef) ?? []).find(
+                (transaction) =>
+                  Number(transaction.amount ?? 0) === Number(row.sourceAmount) &&
+                  (!accountOrHint ||
+                    String(transaction.account ?? "")
+                      .trim()
+                      .toUpperCase() === accountOrHint.trim().toUpperCase()),
+              )
+            : undefined;
+
+          if (duplicate) {
+            allocationStatus = "applied";
+            appliedRows += 1;
+            matchedMemberId = duplicate.member_id ?? null;
+            allocatedTransactionId = duplicate.id;
+            allocatedAt = now;
+            notes.push("Matched an existing ledger transaction by reference, amount, and account.");
+          } else if (row.sourceAmount <= 0) {
+            allocationStatus = "held";
+            heldRows += 1;
+            notes.push("Held because the imported amount is missing or zero.");
+          } else if (!accountOrHint) {
+            allocationStatus = "held";
+            heldRows += 1;
+            notes.push("Held because no SBC/member account could be detected in the old row.");
+          } else {
+            try {
+              const result = await applyMpesaPaymentToDatabase({
+                account: accountOrHint,
+                amount: row.sourceAmount,
+                payerName: row.sourcePayerName,
+                mpesaRef: row.sourceRef,
+              });
+              allocationStatus = result.matched ? "applied" : "held";
+              matchedMemberId = result.memberId ?? null;
+              allocatedTransactionId = result.transactionId ?? null;
+              allocatedAt = result.matched ? now : null;
+              notes.push(...result.notes);
+              if (result.matched) {
+                appliedRows += 1;
+              } else {
+                heldRows += 1;
+              }
+            } catch (error: any) {
+              allocationStatus = "error";
+              erroredRows += 1;
+              notes.push(error?.message ?? "Legacy import allocation failed.");
+            }
+          }
+        }
+
+        const dedupedNotes = Array.from(
+          new Set(notes.map((note) => String(note).trim()).filter(Boolean)),
+        );
+        const { error: importError } = await runtimeDb.from("legacy_topup_imports").upsert({
+          id: existing?.id ?? makeId("LTP"),
+          source_row_key: row.sourceKey,
+          source_table: row.sourceTable,
+          source_created_at: row.sourceCreatedAt ?? null,
+          source_account: row.sourceAccount ?? null,
+          source_member_hint: row.sourceMemberHint ?? null,
+          source_payer_name: row.sourcePayerName ?? null,
+          source_phone: row.sourcePhone ?? null,
+          source_amount: row.sourceAmount,
+          source_ref: row.sourceRef ?? null,
+          raw: row.raw,
+          matched_member_id: matchedMemberId,
+          allocation_status: allocationStatus,
+          allocation_notes: dedupedNotes,
+          allocated_transaction_id: allocatedTransactionId,
+          allocated_at: allocatedAt,
+          sync_run_id: runId,
+          read_only: true,
+          last_seen_at: now,
+        });
+        if (importError) throw new Error(importError.message);
+        upsertedRows += 1;
+      }
+
+      const status = erroredRows > 0 ? "partial" : heldRows > 0 ? "partial" : "success";
+      const note =
+        scan.columns.length > 0
+          ? `Columns detected: ${scan.columns.join(", ")}`
+          : "No columns were detected in the legacy source.";
+
+      const { error: runUpdateError } = await runtimeDb
+        .from("legacy_import_sync_runs")
+        .update({
+          fetched_rows: scan.rows.length,
+          upserted_rows: upsertedRows,
+          applied_rows: appliedRows,
+          held_rows: heldRows,
+          skipped_rows: skippedRows,
+          status,
+          note,
+        })
+        .eq("id", runId);
+      if (runUpdateError) throw new Error(runUpdateError.message);
+
+      await auditAction({
+        actor,
+        action: "legacy_topups.synced",
+        targetType: "legacy_import_sync_run",
+        targetId: runId,
+        summary: `${actor.name} synced ${scan.rows.length} old topup rows`,
+        details: {
+          columns: scan.columns,
+          mappings: scan.mappings,
+          fetchedRows: scan.rows.length,
+          upsertedRows,
+          appliedRows,
+          heldRows,
+          skippedRows,
+          erroredRows,
+        },
+      });
+
+      return {
+        syncRunId: runId,
+        columns: scan.columns,
+        mappings: scan.mappings,
+        fetchedRows: scan.rows.length,
+        upsertedRows,
+        appliedRows,
+        heldRows,
+        skippedRows,
+        erroredRows,
+      };
+    } catch (error: any) {
+      await runtimeDb
+        .from("legacy_import_sync_runs")
+        .update({
+          status: "error",
+          note: error?.message ?? "Legacy import failed.",
+        })
+        .eq("id", runId);
+      throw error;
+    }
+  });
+
+export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      savingsBalance: number;
+      shareUnits: number;
+      feesPaidTotal: number;
+      loanRepaymentsTotal: number;
+      investmentBalance: number;
+      otherCollectedTotal: number;
+      totalCollected: number;
+      pendingBalance: number;
+      penaltiesOutstanding: number;
+      penaltiesWaivedTotal: number;
+      membershipFeePaid: boolean;
+      cardFeePaid: boolean;
+      stickerFeePaid: boolean;
+      firstUpfrontPaid: boolean;
+      completedLoanCycles: number;
+      firstLoanStartDate?: string;
+      lastLoanEndDate?: string;
+      collectionBreakdown?: Record<string, unknown>;
+      notes?: string;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      savingsBalance: Math.max(0, Number(data?.savingsBalance ?? 0)),
+      shareUnits: Math.max(0, Math.floor(Number(data?.shareUnits ?? 0))),
+      feesPaidTotal: Math.max(0, Number(data?.feesPaidTotal ?? 0)),
+      loanRepaymentsTotal: Math.max(0, Number(data?.loanRepaymentsTotal ?? 0)),
+      investmentBalance: Math.max(0, Number(data?.investmentBalance ?? 0)),
+      otherCollectedTotal: Math.max(0, Number(data?.otherCollectedTotal ?? 0)),
+      totalCollected: Math.max(0, Number(data?.totalCollected ?? 0)),
+      pendingBalance: Math.max(0, Number(data?.pendingBalance ?? 0)),
+      penaltiesOutstanding: Math.max(0, Number(data?.penaltiesOutstanding ?? 0)),
+      penaltiesWaivedTotal: Math.max(0, Number(data?.penaltiesWaivedTotal ?? 0)),
+      membershipFeePaid: !!data?.membershipFeePaid,
+      cardFeePaid: !!data?.cardFeePaid,
+      stickerFeePaid: !!data?.stickerFeePaid,
+      firstUpfrontPaid: !!data?.firstUpfrontPaid,
+      completedLoanCycles: Math.max(0, Math.floor(Number(data?.completedLoanCycles ?? 0))),
+      firstLoanStartDate: data?.firstLoanStartDate?.trim() || undefined,
+      lastLoanEndDate: data?.lastLoanEndDate?.trim() || undefined,
+      collectionBreakdown: asJsonObject(data?.collectionBreakdown),
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.memberId) throw new Error("Member id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const derivedTotal =
+      data.totalCollected > 0
+        ? data.totalCollected
+        : data.feesPaidTotal +
+          data.loanRepaymentsTotal +
+          data.investmentBalance +
+          data.otherCollectedTotal;
+
+    const { error } = await runtimeDb.from("member_carryover_profiles").upsert({
+      member_id: data.memberId,
+      savings_balance: data.savingsBalance,
+      share_units: data.shareUnits,
+      fees_paid_total: data.feesPaidTotal,
+      loan_repayments_total: data.loanRepaymentsTotal,
+      investment_balance: data.investmentBalance,
+      other_collected_total: data.otherCollectedTotal,
+      total_collected: derivedTotal,
+      pending_balance: data.pendingBalance,
+      penalties_outstanding: data.penaltiesOutstanding,
+      penalties_waived_total: data.penaltiesWaivedTotal,
+      membership_fee_paid: data.membershipFeePaid,
+      card_fee_paid: data.cardFeePaid,
+      sticker_fee_paid: data.stickerFeePaid,
+      first_upfront_paid: data.firstUpfrontPaid,
+      completed_loan_cycles: data.completedLoanCycles,
+      first_loan_start_date: data.firstLoanStartDate ?? null,
+      last_loan_end_date: data.lastLoanEndDate ?? null,
+      collection_breakdown: data.collectionBreakdown,
+      notes: data.notes ?? null,
+      created_by: actor.id,
+      updated_by: actor.id,
+    });
+    if (error) throw new Error(error.message);
+
+    const { error: memberError } = await runtimeDb
+      .from("members")
+      .update({
+        savings_balance: data.savingsBalance,
+        shares: data.shareUnits,
+        fee_membership: data.membershipFeePaid,
+        fee_card: data.cardFeePaid,
+        fee_sticker: data.stickerFeePaid,
+        fee_first_upfront_paid: data.firstUpfrontPaid,
+      })
+      .eq("id", data.memberId);
+    if (memberError) throw new Error(memberError.message);
+
+    await auditAction({
+      actor,
+      action: "member_carryover_profile.upserted",
+      targetType: "member_carryover_profile",
+      targetId: data.memberId,
+      summary: `${actor.name} updated carryover balances for ${data.memberId}`,
+      details: {
+        savingsBalance: data.savingsBalance,
+        shareUnits: data.shareUnits,
+        totalCollected: derivedTotal,
+        penaltiesOutstanding: data.penaltiesOutstanding,
+        completedLoanCycles: data.completedLoanCycles,
+      },
+    });
+    return { ok: true };
+  });
+
+export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      memberId: string;
+      label: string;
+      loanCycleNumber: number;
+      principal: number;
+      interestRatePct: number;
+      termDays: number;
+      dailySavingsAmount: number;
+      startDate: string;
+      dueDate?: string;
+      closedOn?: string;
+      paidToDate: number;
+      status: "active" | "closed" | "defaulted";
+      finished: boolean;
+      penaltyWaivedAmount: number;
+      notes?: string;
+    }) => ({
+      id: String(data?.id ?? "").trim() || undefined,
+      memberId: String(data?.memberId ?? "").trim(),
+      label: String(data?.label ?? "").trim() || "Legacy loan",
+      loanCycleNumber: Math.max(1, Math.floor(Number(data?.loanCycleNumber ?? 1))),
+      principal: Math.max(0, Number(data?.principal ?? 0)),
+      interestRatePct: Math.max(0, Number(data?.interestRatePct ?? 0)),
+      termDays: Number(data?.termDays ?? 30),
+      dailySavingsAmount: Math.max(0, Number(data?.dailySavingsAmount ?? 0)),
+      startDate: String(data?.startDate ?? "").trim() || new Date().toISOString().slice(0, 10),
+      dueDate: data?.dueDate?.trim() || undefined,
+      closedOn: data?.closedOn?.trim() || undefined,
+      paidToDate: Math.max(0, Number(data?.paidToDate ?? 0)),
+      status: data?.status ?? "active",
+      finished: !!data?.finished,
+      penaltyWaivedAmount: Math.max(0, Number(data?.penaltyWaivedAmount ?? 0)),
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.memberId) throw new Error("Member id is required.");
+    if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
+    if (![7, 14, 30, 60, 90].includes(data.termDays)) {
+      throw new Error("Carryover loans must use 7, 14, 30, 60, or 90 days.");
+    }
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = data.id ?? makeId("LLN");
+    const dueDate = data.dueDate ?? addDaysIso(data.startDate, data.termDays);
+    const status = data.finished && data.status === "active" ? "closed" : data.status;
+    const { error } = await runtimeDb.from("member_carryover_loans").upsert({
+      id,
+      member_id: data.memberId,
+      label: data.label,
+      loan_cycle_number: data.loanCycleNumber,
+      principal: data.principal,
+      interest_rate_pct: data.interestRatePct,
+      term_days: data.termDays,
+      daily_savings_amount: data.dailySavingsAmount,
+      start_date: data.startDate,
+      due_date: dueDate,
+      closed_on: data.closedOn ?? (status === "closed" ? dueDate : null),
+      paid_to_date: data.paidToDate,
+      status,
+      finished: data.finished || status === "closed",
+      penalty_waived_amount: data.penaltyWaivedAmount,
+      notes: data.notes ?? null,
+      created_by: actor.id,
+      updated_by: actor.id,
+    });
+    if (error) throw new Error(error.message);
+
+    await refreshCarryoverMemberSummary(runtimeDb, data.memberId);
+    await auditAction({
+      actor,
+      action: "member_carryover_loan.upserted",
+      targetType: "member_carryover_loan",
+      targetId: id,
+      summary: `${actor.name} saved legacy loan ${id} for ${data.memberId}`,
+      details: {
+        label: data.label,
+        principal: data.principal,
+        termDays: data.termDays,
+        paidToDate: data.paidToDate,
+        status,
+      },
+    });
+    return { id };
+  });
+
+export const deleteMemberCarryoverLoanRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.id) throw new Error("Carryover loan id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: loan, error: loanError } = await runtimeDb
+      .from("member_carryover_loans")
+      .select("member_id, label")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (loanError) throw new Error(loanError.message);
+    if (!loan) throw new Error("Carryover loan not found.");
+
+    const { error } = await runtimeDb.from("member_carryover_loans").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+
+    await refreshCarryoverMemberSummary(runtimeDb, loan.member_id);
+    await auditAction({
+      actor,
+      action: "member_carryover_loan.deleted",
+      targetType: "member_carryover_loan",
+      targetId: data.id,
+      summary: `${actor.name} deleted legacy loan ${data.id}`,
+      details: {
+        memberId: loan.member_id,
+        label: loan.label ?? null,
+      },
+    });
+    return { ok: true };
+  });
+
+export const waivePenaltyRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { penaltyId: string; note?: string; amount?: number }) => ({
+    penaltyId: String(data?.penaltyId ?? "").trim(),
+    note: data?.note?.trim() || undefined,
+    amount: data?.amount == null ? undefined : Number(data.amount),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.penaltyId) throw new Error("Penalty id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: penalty, error: penaltyError } = await runtimeDb
+      .from("penalties")
+      .select("*")
+      .eq("id", data.penaltyId)
+      .maybeSingle();
+    if (penaltyError) throw new Error(penaltyError.message);
+    if (!penalty) throw new Error("Penalty not found.");
+    if (penalty.status !== "outstanding") {
+      throw new Error("Only outstanding penalties can be waived.");
+    }
+
+    const currentAmount = Number(penalty.amount ?? 0);
+    const waiveAmount =
+      data.amount == null
+        ? currentAmount
+        : Math.max(0, Math.min(currentAmount, Number(data.amount)));
+    if (waiveAmount <= 0) throw new Error("Waiver amount must be above zero.");
+
+    if (waiveAmount < currentAmount) {
+      const waivedId = makeId("PWV");
+      const { error: waivedInsertError } = await runtimeDb.from("penalties").insert({
+        id: waivedId,
+        member_id: penalty.member_id,
+        loan_id: penalty.loan_id ?? null,
+        date: new Date().toISOString().slice(0, 10),
+        amount: waiveAmount,
+        reason: `Waived from ${penalty.id}${data.note ? ` - ${data.note}` : ""}`,
+        status: "waived",
+        paid_from: "waiver",
+      });
+      if (waivedInsertError) throw new Error(waivedInsertError.message);
+
+      const { error: penaltyUpdateError } = await runtimeDb
+        .from("penalties")
+        .update({ amount: currentAmount - waiveAmount })
+        .eq("id", penalty.id);
+      if (penaltyUpdateError) throw new Error(penaltyUpdateError.message);
+    } else {
+      const { error: penaltyUpdateError } = await runtimeDb
+        .from("penalties")
+        .update({ status: "waived", paid_from: "waiver" })
+        .eq("id", penalty.id);
+      if (penaltyUpdateError) throw new Error(penaltyUpdateError.message);
+    }
+
+    await auditAction({
+      actor,
+      action: "penalty.waived",
+      targetType: "penalty",
+      targetId: data.penaltyId,
+      summary: `${actor.name} waived ${waiveAmount}/= from penalty ${data.penaltyId}`,
+      details: {
+        memberId: penalty.member_id,
+        loanId: penalty.loan_id ?? null,
+        originalAmount: currentAmount,
+        waiveAmount,
+        note: clipAuditText(data.note, 180),
+      },
+    });
+    return { ok: true, waivedAmount: waiveAmount };
+  });
+
+export const createReportSnapshotRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      reportKey?: string;
+      title: string;
+      periodStart: string;
+      periodEnd: string;
+      filters?: Record<string, unknown>;
+      summary?: Record<string, unknown>;
+      chartData?: Record<string, unknown>;
+    }) => ({
+      reportKey: String(data?.reportKey ?? "").trim() || "reports",
+      title: String(data?.title ?? "").trim() || "Report snapshot",
+      periodStart: String(data?.periodStart ?? "").trim() || new Date().toISOString().slice(0, 10),
+      periodEnd: String(data?.periodEnd ?? "").trim() || new Date().toISOString().slice(0, 10),
+      filters: asJsonObject(data?.filters),
+      summary: asJsonObject(data?.summary),
+      chartData: asJsonObject(data?.chartData),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireManagerOrDirectorActor();
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("RPT");
+    const { error } = await runtimeDb.from("report_snapshots").insert({
+      id,
+      report_key: data.reportKey,
+      title: data.title,
+      period_start: data.periodStart,
+      period_end: data.periodEnd,
+      filters: data.filters,
+      summary: data.summary,
+      chart_data: data.chartData,
+      generated_by: actor.id,
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "report_snapshot.created",
+      targetType: "report_snapshot",
+      targetId: id,
+      summary: `${actor.name} archived report snapshot ${data.title}`,
+      details: {
+        reportKey: data.reportKey,
+        periodStart: data.periodStart,
+        periodEnd: data.periodEnd,
+      },
+    });
+    return { id };
   });
 
 export const createSupportThreadRecord = createServerFn({ method: "POST" })

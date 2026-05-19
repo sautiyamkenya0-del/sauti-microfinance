@@ -299,8 +299,8 @@ export type Penalty = {
   date: string;
   amount: number;
   reason: string;
-  status: "outstanding" | "paid";
-  paidFrom?: "round_off_pool" | "direct" | "mpesa";
+  status: "outstanding" | "paid" | "waived";
+  paidFrom?: "round_off_pool" | "direct" | "mpesa" | "waiver";
 };
 
 export type RoundOffEntry = {
@@ -316,6 +316,7 @@ export type MpesaAllocation = {
   matched: boolean;
   memberId?: string;
   account: string;
+  transactionId?: string;
   primary?: { type: Transaction["type"]; amount: number; loanId?: string; note?: string };
   toRoundOff?: number;
   penaltiesCleared?: { id: string; amount: number }[];
@@ -1107,7 +1108,12 @@ export function sbcDeductions(principal: number) {
   const processing = principal * (SBC_FEES.processingPct / 100);
   const insurance = principal * (SBC_FEES.insurancePct / 100);
   const transactionCost = principal * (SBC_FEES.transactionCostPct / 100);
-  return { processing, insurance, transactionCost, total: processing + insurance + transactionCost };
+  return {
+    processing,
+    insurance,
+    transactionCost,
+    total: processing + insurance + transactionCost,
+  };
 }
 
 export const SBC_UPFRONT_TABLE = [

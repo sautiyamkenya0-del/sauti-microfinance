@@ -1,10 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge, DirectorOnly, StatCard } from "@/components/ui-bits";
 import { useStore, fmtKES } from "@/lib/store";
-import { useMemo, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, Scale } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDownCircle, ArrowUpCircle, Database, RefreshCw, Scale } from "lucide-react";
+import { toast } from "sonner";
+
+import { syncLegacyTopupsRecord } from "@/lib/app-data.functions";
+import { type LegacyTopupImport } from "@/lib/legacy-finance";
+import { listLegacyTopupImports } from "@/lib/runtime-data.functions";
 
 export const Route = createFileRoute("/transactions")({
   head: () => ({ meta: [{ title: "Transactions — Sauti Microfinance" }] }),
@@ -34,10 +40,26 @@ const OUTFLOWS: ReadonlyArray<string> = ["withdrawal", "loan_disbursement", "pet
 
 function TxPage() {
   const { transactions, members, staff } = useStore();
+  const loadLegacyImports = useServerFn(listLegacyTopupImports);
+  const syncLegacyImports = useServerFn(syncLegacyTopupsRecord);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [memberFilter, setMemberFilter] = useState<string>("");
+  const [legacyImports, setLegacyImports] = useState<LegacyTopupImport[]>([]);
+  const [syncingLegacy, setSyncingLegacy] = useState(false);
+
+  const refreshLegacyImports = useCallback(async () => {
+    try {
+      setLegacyImports(await loadLegacyImports());
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load old-database topups.");
+    }
+  }, [loadLegacyImports]);
+
+  useEffect(() => {
+    refreshLegacyImports().catch(() => {});
+  }, [refreshLegacyImports]);
 
   const list = useMemo(
     () =>
@@ -56,6 +78,16 @@ function TxPage() {
     const outflow = list.filter((t) => OUTFLOWS.includes(t.type)).reduce((s, t) => s + t.amount, 0);
     return { inflow, outflow, net: inflow - outflow };
   }, [list]);
+
+  const legacyCounts = useMemo(
+    () => ({
+      applied: legacyImports.filter((row) => row.allocationStatus === "applied").length,
+      held: legacyImports.filter((row) => row.allocationStatus === "held").length,
+      pending: legacyImports.filter((row) => row.allocationStatus === "pending").length,
+      error: legacyImports.filter((row) => row.allocationStatus === "error").length,
+    }),
+    [legacyImports],
+  );
 
   return (
     <>
@@ -86,6 +118,114 @@ function TxPage() {
               tone={totals.net >= 0 ? "success" : "destructive"}
             />
           </div>
+        </DirectorOnly>
+
+        <DirectorOnly>
+          <Section
+            title="Old DB Topup Sync"
+            action={
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void refreshLegacyImports()}
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs hover:bg-muted"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Refresh
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      setSyncingLegacy(true);
+                      const result = await syncLegacyImports({ data: { limit: 150 } });
+                      await refreshLegacyImports();
+                      toast.success(
+                        `Old DB sync finished: ${result.appliedRows} applied, ${result.heldRows} held, ${result.erroredRows} errors.`,
+                      );
+                    } catch (error: any) {
+                      toast.error(error?.message ?? "Old DB sync failed.");
+                    } finally {
+                      setSyncingLegacy(false);
+                    }
+                  }}
+                  disabled={syncingLegacy}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  {syncingLegacy ? "Syncing..." : "Sync api_topup (Read-only)"}
+                </button>
+              </div>
+            }
+          >
+            <div className="grid gap-4 p-5 md:grid-cols-4">
+              <StatCard label="Imported" value={legacyImports.length} />
+              <StatCard label="Applied" value={legacyCounts.applied} tone="success" />
+              <StatCard label="Held" value={legacyCounts.held} tone="warning" />
+              <StatCard label="Errors" value={legacyCounts.error} tone="destructive" />
+            </div>
+            <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+              The old `api_topup` source is read-only. Sync only reads rows, stores a local audit
+              copy, and uses the SBC account/member number to distribute funds through the existing
+              waterfall.
+            </div>
+            <div className="overflow-x-auto border-t border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Source Ref</th>
+                    <th className="px-5 py-3 text-left">Account</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                    <th className="px-5 py-3 text-left">Matched Member</th>
+                    <th className="px-5 py-3 text-left">Status</th>
+                    <th className="px-5 py-3 text-left">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {legacyImports.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-5 py-8 text-center text-sm text-muted-foreground"
+                      >
+                        No old topups have been imported yet.
+                      </td>
+                    </tr>
+                  )}
+                  {legacyImports.map((row) => (
+                    <tr key={row.id}>
+                      <td className="px-5 py-3 font-mono text-xs">
+                        {row.sourceRef ?? row.sourceRowKey}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-xs">
+                        {row.sourceAccount ?? row.sourceMemberHint ?? "—"}
+                      </td>
+                      <td className="px-5 py-3 text-right font-semibold">
+                        {fmtKES(row.sourceAmount)}
+                      </td>
+                      <td className="px-5 py-3 text-xs">{row.matchedMemberId ?? "Unmatched"}</td>
+                      <td className="px-5 py-3">
+                        <Badge
+                          tone={
+                            row.allocationStatus === "applied"
+                              ? "success"
+                              : row.allocationStatus === "held"
+                                ? "warning"
+                                : row.allocationStatus === "error"
+                                  ? "destructive"
+                                  : "muted"
+                          }
+                        >
+                          {row.allocationStatus}
+                        </Badge>
+                      </td>
+                      <td className="px-5 py-3 text-xs text-muted-foreground">
+                        {row.allocationNotes.join(" ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
         </DirectorOnly>
 
         <div className="bg-card border border-border rounded-xl p-4 grid md:grid-cols-4 gap-3 items-end">

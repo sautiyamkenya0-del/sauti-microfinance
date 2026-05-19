@@ -42,7 +42,7 @@ export function useStaffMemos(enabled = true) {
       if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 20000);
+    const timer = window.setInterval(sync, 60000);
     window.addEventListener("focus", sync);
     document.addEventListener("visibilitychange", sync);
     return () => {

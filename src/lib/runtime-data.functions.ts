@@ -1,7 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
-import { requireMemberActor, requireSignedInSession, requireStaffActor } from "@/lib/auth.server";
+import {
+  requireDirectorActor,
+  requireMemberActor,
+  requireSignedInSession,
+  requireStaffActor,
+} from "@/lib/auth.server";
 
 type DbRow = Record<string, unknown>;
 
@@ -116,6 +121,114 @@ function mapPerformanceTargetRow(row: DbRow) {
   };
 }
 
+function mapLegacyTopupImportRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    sourceRowKey: readText(row.source_row_key),
+    sourceTable: readText(row.source_table),
+    sourceCreatedAt: optionalText(row.source_created_at),
+    sourceAccount: optionalText(row.source_account),
+    sourceMemberHint: optionalText(row.source_member_hint),
+    sourcePayerName: optionalText(row.source_payer_name),
+    sourcePhone: optionalText(row.source_phone),
+    sourceAmount: readNumber(row.source_amount),
+    sourceRef: optionalText(row.source_ref),
+    raw: row.raw && typeof row.raw === "object" ? (row.raw as Record<string, unknown>) : {},
+    matchedMemberId: optionalText(row.matched_member_id),
+    allocationStatus: readText(row.allocation_status) as "pending" | "applied" | "held" | "error",
+    allocationNotes: Array.isArray(row.allocation_notes)
+      ? row.allocation_notes.map((value) => readText(value)).filter(Boolean)
+      : [],
+    allocatedTransactionId: optionalText(row.allocated_transaction_id),
+    allocatedAt: optionalText(row.allocated_at),
+    syncRunId: optionalText(row.sync_run_id),
+    readOnly: row.read_only !== false,
+    lastSeenAt: readText(row.last_seen_at),
+    createdAt: readText(row.created_at),
+  };
+}
+
+function mapCarryoverProfileRow(row: DbRow) {
+  return {
+    memberId: readText(row.member_id),
+    savingsBalance: readNumber(row.savings_balance),
+    shareUnits: Math.max(0, Math.floor(readNumber(row.share_units))),
+    feesPaidTotal: readNumber(row.fees_paid_total),
+    loanRepaymentsTotal: readNumber(row.loan_repayments_total),
+    investmentBalance: readNumber(row.investment_balance),
+    otherCollectedTotal: readNumber(row.other_collected_total),
+    totalCollected: readNumber(row.total_collected),
+    pendingBalance: readNumber(row.pending_balance),
+    penaltiesOutstanding: readNumber(row.penalties_outstanding),
+    penaltiesWaivedTotal: readNumber(row.penalties_waived_total),
+    membershipFeePaid: row.membership_fee_paid === true,
+    cardFeePaid: row.card_fee_paid === true,
+    stickerFeePaid: row.sticker_fee_paid === true,
+    firstUpfrontPaid: row.first_upfront_paid === true,
+    completedLoanCycles: Math.max(0, Math.floor(readNumber(row.completed_loan_cycles))),
+    firstLoanStartDate: optionalText(row.first_loan_start_date),
+    lastLoanEndDate: optionalText(row.last_loan_end_date),
+    collectionBreakdown:
+      row.collection_breakdown && typeof row.collection_breakdown === "object"
+        ? (row.collection_breakdown as Record<string, unknown>)
+        : {},
+    notes: optionalText(row.notes),
+    createdBy: optionalText(row.created_by),
+    updatedBy: optionalText(row.updated_by),
+    createdAt: optionalText(row.created_at),
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+function mapCarryoverLoanRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    memberId: readText(row.member_id),
+    label: readText(row.label) || "Legacy loan",
+    loanCycleNumber: Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
+    principal: readNumber(row.principal),
+    interestRatePct: readNumber(row.interest_rate_pct),
+    termDays: Math.max(7, Math.floor(readNumber(row.term_days))) as 7 | 14 | 30 | 60 | 90,
+    dailySavingsAmount: readNumber(row.daily_savings_amount),
+    startDate: readText(row.start_date),
+    dueDate: optionalText(row.due_date),
+    closedOn: optionalText(row.closed_on),
+    paidToDate: readNumber(row.paid_to_date),
+    status: readText(row.status) as "active" | "closed" | "defaulted",
+    finished: row.finished === true,
+    penaltyWaivedAmount: readNumber(row.penalty_waived_amount),
+    notes: optionalText(row.notes),
+    createdBy: optionalText(row.created_by),
+    updatedBy: optionalText(row.updated_by),
+    createdAt: optionalText(row.created_at),
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+function mapReportSnapshotRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    reportKey: readText(row.report_key),
+    title: readText(row.title),
+    periodStart: readText(row.period_start),
+    periodEnd: readText(row.period_end),
+    filters:
+      row.filters && typeof row.filters === "object"
+        ? (row.filters as Record<string, unknown>)
+        : {},
+    summary:
+      row.summary && typeof row.summary === "object"
+        ? (row.summary as Record<string, unknown>)
+        : {},
+    chartData:
+      row.chart_data && typeof row.chart_data === "object"
+        ? (row.chart_data as Record<string, unknown>)
+        : {},
+    generatedBy: optionalText(row.generated_by),
+    createdAt: readText(row.created_at),
+  };
+}
+
 function groupSupportMessages(rows: DbRow[]) {
   const grouped = new Map<string, DbRow[]>();
   for (const row of rows) {
@@ -208,6 +321,66 @@ export const listPerformanceTargets = createServerFn({ method: "POST" }).handler
 
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => mapPerformanceTargetRow(row as DbRow));
+});
+
+export const listLegacyTopupImports = createServerFn({ method: "POST" }).handler(async () => {
+  await requireDirectorActor();
+  const runtimeDb = requireSupabaseAdmin() as any;
+  const { data, error } = await runtimeDb
+    .from("legacy_topup_imports")
+    .select("*")
+    .order("source_created_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(150);
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row: DbRow) => mapLegacyTopupImportRow(row));
+});
+
+export const loadMemberCarryover = createServerFn({ method: "POST" })
+  .inputValidator((data: { memberId: string }) => ({
+    memberId: String(data?.memberId ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    await requireDirectorActor();
+    if (!data.memberId) {
+      return { profile: null, loans: [] };
+    }
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const [profileResult, loansResult] = await Promise.all([
+      runtimeDb
+        .from("member_carryover_profiles")
+        .select("*")
+        .eq("member_id", data.memberId)
+        .maybeSingle(),
+      runtimeDb
+        .from("member_carryover_loans")
+        .select("*")
+        .eq("member_id", data.memberId)
+        .order("start_date", { ascending: false }),
+    ]);
+
+    if (profileResult.error) throw new Error(profileResult.error.message);
+    if (loansResult.error) throw new Error(loansResult.error.message);
+
+    return {
+      profile: profileResult.data ? mapCarryoverProfileRow(profileResult.data as DbRow) : null,
+      loans: (loansResult.data ?? []).map((row: DbRow) => mapCarryoverLoanRow(row)),
+    };
+  });
+
+export const listReportSnapshots = createServerFn({ method: "POST" }).handler(async () => {
+  await requireStaffActor();
+  const runtimeDb = requireSupabaseAdmin() as any;
+  const { data, error } = await runtimeDb
+    .from("report_snapshots")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row: DbRow) => mapReportSnapshotRow(row));
 });
 
 export const listSupportThreads = createServerFn({ method: "POST" }).handler(async () => {

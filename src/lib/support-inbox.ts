@@ -55,7 +55,7 @@ export function useSupportThreads(enabled = true) {
       if (document.hidden) return;
       refresh().catch(() => {});
     };
-    const timer = window.setInterval(sync, 15000);
+    const timer = window.setInterval(sync, 45000);
     window.addEventListener("focus", sync);
     document.addEventListener("visibilitychange", sync);
     return () => {
