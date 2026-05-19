@@ -92,6 +92,12 @@ const SUGGESTED: Suggested[] = [
     help: "STK Push passkey for the shortcode.",
   },
   {
+    key: "MPESA_CALLBACK_URL",
+    group: "M-Pesa",
+    label: "MPESA_CALLBACK_URL (optional)",
+    help: "Optional STK callback URL. Leave blank to use this app's confirmation endpoint.",
+  },
+  {
     key: "MPESA_SMS_URL",
     group: "M-Pesa",
     label: "MPESA_SMS_URL (optional)",
@@ -404,10 +410,12 @@ function SecretKeysPage() {
                 and M-Pesa scan features.
               </div>
               <div>
-                M-Pesa keys saved here override the build-time secrets and can be swapped without
-                redeploying unless the server sets <span className="font-mono">SAUTI_MPESA_SECRET_SOURCE=env-first</span>{" "}
-                or <span className="font-mono">env-only</span> to force hosting env values. The
-                diagnostic endpoint is disabled in production unless{" "}
+                M-Pesa now defaults to{" "}
+                <span className="font-mono">SAUTI_MPESA_SECRET_SOURCE=env-first</span> so hosting
+                env values behave like the legacy hardcoded setup. Use{" "}
+                <span className="font-mono">runtime-first</span> only when you want saved keys in
+                this vault to override hosting values. The diagnostic endpoint is disabled in
+                production unless{" "}
                 <span className="font-mono">SAUTI_ENABLE_MPESA_DIAGNOSTICS=true</span>.
               </div>
             </div>

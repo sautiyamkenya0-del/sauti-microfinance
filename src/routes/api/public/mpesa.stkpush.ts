@@ -31,6 +31,21 @@ function darajaTimestamp(date = new Date()) {
   return `${value("year")}${value("month")}${value("day")}${value("hour")}${value("minute")}${value("second")}`;
 }
 
+function formatDarajaPhone(value: unknown) {
+  let phone = String(value ?? "").trim();
+  if (phone.startsWith("+")) phone = phone.slice(1);
+  phone = phone.replace(/\D/g, "");
+  if (phone.startsWith("0")) phone = `254${phone.slice(1)}`;
+  if (/^7\d{8}$/.test(phone) || /^1\d{8}$/.test(phone)) phone = `254${phone}`;
+  return phone;
+}
+
+function callbackUrlFromConfig(configuredUrl: string | undefined, requestUrl: string) {
+  const configured = String(configuredUrl ?? "").trim();
+  if (configured) return configured;
+  return `${new URL(requestUrl).origin}/api/public/mpesa/confirmation`;
+}
+
 /** Daraja STK Push trigger.
  * POST { phone, amount, accountRef, description } -> sends a real Lipa Na M-Pesa Online prompt.
  */
@@ -41,18 +56,18 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
         try {
           const session = await requireSignedInSession();
           const body = await request.json();
-          const phoneRaw = String(body.phone ?? "").replace(/\D/g, "");
+          const msisdn = formatDarajaPhone(body.phone);
           const amount = Math.max(1, Math.floor(Number(body.amount) || 0));
           const accountRef = String(body.accountRef ?? "SBC").slice(0, 12);
           const description = String(body.description ?? "Sauti payment").slice(0, 100);
 
-          let msisdn = phoneRaw;
-          if (msisdn.startsWith("0")) msisdn = "254" + msisdn.slice(1);
-          if (msisdn.startsWith("+")) msisdn = msisdn.slice(1);
-
-          if (!/^254\d{9}$/.test(msisdn)) {
+          if (!/^254[17]\d{8}$/.test(msisdn)) {
             return Response.json(
-              { ok: false, error: "Invalid phone number. Use the format 2547XXXXXXXX." },
+              {
+                ok: false,
+                error:
+                  "Invalid phone format. Use 07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX.",
+              },
               { status: 400 },
             );
           }
@@ -148,8 +163,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
 
           const timestamp = darajaTimestamp();
           const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
-          const origin = new URL(request.url).origin;
-          const callback = `${origin}/api/public/mpesa/confirmation`;
+          const callback = callbackUrlFromConfig(activeConfig.callbackUrl, request.url);
 
           let stkRes: Response;
           try {

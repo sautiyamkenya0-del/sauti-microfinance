@@ -77,7 +77,12 @@ function normalizeResolutionMode(raw: string | undefined): SecretResolutionMode 
     .trim()
     .toLowerCase();
   if (!value) return undefined;
-  if (value === "runtime-first" || value === "env-first" || value === "runtime-only" || value === "env-only") {
+  if (
+    value === "runtime-first" ||
+    value === "env-first" ||
+    value === "runtime-only" ||
+    value === "env-only"
+  ) {
     return value;
   }
   if (value === "runtime") return "runtime-only";
@@ -87,15 +92,13 @@ function normalizeResolutionMode(raw: string | undefined): SecretResolutionMode 
 
 function secretResolutionModeForKey(key: string): SecretResolutionMode {
   const normalizedKey = key.toUpperCase();
-  const mpesaOverride =
-    normalizedKey.startsWith("MPESA_")
-      ? readServerEnv("SAUTI_MPESA_SECRET_SOURCE") ?? readServerEnv("MPESA_SECRET_SOURCE")
-      : undefined;
-  return (
-    normalizeResolutionMode(mpesaOverride) ??
-    normalizeResolutionMode(readServerEnv("SAUTI_SECRET_SOURCE")) ??
-    "runtime-first"
-  );
+  const mpesaOverride = normalizedKey.startsWith("MPESA_")
+    ? (readServerEnv("SAUTI_MPESA_SECRET_SOURCE") ?? readServerEnv("MPESA_SECRET_SOURCE"))
+    : undefined;
+  if (normalizedKey.startsWith("MPESA_")) {
+    return normalizeResolutionMode(mpesaOverride) ?? "env-first";
+  }
+  return normalizeResolutionMode(readServerEnv("SAUTI_SECRET_SOURCE")) ?? "runtime-first";
 }
 
 function resolveSecretCandidate(
@@ -142,8 +145,12 @@ export async function inspectSecretCandidates(key: string) {
 }
 
 export async function inspectSecret(key: string): Promise<SecretInspection> {
-  const { key: normalizedKey, runtimeVault, hostingEnv, resolutionMode } =
-    await inspectSecretCandidates(key);
+  const {
+    key: normalizedKey,
+    runtimeVault,
+    hostingEnv,
+    resolutionMode,
+  } = await inspectSecretCandidates(key);
   const effective = resolveSecretCandidate(resolutionMode, runtimeVault, hostingEnv);
   return {
     key: normalizedKey,

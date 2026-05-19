@@ -17,6 +17,7 @@ export type MpesaConfigVariant = {
   consumerSecret?: string;
   shortcode?: string;
   passkey?: string;
+  callbackUrl?: string;
   smsUrl?: string;
   smsUsername?: string;
   smsPassword?: string;
@@ -32,6 +33,7 @@ export type MpesaConfigVariant = {
     MPESA_CONSUMER_SECRET: SecretValueInspection["source"];
     MPESA_SHORTCODE: SecretValueInspection["source"];
     MPESA_PASSKEY: SecretValueInspection["source"];
+    MPESA_CALLBACK_URL: SecretValueInspection["source"];
     MPESA_SMS_URL: SecretValueInspection["source"];
     MPESA_SMS_USERNAME: SecretValueInspection["source"];
     MPESA_SMS_PASSWORD: SecretValueInspection["source"];
@@ -135,6 +137,7 @@ function buildVariantFromSecrets(args: {
   consumerSecret: SecretInspection;
   shortcode: SecretInspection;
   passkey: SecretInspection;
+  callbackUrl: SecretInspection;
   smsUrl: SecretInspection;
   smsUsername: SecretInspection;
   smsPassword: SecretInspection;
@@ -146,6 +149,7 @@ function buildVariantFromSecrets(args: {
   const consumerSecretDetails = pickCandidateValue(args.consumerSecret, args.label);
   const shortcodeDetails = pickCandidateValue(args.shortcode, args.label);
   const passkeyDetails = pickCandidateValue(args.passkey, args.label);
+  const callbackUrlDetails = pickCandidateValue(args.callbackUrl, args.label);
   const smsUrlDetails = pickCandidateValue(args.smsUrl, args.label);
   const smsUsernameDetails = pickCandidateValue(args.smsUsername, args.label);
   const smsPasswordDetails = pickCandidateValue(args.smsPassword, args.label);
@@ -162,6 +166,7 @@ function buildVariantFromSecrets(args: {
     consumerSecret: consumerSecretDetails.value,
     shortcode: shortcodeDetails.value,
     passkey: passkeyDetails.value,
+    callbackUrl: callbackUrlDetails.value,
     smsUrl: smsUrlDetails.value,
     smsUsername: smsUsernameDetails.value,
     smsPassword: smsPasswordDetails.value,
@@ -181,6 +186,7 @@ function buildVariantFromSecrets(args: {
       MPESA_CONSUMER_SECRET: consumerSecretDetails.source,
       MPESA_SHORTCODE: shortcodeDetails.source,
       MPESA_PASSKEY: passkeyDetails.source,
+      MPESA_CALLBACK_URL: callbackUrlDetails.source,
       MPESA_SMS_URL: smsUrlDetails.source,
       MPESA_SMS_USERNAME: smsUsernameDetails.source,
       MPESA_SMS_PASSWORD: smsPasswordDetails.source,
@@ -198,6 +204,7 @@ function variantFingerprint(config: MpesaConfigVariant) {
     consumerSecret: config.consumerSecret ?? "",
     shortcode: config.shortcode ?? "",
     passkey: config.passkey ?? "",
+    callbackUrl: config.callbackUrl ?? "",
   });
 }
 
@@ -276,6 +283,7 @@ export async function loadMpesaConfigVariants() {
     consumerSecretDetails,
     shortcodeDetails,
     passkeyDetails,
+    callbackUrlDetails,
     smsUrlDetails,
     smsUsernameDetails,
     smsPasswordDetails,
@@ -287,6 +295,7 @@ export async function loadMpesaConfigVariants() {
     inspectSecret("MPESA_CONSUMER_SECRET"),
     inspectSecret("MPESA_SHORTCODE"),
     inspectSecret("MPESA_PASSKEY"),
+    inspectSecret("MPESA_CALLBACK_URL"),
     inspectSecret("MPESA_SMS_URL"),
     inspectSecret("MPESA_SMS_USERNAME"),
     inspectSecret("MPESA_SMS_PASSWORD"),
@@ -302,6 +311,7 @@ export async function loadMpesaConfigVariants() {
     consumerSecret: consumerSecretDetails,
     shortcode: shortcodeDetails,
     passkey: passkeyDetails,
+    callbackUrl: callbackUrlDetails,
     smsUrl: smsUrlDetails,
     smsUsername: smsUsernameDetails,
     smsPassword: smsPasswordDetails,
