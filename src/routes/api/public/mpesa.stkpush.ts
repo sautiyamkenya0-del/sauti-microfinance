@@ -15,6 +15,22 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function darajaTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}${value("month")}${value("day")}${value("hour")}${value("minute")}${value("second")}`;
+}
+
 /** Daraja STK Push trigger.
  * POST { phone, amount, accountRef, description } -> sends a real Lipa Na M-Pesa Online prompt.
  */
@@ -130,10 +146,10 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
 
           const accessToken = tokenResult.accessToken;
 
-          const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+          const timestamp = darajaTimestamp();
           const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
           const origin = new URL(request.url).origin;
-          const callback = `${origin}/api/confirmation`;
+          const callback = `${origin}/api/public/mpesa/confirmation`;
 
           let stkRes: Response;
           try {
@@ -184,9 +200,20 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
               return Response.json(
                 {
                   ok: false,
-                  error: "M-Pesa STK is not enabled for the configured Daraja application.",
-                  hint: "Enable Lipa Na M-Pesa Online / STK Push for the same production app in the Daraja portal, or switch back to credentials that already have STK enabled.",
-                  details: { ...stkJson, requestId, errorCode, errorMessage },
+                  error: "Daraja rejected the configured M-Pesa app/token for STK Push.",
+                  hint: "If these production values work on the old site, this deployment is probably using different effective MPESA_* values from /secret-keys or the hosting env. Check /secret-keys, then set SAUTI_MPESA_SECRET_SOURCE=env-first or delete stale runtime MPESA_* keys.",
+                  details: {
+                    ...stkJson,
+                    requestId,
+                    errorCode,
+                    errorMessage,
+                    activeVariant: activeConfig.label,
+                    env: activeConfig.normalizedEnv,
+                    shortcode,
+                    sources: activeConfig.sources,
+                    callback,
+                    timestampZone: "Africa/Nairobi",
+                  },
                 },
                 { status: 502 },
               );
