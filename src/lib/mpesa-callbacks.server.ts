@@ -20,6 +20,10 @@ function successAck(resultDesc: string = "Success") {
   return Response.json({ ResultCode: 0, ResultDesc: resultDesc }, { headers: NO_STORE_HEADERS });
 }
 
+function retryAck(resultDesc: string = "Temporarily unavailable. Please retry.") {
+  return Response.json({ ResultCode: 1, ResultDesc: resultDesc }, { headers: NO_STORE_HEADERS });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -55,7 +59,10 @@ async function readBodyObject(request: Request) {
 }
 
 function buildC2bPayerName(body: Record<string, unknown>) {
-  const combined = [body.FirstName, body.MiddleName, body.LastName].filter(Boolean).join(" ").trim();
+  const combined = [body.FirstName, body.MiddleName, body.LastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   return combined || textValue(body.CustomerName);
 }
 
@@ -92,8 +99,9 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
       return null;
     });
 
-    const account = textValue(root.AccountReference ?? stkCallback.AccountReference ?? requestContext?.account)
-      ?.toUpperCase();
+    const account = textValue(
+      root.AccountReference ?? stkCallback.AccountReference ?? requestContext?.account,
+    )?.toUpperCase();
     const amount =
       numberValue(readStkMetadataValue(metadataItems, "Amount")) ||
       numberValue(requestContext?.amount);
@@ -158,22 +166,23 @@ export async function handleMpesaValidationRequest(request: Request) {
       console.error("mpesa validation audit error", error);
     }
 
-    return Response.json(
-      { ResultCode: 0, ResultDesc: "Accepted" },
-      { headers: NO_STORE_HEADERS },
-    );
+    return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error("mpesa validation parse error", error);
-    return Response.json(
-      { ResultCode: 0, ResultDesc: "Accepted" },
-      { headers: NO_STORE_HEADERS },
-    );
+    return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
   }
 }
 
 export async function handleMpesaConfirmationRequest(request: Request) {
+  let body: Record<string, unknown>;
   try {
-    const body = await readBodyObject(request);
+    body = await readBodyObject(request);
+  } catch (error) {
+    console.error("mpesa confirmation parse error", error);
+    return successAck("Accepted");
+  }
+
+  try {
     const normalized = await normalizeConfirmationBody(body);
     const expectedShortcodes = await listConfiguredMpesaShortcodes();
     if (
@@ -199,17 +208,13 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
     let processedResult: Awaited<ReturnType<typeof applyMpesaPaymentToDatabase>> | undefined;
     if (normalized.success && !event.processed && normalized.amount > 0 && normalized.account) {
-      try {
-        processedResult = await applyMpesaPaymentToDatabase({
-          eventId: event.id,
-          account: normalized.account,
-          amount: normalized.amount,
-          payerName: normalized.payerName,
-          mpesaRef: normalized.paymentRef ?? normalized.eventRef,
-        });
-      } catch (processingError) {
-        console.error("mpesa confirmation processing error", processingError);
-      }
+      processedResult = await applyMpesaPaymentToDatabase({
+        eventId: event.id,
+        account: normalized.account,
+        amount: normalized.amount,
+        payerName: normalized.payerName,
+        mpesaRef: normalized.paymentRef ?? normalized.eventRef,
+      });
     }
 
     if (processedResult?.matched) {
@@ -229,7 +234,7 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
     return successAck();
   } catch (error) {
-    console.error("mpesa confirmation parse error", error);
-    return successAck();
+    console.error("mpesa confirmation handling error", error);
+    return retryAck();
   }
 }
