@@ -6,6 +6,7 @@ import {
   type SecretResolutionMode,
   type SecretValueInspection,
 } from "@/lib/runtime-secrets.server";
+import { readServerEnv } from "@/lib/server-env";
 
 export type MpesaConfigVariant = {
   label: "effective" | "hosting_env" | "runtime_vault";
@@ -51,12 +52,60 @@ export type DarajaTokenAttempt = {
   };
   ok: boolean;
   status?: number;
+  timeoutMs?: number;
   body?: unknown;
   error?: string;
 };
 
+export class MpesaRequestTimeoutError extends Error {
+  timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Daraja request timed out after ${timeoutMs}ms.`);
+    this.name = "MpesaRequestTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 function normalizeMpesaEnv(value?: string) {
-  return String(value ?? "").trim().toLowerCase() === "sandbox" ? "sandbox" : "production";
+  return String(value ?? "")
+    .trim()
+    .toLowerCase() === "sandbox"
+    ? "sandbox"
+    : "production";
+}
+
+function toTimeout(value: string | undefined, fallback: number) {
+  const next = Number(value ?? fallback);
+  return Number.isFinite(next) && next >= 1000 ? Math.floor(next) : fallback;
+}
+
+export function mpesaDarajaTimeoutMs() {
+  return toTimeout(readServerEnv("MPESA_DARAJA_TIMEOUT_MS"), 8000);
+}
+
+export async function fetchMpesaDaraja(input: string, init: RequestInit = {}) {
+  const timeoutMs = mpesaDarajaTimeoutMs();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const errorName =
+      error && typeof error === "object" && "name" in error
+        ? String((error as { name?: unknown }).name ?? "")
+        : "";
+    if (errorName === "AbortError") {
+      throw new MpesaRequestTimeoutError(timeoutMs);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function mpesaBaseUrl(env?: string) {
@@ -65,10 +114,7 @@ function mpesaBaseUrl(env?: string) {
     : "https://api.safaricom.co.ke";
 }
 
-function pickCandidateValue(
-  details: SecretInspection,
-  label: MpesaConfigVariant["label"],
-) {
+function pickCandidateValue(details: SecretInspection, label: MpesaConfigVariant["label"]) {
   if (label === "runtime_vault") return details.candidates.runtimeVault;
   if (label === "hosting_env") return details.candidates.hostingEnv;
   return {
@@ -155,7 +201,9 @@ function variantFingerprint(config: MpesaConfigVariant) {
   });
 }
 
-async function fetchDarajaToken(config: MpesaConfigVariant): Promise<DarajaTokenAttempt & { accessToken?: string; expiresIn?: unknown }> {
+async function fetchDarajaToken(
+  config: MpesaConfigVariant,
+): Promise<DarajaTokenAttempt & { accessToken?: string; expiresIn?: unknown }> {
   const url = `${mpesaBaseUrl(config.env)}/oauth/v1/generate?grant_type=client_credentials`;
   const attempt: DarajaTokenAttempt = {
     label: config.label,
@@ -179,14 +227,16 @@ async function fetchDarajaToken(config: MpesaConfigVariant): Promise<DarajaToken
 
   try {
     const auth = Buffer.from(`${config.consumerKey}:${config.consumerSecret}`).toString("base64");
-    const res = await fetch(url, {
+    const res = await fetchMpesaDaraja(url, {
       headers: { Authorization: `Basic ${auth}` },
     });
     const text = await res.text();
     let body: unknown = text;
     try {
       body = JSON.parse(text);
-    } catch {}
+    } catch {
+      body = text;
+    }
     if (!res.ok) {
       return {
         ...attempt,
@@ -204,10 +254,17 @@ async function fetchDarajaToken(config: MpesaConfigVariant): Promise<DarajaToken
       accessToken: String(json.access_token ?? "").trim() || undefined,
       expiresIn: json.expires_in,
     };
-  } catch (error: any) {
+  } catch (error) {
+    if (error instanceof MpesaRequestTimeoutError) {
+      return {
+        ...attempt,
+        timeoutMs: error.timeoutMs,
+        error: error.message,
+      };
+    }
     return {
       ...attempt,
-      error: error?.message ?? "fetch failed",
+      error: error instanceof Error ? error.message : "fetch failed",
     };
   }
 }
@@ -271,7 +328,9 @@ export async function getDarajaAccessToken() {
     for (const variant of [variants.hostingEnv, variants.runtimeVault]) {
       if (
         variant.completeness.oauthReady &&
-        !orderedCandidates.some((existing) => variantFingerprint(existing) === variantFingerprint(variant))
+        !orderedCandidates.some(
+          (existing) => variantFingerprint(existing) === variantFingerprint(variant),
+        )
       ) {
         orderedCandidates.push(variant);
       }

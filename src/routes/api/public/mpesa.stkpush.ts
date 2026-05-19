@@ -4,8 +4,16 @@ import { getSupabaseAdminEnvStatus } from "@/integrations/supabase/client.server
 import { recordMpesaStkPushRequestEvent } from "@/lib/app-data.functions";
 import { requireMemberActor, requireSignedInSession } from "@/lib/auth.server";
 import { formatMembershipNumber } from "@/lib/membership";
-import { getDarajaAccessToken } from "@/lib/mpesa-config.server";
+import {
+  fetchMpesaDaraja,
+  getDarajaAccessToken,
+  MpesaRequestTimeoutError,
+} from "@/lib/mpesa-config.server";
 import { toComparableKenyanPhone } from "@/lib/utils";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
 
 /** Daraja STK Push trigger.
  * POST { phone, amount, accountRef, description } -> sends a real Lipa Na M-Pesa Online prompt.
@@ -94,6 +102,17 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           if (!tokenResult.ok) {
             const lastAttempt = tokenResult.attempts[tokenResult.attempts.length - 1];
             console.error("Daraja oauth failed", tokenResult.status, tokenResult.attempts);
+            if (lastAttempt?.timeoutMs) {
+              return Response.json(
+                {
+                  ok: false,
+                  error: "M-Pesa authentication timed out before Daraja responded.",
+                  hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
+                  attempts: tokenResult.attempts,
+                },
+                { status: 504 },
+              );
+            }
             return Response.json(
               {
                 ok: false,
@@ -116,34 +135,50 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           const origin = new URL(request.url).origin;
           const callback = `${origin}/api/confirmation`;
 
-          const stkRes = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              BusinessShortCode: shortcode,
-              Password: password,
-              Timestamp: timestamp,
-              TransactionType: "CustomerPayBillOnline",
-              Amount: amount,
-              PartyA: msisdn,
-              PartyB: shortcode,
-              PhoneNumber: msisdn,
-              CallBackURL: callback,
-              AccountReference: accountRef,
-              TransactionDesc: description,
-            }),
-          });
+          let stkRes: Response;
+          try {
+            stkRes = await fetchMpesaDaraja(`${base}/mpesa/stkpush/v1/processrequest`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                BusinessShortCode: shortcode,
+                Password: password,
+                Timestamp: timestamp,
+                TransactionType: "CustomerPayBillOnline",
+                Amount: amount,
+                PartyA: msisdn,
+                PartyB: shortcode,
+                PhoneNumber: msisdn,
+                CallBackURL: callback,
+                AccountReference: accountRef,
+                TransactionDesc: description,
+              }),
+            });
+          } catch (error) {
+            if (error instanceof MpesaRequestTimeoutError) {
+              return Response.json(
+                {
+                  ok: false,
+                  error: "M-Pesa STK request timed out before Daraja responded.",
+                  hint: "Safaricom Daraja did not respond quickly enough. Try again shortly; if this repeats, check Daraja status and network reachability from the server.",
+                  timeoutMs: error.timeoutMs,
+                },
+                { status: 504 },
+              );
+            }
+            throw error;
+          }
 
-          const stkJson = await stkRes.json().catch(() => ({}));
+          const stkJson = asRecord(await stkRes.json().catch(() => ({})));
           if (!stkRes.ok) {
             console.error("Daraja stkpush failed", stkRes.status, stkJson);
 
-            const errorCode = String((stkJson as any)?.errorCode ?? "");
-            const errorMessage = String((stkJson as any)?.errorMessage ?? "STK push failed");
-            const requestId = String((stkJson as any)?.requestId ?? "");
+            const errorCode = String(stkJson.errorCode ?? "");
+            const errorMessage = String(stkJson.errorMessage ?? "STK push failed");
+            const requestId = String(stkJson.requestId ?? "");
 
             if (errorCode === "404.001.03") {
               return Response.json(
@@ -151,7 +186,7 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                   ok: false,
                   error: "M-Pesa STK is not enabled for the configured Daraja application.",
                   hint: "Enable Lipa Na M-Pesa Online / STK Push for the same production app in the Daraja portal, or switch back to credentials that already have STK enabled.",
-                  details: { ...(stkJson as object), requestId, errorCode, errorMessage },
+                  details: { ...stkJson, requestId, errorCode, errorMessage },
                 },
                 { status: 502 },
               );
@@ -171,23 +206,26 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                 amount,
                 phone: msisdn,
                 description,
-                response: stkJson as Record<string, unknown>,
+                response: stkJson,
               },
               account: accountRef.toUpperCase(),
               amount,
               phone: msisdn,
-              checkoutRequestId: String((stkJson as any)?.CheckoutRequestID ?? "").trim() || undefined,
-              merchantRequestId: String((stkJson as any)?.MerchantRequestID ?? "").trim() || undefined,
+              checkoutRequestId: String(stkJson.CheckoutRequestID ?? "").trim() || undefined,
+              merchantRequestId: String(stkJson.MerchantRequestID ?? "").trim() || undefined,
             });
           } catch (trackingError) {
             console.error("stkpush request tracking error", trackingError);
           }
 
-          return Response.json({ ok: true, ...(stkJson as object) });
-        } catch (error: any) {
+          return Response.json({ ok: true, ...stkJson });
+        } catch (error) {
           console.error("stkpush handler error", error);
           return Response.json(
-            { ok: false, error: error?.message ?? "Unknown server error." },
+            {
+              ok: false,
+              error: error instanceof Error ? error.message : "Unknown server error.",
+            },
             { status: 500 },
           );
         }
