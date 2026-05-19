@@ -1,5 +1,12 @@
 import { Section, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, loanSummary, loanTermDaysOf, type Loan } from "@/lib/store";
+import {
+  useStore,
+  fmtKES,
+  loanDailySavingsAmount,
+  loanSummary,
+  loanTermDaysOf,
+  type Loan,
+} from "@/lib/store";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -33,14 +40,8 @@ function dueDateOf(l: Loan): string {
 }
 
 /** Daily savings tier as per common SBC plans: small loans → 50/day, larger → 100/day. */
-function savingsPerDay(approved: number): number {
-  return approved <= 5000 ? 50 : 100;
-}
-
 function dailyTotalOf(l: Loan): number {
-  const { approved, total, termDays } = loanSummary(l);
-  const perDay = Math.ceil((total + savingsPerDay(approved) * termDays) / termDays / 5) * 5;
-  return perDay;
+  return loanSummary(l).dailyCollectionAmount;
 }
 
 export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string) => void }) {
@@ -221,7 +222,7 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
                   <td className="px-5 py-3 text-xs leading-tight">
                     <div>{summary.termDays} days</div>
                     <div className="text-[11px] text-muted-foreground">
-                      Savings {fmtKES(savingsPerDay(summary.approved))}
+                      Savings {fmtKES(loanDailySavingsAmount(summary.approved))}
                     </div>
                     <div className="text-[11px] text-muted-foreground">
                       Daily total {fmtKES(dailyTotalOf(l))}

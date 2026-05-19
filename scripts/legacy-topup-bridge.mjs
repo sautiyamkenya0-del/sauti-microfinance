@@ -30,6 +30,14 @@ function requireSafeIdentifier(value, label) {
   return next;
 }
 
+function legacyTableCandidates(configuredTable) {
+  const candidates = [configuredTable?.trim(), "api_topup", "api_topups"].filter(
+    (value) => Boolean(value && String(value).trim().length > 0),
+  );
+
+  return [...new Set(candidates.map((value) => requireSafeIdentifier(value, "table")))];
+}
+
 function normalizeColumnName(value) {
   return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -166,7 +174,7 @@ const dbName = requireEnv("OLD_DB_NAME");
 const dbUser = requireEnv("OLD_DB_USER");
 const dbPass = requireEnv("OLD_DB_PASS");
 const dbPort = toPort(process.env.OLD_DB_PORT, 3306);
-const sourceTable = requireSafeIdentifier(process.env.OLD_DB_TOPUP_TABLE || "api_topup", "table");
+const configuredSourceTable = String(process.env.OLD_DB_TOPUP_TABLE ?? "").trim() || undefined;
 const connectTimeout = toTimeout(process.env.OLD_DB_CONNECT_TIMEOUT_MS, 10000);
 const queryTimeout = toTimeout(process.env.OLD_DB_QUERY_TIMEOUT_MS, 15000);
 const bindHost = String(process.env.OLD_DB_BRIDGE_BIND ?? "127.0.0.1").trim() || "127.0.0.1";
@@ -194,9 +202,29 @@ async function queryLegacy(sql, values) {
   return pool.query({ sql, timeout: queryTimeout }, values);
 }
 
+async function resolveLegacySourceTable() {
+  const checkedTables = [];
+
+  for (const tableName of legacyTableCandidates(configuredSourceTable)) {
+    checkedTables.push(tableName);
+    try {
+      const [, fields] = await queryLegacy(`SELECT * FROM ${mysql.escapeId(tableName)} LIMIT 1`);
+      return {
+        sourceTable: tableName,
+        fields: fields ?? [],
+      };
+    } catch (error) {
+      if (String(error?.code ?? "") === "ER_NO_SUCH_TABLE") continue;
+      throw error;
+    }
+  }
+
+  throw new Error(`Could not find a legacy topup table. Checked: ${checkedTables.join(", ")}.`);
+}
+
 async function loadLegacyTopups(limit) {
+  const { sourceTable, fields } = await resolveLegacySourceTable();
   const escapedTable = mysql.escapeId(sourceTable);
-  const [, fields] = await queryLegacy(`SELECT * FROM ${escapedTable} LIMIT 1`);
   const columns = (fields ?? []).map((field) => field.name);
   if (!columns.length) {
     return { columns: [], mappings: {}, rows: [] };
@@ -294,6 +322,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/health") {
+      const { sourceTable } = await resolveLegacySourceTable();
       json(res, 200, {
         ok: true,
         sourceTable,
@@ -321,7 +350,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(bindPort, bindHost, () => {
   console.log(
-    `[legacy-topup-bridge] listening on http://${bindHost}:${bindPort} for table ${sourceTable}`,
+    `[legacy-topup-bridge] listening on http://${bindHost}:${bindPort} for legacy topup sync`,
   );
 });
 

@@ -93,6 +93,16 @@ function requireSafeIdentifier(value: string, label: string) {
   return next;
 }
 
+function legacyTableCandidates(configuredTable: string | undefined) {
+  const candidates = [
+    configuredTable?.trim(),
+    "api_topup",
+    "api_topups",
+  ].filter((value): value is string => Boolean(value && value.trim().length > 0));
+
+  return [...new Set(candidates.map((value) => requireSafeIdentifier(value, "old database table")))];
+}
+
 let legacyPool: Pool | undefined;
 
 function createLegacyPool() {
@@ -149,6 +159,30 @@ async function queryLegacy(
     unknown,
     FieldPacket[],
   ];
+}
+
+async function resolveLegacySourceTable(pool: Pool, configuredTable: string | undefined) {
+  const checkedTables: string[] = [];
+
+  for (const tableName of legacyTableCandidates(configuredTable)) {
+    checkedTables.push(tableName);
+    try {
+      const [, fields] = await queryLegacy(pool, `SELECT * FROM ${mysql.escapeId(tableName)} LIMIT 1`);
+      return {
+        sourceTable: tableName,
+        fields: (fields as FieldPacket[]) ?? [],
+      };
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+      if (code === "ER_NO_SUCH_TABLE") continue;
+      throw error;
+    }
+  }
+
+  throw new Error(
+    `Could not find a legacy topup table. Checked: ${checkedTables.join(", ")}.`,
+  );
 }
 
 function normalizeColumnName(value: string) {
@@ -375,10 +409,9 @@ export async function loadLegacyTopupRows(limit: number = 100): Promise<LegacyTo
     );
   }
 
-  const sourceTable = requireSafeIdentifier(env.table, "old database table");
+  const { sourceTable, fields } = await resolveLegacySourceTable(pool, env.table);
   const escapedTable = mysql.escapeId(sourceTable);
-  const [, fields] = await queryLegacy(pool, `SELECT * FROM ${escapedTable} LIMIT 1`);
-  const columns = ((fields as FieldPacket[]) ?? []).map((field) => field.name);
+  const columns = (fields ?? []).map((field) => field.name);
   if (!columns.length) {
     return {
       columns: [],

@@ -101,7 +101,15 @@ function mapFeePolicyRow(row: DbRow) {
         ? undefined
         : Math.max(0, Math.floor(readNumber(row.duration_days))),
     effectiveFrom: readText(row.effective_from),
-    scope: readText(row.scope) as "all" | "new_only" | "loan_holders" | "investors",
+    scope: readText(row.scope) as
+      | "all"
+      | "new_only"
+      | "selected_members"
+      | "loan_holders"
+      | "investors",
+    selectedMemberIds: Array.isArray(row.selected_member_ids)
+      ? row.selected_member_ids.map((value) => readText(value)).filter(Boolean)
+      : [],
     custom: row.custom === true,
     notes: optionalText(row.notes),
     updatedAt: readText(row.updated_at),

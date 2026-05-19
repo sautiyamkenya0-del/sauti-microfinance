@@ -11,6 +11,7 @@ import {
 import { recordAudit } from "@/lib/audit.server";
 import {
   DEFAULT_FEE_POLICIES,
+  feePolicyAppliesToMember,
   feePolicyAmount,
   normalizeFeePolicies,
   type FeePolicy,
@@ -140,6 +141,7 @@ function summarizeAttachment(attachment?: Record<string, unknown>) {
 const SHARE_PRICE = 500;
 const ROUNDING_BASE = DEFAULT_POLICY_SETTINGS.percentages.roundOffStep;
 const MANDATORY_SAVINGS_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold;
+const MANDATORY_SHARES_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySharesThreshold;
 const MAX_FIELD_VISIT_PHOTOS = 6;
 const MAX_FIELD_VISIT_TOTAL_BYTES = 8 * 1024 * 1024;
 
@@ -563,38 +565,13 @@ export async function applyMpesaPaymentToDatabase(args: {
 
   const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
   const feePolicies = await loadRuntimeFeePolicies(supabaseAdmin);
+  const normalizedFeePolicies = normalizeFeePolicies(feePolicies);
   const memberPatch: Record<string, unknown> = {};
   const roundOffStep = policySettings.percentages.roundOffStep || ROUNDING_BASE;
   const mandatorySavingsThreshold =
     policySettings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD;
-  const feeQueue: Record<
-    string,
-    {
-      key: "fee_membership" | "fee_card" | "fee_sticker";
-      label: string;
-      amount: number;
-      required: boolean;
-    }
-  > = {
-    membership_fee: {
-      key: "fee_membership",
-      label: "Membership fee",
-      amount: feePolicyAmount(feePolicies, "membership", 0),
-      required: true,
-    },
-    card_fee: {
-      key: "fee_card",
-      label: "Membership card",
-      amount: feePolicyAmount(feePolicies, "card", 0),
-      required: true,
-    },
-    sticker_fee: {
-      key: "fee_sticker",
-      label: "Sticker fee",
-      amount: feePolicyAmount(feePolicies, "sticker", 0),
-      required: memberNeedsStickerRow(member),
-    },
-  };
+  const mandatorySharesThreshold =
+    policySettings.percentages.mandatorySharesThreshold || MANDATORY_SHARES_THRESHOLD;
 
   const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
     .from("penalties")
@@ -614,12 +591,74 @@ export async function applyMpesaPaymentToDatabase(args: {
     .maybeSingle();
   if (activeLoanError) throw new Error(activeLoanError.message);
 
+  const feeApplies = (key: string) => {
+    const policy = normalizedFeePolicies.find((row) => row.key === key);
+    if (!policy) return false;
+    return feePolicyAppliesToMember(
+      policy,
+      {
+        id: memberId,
+        joinedAt: member.joined_at ?? undefined,
+        category: member.member_category ?? undefined,
+        isInvestor: member.is_investor ?? undefined,
+      },
+      { hasActiveLoan: !!activeLoan },
+    );
+  };
+  const feeQueue: Record<
+    string,
+    {
+      key: "fee_membership" | "fee_card" | "fee_sticker";
+      label: string;
+      amount: number;
+      required: boolean;
+    }
+  > = {
+    membership_fee: {
+      key: "fee_membership",
+      label: "Membership fee",
+      amount: feeApplies("membership") ? feePolicyAmount(normalizedFeePolicies, "membership", 0) : 0,
+      required: feeApplies("membership"),
+    },
+    card_fee: {
+      key: "fee_card",
+      label: "Membership card",
+      amount: feeApplies("card") ? feePolicyAmount(normalizedFeePolicies, "card", 0) : 0,
+      required: feeApplies("card"),
+    },
+    sticker_fee: {
+      key: "fee_sticker",
+      label: "Sticker fee",
+      amount: feeApplies("sticker") ? feePolicyAmount(normalizedFeePolicies, "sticker", 0) : 0,
+      required: memberNeedsStickerRow(member) && feeApplies("sticker"),
+    },
+  };
+
   const scenario = activeLoan ? "member_with_loan" : "member_without_loan";
   const waterfall = waterfallRuleForScenario(scenario, policySettings).steps;
+  const preprocessingSteps = waterfall.filter(
+    (step) =>
+      step === "membership_fee" ||
+      step === "card_fee" ||
+      step === "sticker_fee" ||
+      step === "penalties",
+  );
 
   function setPrimaryIfMissing(type: string, amount: number, note: string, loanId?: string) {
     if (primary) return;
     primary = { type, amount, note, loanId };
+  }
+
+  function currentSavingsBalance() {
+    return Number(memberPatch.savings_balance ?? member.savings_balance ?? 0);
+  }
+
+  function currentShareUnits() {
+    return Number(memberPatch.shares ?? member.shares ?? 0);
+  }
+
+  function currentShareValue() {
+    return currentShareUnits() * SHARE_PRICE;
   }
 
   function queueSavingsDeposit(applied: number, notePrefix: string) {
@@ -642,10 +681,9 @@ export async function applyMpesaPaymentToDatabase(args: {
       payer_name: args.payerName,
       note: `Paybill ${norm} - ${args.payerName ?? ""}`,
     });
-    memberPatch.savings_balance =
-      Number(memberPatch.savings_balance ?? member.savings_balance ?? 0) + applied;
+    memberPatch.savings_balance = currentSavingsBalance() + applied;
     if (surplus > 0) toRoundOff += surplus;
-    if (Number(memberPatch.savings_balance ?? 0) < mandatorySavingsThreshold) {
+    if (currentSavingsBalance() < mandatorySavingsThreshold) {
       notes.push(
         `${notePrefix} Member is still below the mandatory savings threshold of ${mandatorySavingsThreshold}/=.`,
       );
@@ -654,7 +692,165 @@ export async function applyMpesaPaymentToDatabase(args: {
     }
   }
 
-  for (const step of waterfall) {
+  function queueSharePurchase(applied: number, notePrefix: string) {
+    if (applied <= 0) return;
+    const wholeUnits = Math.floor(applied / SHARE_PRICE);
+    const actualApplied = wholeUnits * SHARE_PRICE;
+    if (actualApplied <= 0) return;
+
+    setPrimaryIfMissing(
+      "share_purchase",
+      actualApplied,
+      `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+    );
+    txBatch.push({
+      date: today,
+      type: "share_purchase",
+      amount: actualApplied,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Mandatory shares via Paybill ${norm}`,
+    });
+    memberPatch.shares = currentShareUnits() + wholeUnits;
+    notes.push(
+      `${notePrefix} Converted ${actualApplied}/= into ${wholeUnits} mandatory share unit(s).`,
+    );
+  }
+
+  function queuePurposePoolContribution(applied: number, reason: string) {
+    if (applied <= 0) return;
+    setPrimaryIfMissing(
+      "fee_payment",
+      applied,
+      `Purpose pool via Paybill ${norm}`,
+    );
+    txBatch.push({
+      date: today,
+      type: "fee_payment",
+      amount: applied,
+      member_id: memberId,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Purpose pool contribution (auto) - ${reason}`,
+    });
+    notes.push(`Routed ${applied}/= into the internal purpose pool (${reason}).`);
+  }
+
+  async function applyLoanRepayment(applied: number) {
+    if (!activeLoan || applied <= 0) return 0;
+    const summary = loanBalanceSummary(activeLoan);
+    const safeApplied = Math.min(applied, summary.balance);
+    if (safeApplied <= 0) return applied;
+
+    const rounded = roundUpKES(safeApplied, roundOffStep);
+    const surplus = Math.max(0, rounded - safeApplied);
+    if (surplus > 0) toRoundOff += surplus;
+
+    setPrimaryIfMissing(
+      "loan_repayment",
+      safeApplied,
+      `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+      activeLoan.id,
+    );
+    txBatch.push({
+      date: today,
+      type: "loan_repayment",
+      amount: safeApplied,
+      member_id: memberId,
+      loan_id: activeLoan.id,
+      by_staff: "MPESA",
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+    });
+
+    const nextPaid = Number(activeLoan.paid ?? 0) + safeApplied;
+    const nextBalance = Math.max(0, summary.total - nextPaid);
+    const nextStatus = nextBalance <= 0 ? "closed" : activeLoan.status;
+    activeLoan.paid = nextPaid;
+    activeLoan.status = nextStatus;
+    const { error: loanUpdateError } = await supabaseAdmin
+      .from("loans")
+      .update({
+        paid: nextPaid,
+        status: nextStatus,
+      })
+      .eq("id", activeLoan.id);
+    if (loanUpdateError) throw new Error(loanUpdateError.message);
+
+    if (!member.fee_first_upfront_paid) {
+      memberPatch.fee_first_upfront_paid = true;
+    }
+
+    notes.push(
+      `Applied ${safeApplied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
+    );
+    return Math.max(0, applied - safeApplied);
+  }
+
+  function allocateSavingsWaterfall(applied: number, notePrefix: string) {
+    let remainingSavingsPortion = Math.max(0, applied);
+    if (remainingSavingsPortion <= 0) return;
+
+    const savingsGap = Math.max(0, mandatorySavingsThreshold - currentSavingsBalance());
+    const savingsApplied = Math.min(remainingSavingsPortion, savingsGap);
+    if (savingsApplied > 0) {
+      queueSavingsDeposit(savingsApplied, notePrefix);
+      remainingSavingsPortion -= savingsApplied;
+    }
+
+    const shareGapAmount = Math.max(0, mandatorySharesThreshold - currentShareValue());
+    const desiredShareAmount = Math.min(remainingSavingsPortion, shareGapAmount);
+    const shareApplied = Math.floor(desiredShareAmount / SHARE_PRICE) * SHARE_PRICE;
+    if (shareApplied > 0) {
+      queueSharePurchase(shareApplied, notePrefix);
+      remainingSavingsPortion -= shareApplied;
+    }
+
+    if (remainingSavingsPortion > 0) {
+      const stillBelowShares = currentShareValue() < mandatorySharesThreshold;
+      queuePurposePoolContribution(
+        remainingSavingsPortion,
+        stillBelowShares
+          ? "share-stage remainder below a full 500 share block"
+          : "amount above mandatory savings and shares thresholds",
+      );
+      remainingSavingsPortion = 0;
+    }
+  }
+
+  async function allocateMemberPaymentAfterFeesAndPenalties() {
+    if (remaining <= 0) return;
+
+    if (!activeLoan) {
+      allocateSavingsWaterfall(remaining, "Non-loan flow:");
+      remaining = 0;
+      return;
+    }
+
+    const approvedAmount = Number(activeLoan.approved_amount ?? activeLoan.principal ?? 0);
+    const dailySavingsPortion = Math.min(remaining, approvedAmount <= 5000 ? 50 : 100);
+    if (dailySavingsPortion > 0) {
+      allocateSavingsWaterfall(dailySavingsPortion, "Loan savings leg:");
+      remaining -= dailySavingsPortion;
+    }
+
+    if (remaining > 0) {
+      const overflow = await applyLoanRepayment(remaining);
+      remaining = 0;
+      if (overflow > 0) {
+        allocateSavingsWaterfall(overflow, "Post-loan remainder:");
+      }
+    }
+  }
+
+  for (const step of preprocessingSteps) {
     if (remaining <= 0) break;
 
     if (step === "membership_fee" || step === "card_fee" || step === "sticker_fee") {
@@ -690,67 +886,9 @@ export async function applyMpesaPaymentToDatabase(args: {
       }
       continue;
     }
-
-    if (step === "active_loan_repayment" && activeLoan) {
-      const summary = loanBalanceSummary(activeLoan);
-      const applied = Math.min(remaining, summary.balance);
-      if (applied <= 0) continue;
-      const rounded = roundUpKES(applied, roundOffStep);
-      const surplus = Math.max(0, rounded - applied);
-      if (remaining >= rounded) {
-        remaining -= rounded;
-        if (surplus > 0) toRoundOff += surplus;
-      } else {
-        remaining = 0;
-      }
-
-      setPrimaryIfMissing(
-        "loan_repayment",
-        applied,
-        `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
-        activeLoan.id,
-      );
-      txBatch.push({
-        date: today,
-        type: "loan_repayment",
-        amount: applied,
-        member_id: memberId,
-        loan_id: activeLoan.id,
-        by_staff: "MPESA",
-        ref: args.mpesaRef,
-        account: norm,
-        payer_name: args.payerName,
-        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-      });
-
-      const nextPaid = Number(activeLoan.paid ?? 0) + applied;
-      const nextBalance = Math.max(0, summary.total - nextPaid);
-      const { error: loanUpdateError } = await supabaseAdmin
-        .from("loans")
-        .update({
-          paid: nextPaid,
-          status: nextBalance <= 0 ? "closed" : activeLoan.status,
-        })
-        .eq("id", activeLoan.id);
-      if (loanUpdateError) throw new Error(loanUpdateError.message);
-
-      if (!member.fee_first_upfront_paid) {
-        memberPatch.fee_first_upfront_paid = true;
-      }
-
-      notes.push(
-        `Applied ${applied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
-      );
-      continue;
-    }
-
-    if (step === "savings") {
-      const applied = remaining;
-      queueSavingsDeposit(applied, "");
-      remaining = 0;
-      continue;
-    }
   }
+
+  await allocateMemberPaymentAfterFeesAndPenalties();
 
   if (penaltiesCleared.length > 0) {
     for (const penalty of penaltiesCleared) {
@@ -763,9 +901,9 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   if (remaining > 0) {
-    queueSavingsDeposit(remaining, "Safety fallback:");
+    allocateSavingsWaterfall(remaining, "Safety fallback:");
     notes.push(
-      "Remaining balance was routed to savings because the configured waterfall ended before the full amount was allocated.",
+      "Remaining balance was routed through the savings/shares/purpose-pool flow because the configured preprocessing steps ended before the full amount was allocated.",
     );
     remaining = 0;
   }
@@ -1137,6 +1275,9 @@ function mapFeePolicyRow(row: any) {
     durationDays: row.duration_days ?? undefined,
     effectiveFrom: row.effective_from,
     scope: row.scope,
+    selectedMemberIds: Array.isArray(row.selected_member_ids)
+      ? row.selected_member_ids.map((value: unknown) => String(value ?? "").trim()).filter(Boolean)
+      : [],
     custom: row.custom,
     notes: row.notes ?? undefined,
     updatedAt: row.updated_at,
@@ -2924,7 +3065,8 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       permanence: "permanent" | "semi";
       durationDays?: number;
       effectiveFrom: string;
-      scope: "all" | "new_only" | "loan_holders" | "investors";
+      scope: "all" | "new_only" | "selected_members" | "loan_holders" | "investors";
+      selectedMemberIds?: string[];
       custom?: boolean;
       notes?: string;
     }) => ({
@@ -2936,6 +3078,9 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       effectiveFrom:
         String(data?.effectiveFrom ?? "").trim() || new Date().toISOString().slice(0, 10),
       scope: data?.scope ?? "all",
+      selectedMemberIds: Array.isArray(data?.selectedMemberIds)
+        ? data.selectedMemberIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+        : [],
       custom: !!data?.custom,
       notes: data?.notes?.trim() || undefined,
     }),
@@ -2943,6 +3088,9 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const actor = await requireDirectorActor();
     if (!data.key || !data.label) throw new Error("Fee policy key and label are required.");
+    if (data.scope === "selected_members" && data.selectedMemberIds.length === 0) {
+      throw new Error("Select at least one member for a selected-members fee.");
+    }
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { error } = await runtimeDb.from("fee_policies").upsert({
       key: data.key,
@@ -2952,6 +3100,7 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       duration_days: data.permanence === "semi" ? (data.durationDays ?? null) : null,
       effective_from: data.effectiveFrom,
       scope: data.scope,
+      selected_member_ids: data.scope === "selected_members" ? data.selectedMemberIds : [],
       custom: data.custom,
       notes: data.notes ?? null,
     });
@@ -2969,6 +3118,7 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
         durationDays: data.durationDays ?? null,
         effectiveFrom: data.effectiveFrom,
         scope: data.scope,
+        selectedMemberIds: data.scope === "selected_members" ? data.selectedMemberIds : [],
         custom: data.custom,
       },
     });

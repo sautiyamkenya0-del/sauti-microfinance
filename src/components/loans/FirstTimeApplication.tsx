@@ -1,5 +1,6 @@
 import { Section } from "@/components/ui-bits";
 import {
+  type BusinessPermanence,
   useStore,
   formatMembershipNumber,
   fmtKES,
@@ -13,8 +14,9 @@ import {
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
-  upfrontRequirementForAmount,
+  upfrontTotalsForAmount,
 } from "@/lib/store";
+import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import { Input, Select, Row, inputCss } from "./atoms";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -31,7 +33,8 @@ export function FirstTimeApplication({
   memberId?: string;
   onSubmitted?: (loanId: string) => void;
 }) {
-  const { members, currentUser, addLoan, addMember } = useStore();
+  const { members, currentUser, addLoan, addMember, feePolicies } = useStore();
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const nextMemberNo = useMemo(
     () =>
       nextMembershipNumber(
@@ -51,6 +54,7 @@ export function FirstTimeApplication({
     gender: "Male",
     dob: "",
     businessType: "Mama Mboga",
+    businessPermanence: (existing?.businessPermanence ?? "") as "" | BusinessPermanence,
     tradingName: "",
     businessLocation: "",
     county: "",
@@ -95,6 +99,7 @@ export function FirstTimeApplication({
         fullName: existing.name,
         phone: existing.phone,
         membershipNo: formatMembershipNumber(existing.id),
+        businessPermanence: existing.businessPermanence ?? prev.businessPermanence,
       }));
       return;
     }
@@ -112,6 +117,50 @@ export function FirstTimeApplication({
     setF((prev) => ({ ...prev, repaymentDays: repaymentOptions[repaymentOptions.length - 1] }));
   }, [f.repaymentDays, repaymentOptions]);
 
+  const previewMemberId = useMemo(
+    () => normalizeMembershipNumber(f.membershipNo) || existing?.id || nextMemberNo,
+    [existing?.id, f.membershipNo, nextMemberNo],
+  );
+  const stickerApplicable = (existing?.businessPermanence ?? f.businessPermanence) === "permanent";
+  const previewMember = useMemo(
+    () => ({
+      id: previewMemberId,
+      joinedAt: existing?.joinedAt ?? todayIso,
+      category: existing?.category ?? "member",
+      isInvestor: existing?.isInvestor ?? false,
+    }),
+    [
+      existing?.category,
+      existing?.id,
+      existing?.isInvestor,
+      existing?.joinedAt,
+      previewMemberId,
+      todayIso,
+    ],
+  );
+  const membershipPolicy = feePolicies.find((fee) => fee.key === "membership");
+  const cardPolicy = feePolicies.find((fee) => fee.key === "card");
+  const stickerPolicy = feePolicies.find((fee) => fee.key === "sticker");
+  const membershipFeeDue =
+    membershipPolicy &&
+    feePolicyAppliesToMember(membershipPolicy, previewMember, { hasActiveLoan: false }) &&
+    !existing?.fees.membership
+      ? membershipPolicy.amount
+      : 0;
+  const cardFeeDue =
+    cardPolicy &&
+    feePolicyAppliesToMember(cardPolicy, previewMember, { hasActiveLoan: false }) &&
+    !existing?.fees.card
+      ? cardPolicy.amount
+      : 0;
+  const stickerFeeDue =
+    stickerPolicy &&
+    feePolicyAppliesToMember(stickerPolicy, previewMember, { hasActiveLoan: false }) &&
+    stickerApplicable &&
+    !existing?.fees.sticker
+      ? stickerPolicy.amount
+      : 0;
+
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDays(f.repaymentDays);
     const ratePct = loanRateForTerm(termDays);
@@ -121,18 +170,35 @@ export function FirstTimeApplication({
       termPeriodsFromDays(termDays),
     );
     const ded = sbcDeductions(f.loanAmount);
-    const upfront = upfrontRequirementForAmount(f.loanAmount).tier;
+    const upfrontTotals = upfrontTotalsForAmount(f.loanAmount, {
+      membershipFeeAmount: membershipFeeDue,
+      cardFeeAmount: cardFeeDue,
+      stickerFeeAmount: stickerFeeDue,
+      includeSticker: stickerApplicable,
+    });
     return {
       ratePct,
       termDays,
       interest,
       total,
       ded,
-      upfront,
+      upfront: {
+        range: upfrontTotals.tier?.range ?? "",
+        minShares: upfrontTotals.sharesAmount,
+        minSavings: upfrontTotals.savingsAmount,
+      },
+      upfrontTotals,
       netDisbursed: f.loanAmount - ded.total,
       dailyPay: total / termDays,
     };
-  }, [f.loanAmount, f.repaymentDays]);
+  }, [
+    cardFeeDue,
+    f.loanAmount,
+    f.repaymentDays,
+    membershipFeeDue,
+    stickerApplicable,
+    stickerFeeDue,
+  ]);
 
   const submit = async () => {
     if (!f.fullName || !f.phone || f.loanAmount <= 0)
@@ -147,16 +213,25 @@ export function FirstTimeApplication({
     if (f.membershipNo && !normalizedMembershipNo) {
       return toast.error("Membership number must follow the SBC0001K format.");
     }
+    const businessPermanence = existing?.businessPermanence ?? (f.businessPermanence || undefined);
+    if (!businessPermanence) {
+      return toast.error("Select whether the business is permanent or semi-permanent.");
+    }
     let mid = members.find((x) => x.phone === phone)?.id;
     if (!mid)
       mid = await addMember({
         memberId: normalizedMembershipNo,
         name: f.fullName,
         phone,
-        joinedAt: new Date().toISOString().slice(0, 10),
+        joinedAt: todayIso,
         status: "active",
         shares: 0,
         savingsBalance: 0,
+        category: existing?.category ?? "member",
+        businessType: f.businessType || undefined,
+        businessPermanence,
+        businessName: f.tradingName || undefined,
+        businessAddress: f.businessLocation || undefined,
       });
     const loanId = await addLoan({
       memberId: mid,
@@ -214,6 +289,25 @@ export function FirstTimeApplication({
               "Other",
             ]}
           />
+          <label className="block">
+            <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+              Business Setup
+            </span>
+            <select
+              value={f.businessPermanence}
+              onChange={(event) =>
+                set("businessPermanence", event.target.value as "" | BusinessPermanence)
+              }
+              className="loan-input mt-1"
+            >
+              <option value="">Select business setup</option>
+              <option value="permanent">Permanent</option>
+              <option value="semi">Semi-permanent</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-muted-foreground">
+              Permanent businesses attract the sticker fee. Semi-permanent businesses do not.
+            </span>
+          </label>
           <Input
             label="Trading Name"
             value={f.tradingName}
@@ -571,12 +665,33 @@ export function FirstTimeApplication({
             <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
             <Row label="Daily Repayment" value={fmtKES(calc.dailyPay)} />
             <Row label="Repayment Period" value={`${calc.termDays} days`} />
-            {calc.upfront && (
+            {calc.upfrontTotals.totalUpfrontNow > 0 && (
               <div className="bg-muted/50 rounded-md p-3 text-xs">
-                <div className="font-medium text-foreground">Upfront for {calc.upfront.range}:</div>
-                <div>
+                <div className="font-medium text-foreground">
+                  {calc.upfrontTotals.tier
+                    ? `Upfront for ${calc.upfrontTotals.tier.range}:`
+                    : "First-time upfront:"}
+                </div>
+                {calc.upfrontTotals.tier ? (
+                  <div>
                   Min Shares: {fmtKES(calc.upfront.minShares)} · Min Savings:{" "}
                   {fmtKES(calc.upfront.minSavings)}
+                  </div>
+                ) : null}
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Tiered upfront base</span>
+                  <span>{fmtKES(calc.upfrontTotals.total)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Mandatory fees due now</span>
+                  <span>{fmtKES(calc.upfrontTotals.mandatoryFeesTotal)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
+                  <span>Total upfront now</span>
+                  <span>{fmtKES(calc.upfrontTotals.totalUpfrontNow)}</span>
+                </div>
+                <div className="mt-2 text-muted-foreground">
+                  Sticker fee is only added when the business setup is marked permanent.
                 </div>
               </div>
             )}

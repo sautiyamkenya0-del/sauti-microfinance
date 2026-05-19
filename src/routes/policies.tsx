@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import logo from "@/assets/sauti-logo.png";
 import { AppHeader } from "@/components/AppHeader";
+import { PaymentFlowTree } from "@/components/PaymentFlowTree";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section } from "@/components/ui-bits";
 import { SBC_FEES, SBC_UPFRONT_TABLE, fmtKES, useStore } from "@/lib/store";
@@ -16,6 +17,8 @@ function Policies() {
   const membershipAmount = feePolicies.find((fee) => fee.key === "membership")?.amount ?? 500;
   const cardAmount = feePolicies.find((fee) => fee.key === "card")?.amount ?? 500;
   const stickerAmount = feePolicies.find((fee) => fee.key === "sticker")?.amount ?? 500;
+  const mandatorySavingsThreshold = policySettings.percentages.mandatorySavingsThreshold;
+  const mandatorySharesThreshold = policySettings.percentages.mandatorySharesThreshold;
 
   return (
     <>
@@ -38,8 +41,9 @@ function Policies() {
               "Amplifying the Voice of Business Community"
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
-              Members with KSh 3,000 in shares and KSh 5,000 in mandatory savings qualify for
-              premium loans and annual dividends.
+              Members with {fmtKES(mandatorySharesThreshold)} in shares and{" "}
+              {fmtKES(mandatorySavingsThreshold)} in mandatory savings qualify for premium loans
+              and annual dividends.
             </p>
           </div>
         </div>
@@ -49,8 +53,9 @@ function Policies() {
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
               <li>All borrowers must be active SBC members.</li>
               <li>
-                Mandatory or compliant savings (KSh 5,000 min) act as security and are not
-                withdrawable during active membership. Shares are not withdrawable but transferable.
+                Mandatory or compliant savings ({fmtKES(mandatorySavingsThreshold)} min) act as
+                security and are not withdrawable during active membership. Shares are not
+                withdrawable but transferable.
               </li>
               <li>
                 Non-withdrawable or loan savings can only be accessed after{" "}
@@ -94,14 +99,19 @@ function Policies() {
                 Membership fee {fmtKES(membershipAmount)}, membership card {fmtKES(cardAmount)}, and
                 sticker fee {fmtKES(stickerAmount)} where applicable.
               </li>
+              <li>
+                First-time total upfront now means tiered upfront plus membership fee, card fee,
+                and sticker fee where the business is permanent.
+              </li>
             </ul>
           </Section>
 
           <Section title="C. Dividends & Multipliers">
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
               <li>
-                Members with full share and savings thresholds and without default earn annual
-                dividends.
+                Members with full share and savings thresholds ({fmtKES(mandatorySharesThreshold)}{" "}
+                shares value and {fmtKES(mandatorySavingsThreshold)} savings) and without default
+                earn annual dividends.
               </li>
               <li>Good repayment history grows savings and access multipliers.</li>
               <li>Default reduces eligibility for the next loan cycle.</li>
@@ -119,6 +129,23 @@ function Policies() {
             </ul>
           </Section>
         </div>
+
+        <Section title="E. Payment Allocation Rules">
+          <div className="p-5 space-y-4">
+            <PaymentFlowTree
+              membershipFeeAmount={membershipAmount}
+              cardFeeAmount={cardAmount}
+              stickerFeeAmount={stickerAmount}
+              mandatorySavingsThreshold={mandatorySavingsThreshold}
+              mandatorySharesThreshold={mandatorySharesThreshold}
+            />
+            <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+              Daily savings attached to active loans follows the same threshold waterfall as a
+              normal non-loan contribution: savings first, shares next, then the purpose pool.
+              The remainder of the same payment reduces the active loan balance.
+            </div>
+          </div>
+        </Section>
 
         <Section title="Premium Loan Upfront Heads (Shares + Savings thresholds)">
           <div className="overflow-x-auto">

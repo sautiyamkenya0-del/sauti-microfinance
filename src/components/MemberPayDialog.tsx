@@ -6,9 +6,10 @@ import {
   formatMembershipNumber,
   isInvestorOnlyCategory,
   memberNeedsSticker,
-  upfrontRequirementForAmount,
+  upfrontTotalsForAmount,
   type Member,
 } from "@/lib/store";
+import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import { toast } from "sonner";
 import { Smartphone, X, Loader2 } from "lucide-react";
 
@@ -29,14 +30,56 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const [legacyStickerOn, setLegacyStickerOn] = useState(member.fees.hasShop || false);
   const stickerOn = member.businessPermanence ? memberNeedsSticker(member) : legacyStickerOn;
   const fees = member.fees;
-  const membershipAmount = feePolicies.find((fee) => fee.key === "membership")?.amount ?? 500;
-  const cardAmount = feePolicies.find((fee) => fee.key === "card")?.amount ?? 500;
-  const stickerAmount = feePolicies.find((fee) => fee.key === "sticker")?.amount ?? 500;
+  const membershipPolicy = feePolicies.find((fee) => fee.key === "membership");
+  const cardPolicy = feePolicies.find((fee) => fee.key === "card");
+  const stickerPolicy = feePolicies.find((fee) => fee.key === "sticker");
+  const membershipAmount =
+    membershipPolicy &&
+    feePolicyAppliesToMember(
+      membershipPolicy,
+      {
+        id: member.id,
+        joinedAt: member.joinedAt,
+        category: member.category,
+        isInvestor: member.isInvestor,
+      },
+      { hasActiveLoan: !!activeLoan },
+    )
+      ? membershipPolicy.amount
+      : 0;
+  const cardAmount =
+    cardPolicy &&
+    feePolicyAppliesToMember(
+      cardPolicy,
+      {
+        id: member.id,
+        joinedAt: member.joinedAt,
+        category: member.category,
+        isInvestor: member.isInvestor,
+      },
+      { hasActiveLoan: !!activeLoan },
+    )
+      ? cardPolicy.amount
+      : 0;
+  const stickerAmount =
+    stickerPolicy &&
+    feePolicyAppliesToMember(
+      stickerPolicy,
+      {
+        id: member.id,
+        joinedAt: member.joinedAt,
+        category: member.category,
+        isInvestor: member.isInvestor,
+      },
+      { hasActiveLoan: !!activeLoan },
+    )
+      ? stickerPolicy.amount
+      : 0;
   const feeQueue = [
     { key: "membership", label: "Membership fee", amount: membershipAmount, owed: !fees.membership },
     { key: "card", label: "Membership card", amount: cardAmount, owed: !fees.card },
     { key: "sticker", label: "Sticker (shop)", amount: stickerAmount, owed: stickerOn && !fees.sticker },
-  ];
+  ].filter((fee) => fee.amount > 0);
   const feesDue = feeQueue.filter((f) => f.owed).reduce((s, f) => s + f.amount, 0);
 
   const investorOnly = isInvestorOnlyCategory(member.category);
@@ -44,9 +87,15 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const [purpose, setPurpose] = useState<Purpose>(mode === "officer" ? "upfront" : defaultPurpose);
   const [amount, setAmount] = useState<number>(0);
   const [plannedLoanAmount, setPlannedLoanAmount] = useState<number>(5000);
-  const upfrontRequirement = useMemo(
-    () => upfrontRequirementForAmount(plannedLoanAmount),
-    [plannedLoanAmount],
+  const upfrontTotals = useMemo(
+    () =>
+      upfrontTotalsForAmount(plannedLoanAmount, {
+        membershipFeeAmount: feeQueue.find((fee) => fee.key === "membership" && fee.owed)?.amount ?? 0,
+        cardFeeAmount: feeQueue.find((fee) => fee.key === "card" && fee.owed)?.amount ?? 0,
+        stickerFeeAmount: feeQueue.find((fee) => fee.key === "sticker" && fee.owed)?.amount ?? 0,
+        includeSticker: stickerOn,
+      }),
+    [feeQueue, plannedLoanAmount, stickerOn],
   );
 
   const purposeOptions: { value: Purpose; label: string; disabled?: boolean }[] = useMemo(() => {
@@ -62,12 +111,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const previewAmount = useMemo(() => {
     if (mode === "officer") {
-      if (purpose === "upfront") return feesDue + upfrontRequirement.total;
+      if (purpose === "upfront") return upfrontTotals.totalUpfrontNow;
       if (purpose === "fees") return feesDue;
       return 0;
     }
     return Math.max(0, Math.floor(amount || 0));
-  }, [amount, feesDue, mode, purpose, upfrontRequirement.total]);
+  }, [amount, feesDue, mode, purpose, upfrontTotals.totalUpfrontNow]);
 
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
@@ -262,17 +311,29 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
               )}
               {purpose === "upfront" && (
                 <div className="mt-1 flex justify-between border-t border-border pt-1">
-                  <span>Tiered upfront reference</span>
-                  <span>{fmtKES(upfrontRequirement.total)}</span>
+                  <span>Tiered upfront base</span>
+                  <span>{fmtKES(upfrontTotals.total)}</span>
                 </div>
               )}
-              {purpose === "upfront" && upfrontRequirement.tier && (
+              {purpose === "upfront" && (
+                <div className="mt-1 flex justify-between border-t border-border pt-1">
+                  <span>Mandatory fees due now</span>
+                  <span>{fmtKES(upfrontTotals.mandatoryFeesTotal)}</span>
+                </div>
+              )}
+              {purpose === "upfront" && (
+                <div className="mt-1 flex justify-between border-t border-border pt-1 font-medium">
+                  <span>Total upfront now</span>
+                  <span>{fmtKES(upfrontTotals.totalUpfrontNow)}</span>
+                </div>
+              )}
+              {purpose === "upfront" && upfrontTotals.tier && (
                 <div className="text-muted-foreground">
-                  {upfrontRequirement.tier.range}: shares {fmtKES(upfrontRequirement.sharesAmount)} ·
-                  savings {fmtKES(upfrontRequirement.savingsAmount)}
+                  {upfrontTotals.tier.range}: shares {fmtKES(upfrontTotals.sharesAmount)} · savings{" "}
+                  {fmtKES(upfrontTotals.savingsAmount)}
                 </div>
               )}
-              {purpose === "upfront" && !upfrontRequirement.tier && (
+              {purpose === "upfront" && !upfrontTotals.tier && (
                 <div className="text-muted-foreground">
                   No premium upfront tier is configured for this loan amount yet.
                 </div>

@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 
 import { AppHeader } from "@/components/AppHeader";
+import { PaymentFlowTree } from "@/components/PaymentFlowTree";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
 import {
@@ -69,7 +70,7 @@ import {
   fmtKES,
   loanSummary,
   SBC_UPFRONT_TABLE,
-  upfrontRequirementForAmount,
+  upfrontTotalsForAmount,
   useStore,
 } from "@/lib/store";
 
@@ -84,7 +85,7 @@ type TargetDraft = {
   notes: string;
 };
 
-const SCOPES: FeeScope[] = ["all", "new_only", "loan_holders", "investors"];
+const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
 const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
   { key: "percentages", label: "Percentages" },
@@ -129,10 +130,37 @@ function PolicyCenterPage() {
   const [waterfallDraft, setWaterfallDraft] = useState(policySettings.waterfallRules);
   const [waterfallScenario, setWaterfallScenario] = useState<WaterfallScenario>("member_with_loan");
   const [clientQuery, setClientQuery] = useState("");
+  const [feeMemberQuery, setFeeMemberQuery] = useState("");
   const memberAccounts = useMemo(
     () => members.filter((member) => member.category !== "investor"),
     [members],
   );
+  const feeSelectableMembers = useMemo(
+    () => [...members].sort((a, b) => a.name.localeCompare(b.name)),
+    [members],
+  );
+  const activeLoanMemberIds = useMemo(
+    () => new Set(loans.filter((loan) => loan.status === "active").map((loan) => loan.memberId)),
+    [loans],
+  );
+  const filteredFeeSelectableMembers = useMemo(() => {
+    const query = feeMemberQuery.trim().toLowerCase();
+    if (!query) return feeSelectableMembers;
+    return feeSelectableMembers.filter(
+      (member) =>
+        member.name.toLowerCase().includes(query) ||
+        member.id.toLowerCase().includes(query) ||
+        member.phone.toLowerCase().includes(query),
+    );
+  }, [feeMemberQuery, feeSelectableMembers]);
+  const newFeeSelectableMembers = useMemo(() => {
+    if (!editingFee) return [];
+    const effectiveFrom = String(editingFee.effectiveFrom ?? "").slice(0, 10);
+    if (!effectiveFrom) return [];
+    return feeSelectableMembers.filter(
+      (member) => String(member.joinedAt ?? "").slice(0, 10) >= effectiveFrom,
+    );
+  }, [editingFee, feeSelectableMembers]);
   const [clientId, setClientId] = useState<string>(memberAccounts[0]?.id ?? "");
   const [targetDraft, setTargetDraft] = useState<TargetDraft>(() => blankTarget());
   const [carryoverLoading, setCarryoverLoading] = useState(false);
@@ -157,6 +185,10 @@ function PolicyCenterPage() {
     if (!clientId && memberAccounts[0]?.id) setClientId(memberAccounts[0].id);
   }, [clientId, memberAccounts]);
 
+  useEffect(() => {
+    setFeeMemberQuery("");
+  }, [editingFee?.key]);
+
   const refreshAllCarryoverLoans = useCallback(async () => {
     setAllCarryoverLoans(await loadAllCarryoverLoans());
   }, [loadAllCarryoverLoans]);
@@ -180,10 +212,14 @@ function PolicyCenterPage() {
     loadCarryover({ data: { memberId: clientId } })
       .then((result) => {
         if (!active) return;
-        const profile = result.profile ?? blankCarryoverProfile(clientId);
+        const typedResult = result as {
+          profile: LegacyCarryoverProfile | null;
+          loans: LegacyCarryoverLoan[];
+        };
+        const profile = typedResult.profile ?? blankCarryoverProfile(clientId);
         setCarryoverProfile(profile);
-        setCarryoverLoans(result.loans);
-        setCarryoverLoanDraft(blankCarryoverLoan(clientId, result.loans.length + 1));
+        setCarryoverLoans(typedResult.loans);
+        setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
       })
       .catch((error: any) => {
         if (!active) return;
@@ -276,7 +312,7 @@ function PolicyCenterPage() {
   const selectedClientDailyTarget =
     clientLoansSummary
       .filter(({ loan }) => loan.status === "active")
-      .reduce((sum, row) => sum + row.summary.dailyInstallment, 0) +
+      .reduce((sum, row) => sum + row.summary.dailyCollectionAmount, 0) +
     carryoverLoanSummaries
       .filter(({ loan, summary }) => loan.status !== "closed" && !summary.isFinished)
       .reduce((sum, row) => sum + row.summary.dailyInclusive, 0);
@@ -367,6 +403,9 @@ function PolicyCenterPage() {
     if (!editingFee) return;
     if (!editingFee.label.trim()) return toast.error("Label required.");
     if (editingFee.amount < 0) return toast.error("Amount must be 0 or more.");
+    if (editingFee.scope === "selected_members" && (editingFee.selectedMemberIds?.length ?? 0) === 0) {
+      return toast.error("Pick at least one member for a selected-members fee.");
+    }
     await saveFee({ data: editingFee });
     await reloadAppData();
     toast.success(creatingFee ? "Fee created" : "Fee updated");
@@ -385,7 +424,10 @@ function PolicyCenterPage() {
   }
 
   async function refreshCarryoverDetails(nextMemberId: string) {
-    const result = await loadCarryover({ data: { memberId: nextMemberId } });
+    const result = (await loadCarryover({ data: { memberId: nextMemberId } })) as {
+      profile: LegacyCarryoverProfile | null;
+      loans: LegacyCarryoverLoan[];
+    };
     setCarryoverProfile(result.profile ?? blankCarryoverProfile(nextMemberId));
     setCarryoverLoans(result.loans);
     setCarryoverLoanDraft(blankCarryoverLoan(nextMemberId, result.loans.length + 1));
@@ -546,7 +588,7 @@ function PolicyCenterPage() {
                             </Badge>
                           )}
                         </td>
-                        <td>{scopeLabel(fee.scope)}</td>
+                        <td>{describeFeeScope(fee, members)}</td>
                         <td>
                           {isFeeActive(fee) ? (
                             <Badge tone="success">Active</Badge>
@@ -660,7 +702,14 @@ function PolicyCenterPage() {
                     <select
                       value={editingFee.scope}
                       onChange={(event) =>
-                        setEditingFee({ ...editingFee, scope: event.target.value as FeeScope })
+                        setEditingFee({
+                          ...editingFee,
+                          scope: event.target.value as FeeScope,
+                          selectedMemberIds:
+                            event.target.value === "selected_members"
+                              ? editingFee.selectedMemberIds ?? []
+                              : [],
+                        })
                       }
                       className="input"
                     >
@@ -671,6 +720,127 @@ function PolicyCenterPage() {
                       ))}
                     </select>
                   </Field>
+                  {editingFee.scope === "new_only" && (
+                    <div className="sm:col-span-2 rounded-xl border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+                      New-member fees automatically apply to members whose join date is on or after{" "}
+                      <span className="font-medium text-foreground">{editingFee.effectiveFrom}</span>.
+                    </div>
+                  )}
+                  {editingFee.scope === "selected_members" && (
+                    <Field label="Selected members" className="sm:col-span-2">
+                      <div className="rounded-xl border border-border bg-muted/20 p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs text-muted-foreground">
+                            Tick the members who should carry this fee requirement.
+                            <div className="mt-1">
+                              {editingFee.selectedMemberIds?.length ?? 0} selected |{" "}
+                              {filteredFeeSelectableMembers.length} shown
+                            </div>
+                          </div>
+                          <div className="inline-flex flex-wrap gap-2 text-xs">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingFee({
+                                  ...editingFee,
+                                  selectedMemberIds: feeSelectableMembers.map((member) => member.id),
+                                })
+                              }
+                              className="rounded-md border border-border px-2 py-1 hover:bg-muted"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingFee({
+                                  ...editingFee,
+                                  selectedMemberIds: newFeeSelectableMembers.map((member) => member.id),
+                                })
+                              }
+                              className="rounded-md border border-border px-2 py-1 hover:bg-muted"
+                            >
+                              Select new
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingFee({
+                                  ...editingFee,
+                                  selectedMemberIds: [],
+                                })
+                              }
+                              className="rounded-md border border-border px-2 py-1 hover:bg-muted"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <input
+                          value={feeMemberQuery}
+                          onChange={(event) => setFeeMemberQuery(event.target.value)}
+                          placeholder="Search by name, member number, or phone"
+                          className="input mb-3"
+                        />
+                        <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                          {filteredFeeSelectableMembers.map((member) => {
+                            const checked = (editingFee.selectedMemberIds ?? []).includes(member.id);
+                            const isNewMember =
+                              String(member.joinedAt ?? "").slice(0, 10) >=
+                              String(editingFee.effectiveFrom ?? "").slice(0, 10);
+                            return (
+                              <label
+                                key={member.id}
+                                className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    setEditingFee({
+                                      ...editingFee,
+                                      selectedMemberIds: event.target.checked
+                                        ? [...new Set([...(editingFee.selectedMemberIds ?? []), member.id])]
+                                        : (editingFee.selectedMemberIds ?? []).filter(
+                                            (candidate) => candidate !== member.id,
+                                          ),
+                                    })
+                                  }
+                                />
+                                <span>
+                                  <span className="flex flex-wrap items-center gap-2 font-medium text-foreground">
+                                    <span>{member.name}</span>
+                                    {isNewMember ? (
+                                      <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary">
+                                        New
+                                      </span>
+                                    ) : null}
+                                    {activeLoanMemberIds.has(member.id) ? (
+                                      <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-foreground">
+                                        Loan
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {member.id} | {member.phone} | joined {member.joinedAt}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        {filteredFeeSelectableMembers.length === 0 && (
+                          <div className="mt-3 text-xs text-muted-foreground">
+                            No members match that search yet.
+                          </div>
+                        )}
+                        <div className="mt-3 text-[11px] text-muted-foreground">
+                          The separate `New members only` audience will automatically target anyone
+                          whose join date is on or after the effective date above.
+                        </div>
+                      </div>
+                    </Field>
+                  )}
                   <Field label="Notes" className="sm:col-span-2">
                     <textarea
                       rows={2}
@@ -771,6 +941,16 @@ function PolicyCenterPage() {
                 }
               />
               <NumberField
+                label="Shares Threshold (KES)"
+                value={percentagesDraft.mandatorySharesThreshold}
+                onChange={(value) =>
+                  setPercentagesDraft((current) => ({
+                    ...current,
+                    mandatorySharesThreshold: value,
+                  }))
+                }
+              />
+              <NumberField
                 label="Round-off Step (KES)"
                 value={percentagesDraft.roundOffStep}
                 onChange={(value) =>
@@ -786,20 +966,28 @@ function PolicyCenterPage() {
               <div className="mt-1 text-xs text-muted-foreground">
                 Premium upfront is no longer treated as one fixed figure here. It follows the
                 shared SBC loan bands already used by the simulator and first-time application
-                flow.
+                flow, and the full prompt total now includes membership, card, and sticker fees
+                where applicable.
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 {SBC_UPFRONT_TABLE.map((tier) => {
-                  const requirement = upfrontRequirementForAmount(tier.min);
+                  const totals = upfrontTotalsForAmount(tier.min, {
+                    membershipFeeAmount: membershipAmount,
+                    cardFeeAmount: cardAmount,
+                    stickerFeeAmount: stickerAmount,
+                    includeSticker: true,
+                  });
                   return (
                     <div key={tier.range} className="rounded-lg border border-border bg-muted/20 p-3">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         {tier.range}
                       </div>
-                      <div className="mt-1 font-medium">{fmtKES(requirement.total)}</div>
+                      <div className="mt-1 font-medium">{fmtKES(totals.totalUpfrontNow)}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        Shares {fmtKES(requirement.sharesAmount)} · Savings{" "}
-                        {fmtKES(requirement.savingsAmount)}
+                        Upfront {fmtKES(totals.total)} · fees {fmtKES(totals.mandatoryFeesTotal)}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Shares {fmtKES(totals.sharesAmount)} · Savings {fmtKES(totals.savingsAmount)}
                       </div>
                     </div>
                   );
@@ -807,9 +995,10 @@ function PolicyCenterPage() {
               </div>
             </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              These values now drive loan deductions, penalty previews, savings qualification, and
-              the M-Pesa round-off behavior across the app. Premium upfront values are derived from
-              the shared loan-band table instead of a fixed policy-center amount.
+              These values now drive loan deductions, penalty previews, savings and shares
+              qualification, and the M-Pesa round-off behavior across the app. Premium upfront
+              values are derived from the shared loan-band table instead of a fixed policy-center
+              amount.
             </div>
           </Section>
         )}
@@ -874,6 +1063,15 @@ function PolicyCenterPage() {
               </button>
             }
           >
+            <div className="border-b border-border p-5">
+              <PaymentFlowTree
+                membershipFeeAmount={membershipAmount}
+                cardFeeAmount={cardAmount}
+                stickerFeeAmount={stickerAmount}
+                mandatorySavingsThreshold={percentagesDraft.mandatorySavingsThreshold}
+                mandatorySharesThreshold={percentagesDraft.mandatorySharesThreshold}
+              />
+            </div>
             <div className="grid gap-6 p-5 lg:grid-cols-[280px,1fr]">
               <div className="space-y-3">
                 <Field label="Scenario">
@@ -892,16 +1090,15 @@ function PolicyCenterPage() {
                   </select>
                 </Field>
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  The second dropdowns only show destinations allowed for the selected scenario.
-                  This lets the flow change when you switch between a client with a loan, without a
-                  loan, or an investor-only account.
+                  The editor below now controls the preprocessing order before the fixed split
+                  happens. Required fees and penalties can still be re-ordered by scenario, but
+                  loan-member collections always branch into a daily savings leg and a loan
+                  repayment leg in parallel.
                 </div>
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
                   <div className="mb-1 font-medium text-foreground">Current path</div>
                   <div className="text-muted-foreground">
-                    {currentWaterfall.steps
-                      .map((step) => WATERFALL_DESTINATION_LABELS[step])
-                      .join(" -> ")}
+                    {describeWaterfallPreview(currentWaterfall)}
                   </div>
                 </div>
               </div>
@@ -1979,10 +2176,21 @@ function blankFee(): FeePolicy {
     amount: 0,
     permanence: "permanent",
     scope: "all",
+    selectedMemberIds: [],
     effectiveFrom: new Date().toISOString().slice(0, 10),
     custom: true,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function describeFeeScope(fee: FeePolicy, members: Array<{ id: string }>) {
+  if (fee.scope === "new_only") return `New members from ${fee.effectiveFrom}`;
+  if (fee.scope !== "selected_members") return scopeLabel(fee.scope);
+  const selectedIds = fee.selectedMemberIds ?? [];
+  const selectedCount = selectedIds.filter((memberId) =>
+    members.some((member) => member.id === memberId),
+  ).length;
+  return `Selected members (${selectedCount})`;
 }
 
 function blankTarget(): TargetDraft {
@@ -2079,6 +2287,19 @@ function removeWaterfallStep(
       return { ...rule, steps: rule.steps.filter((_, stepIndex) => stepIndex !== index) };
     }),
   );
+}
+
+function describeWaterfallPreview(rule: WaterfallRule) {
+  const steps =
+    rule.steps.map((step) => WATERFALL_DESTINATION_LABELS[step]).join(" -> ") ||
+    "No pre-processing deductions";
+  if (rule.scenario === "member_with_loan") {
+    return `${steps} -> Parallel split: daily savings waterfall + loan repayment remainder`;
+  }
+  if (rule.scenario === "member_without_loan") {
+    return `${steps} -> Threshold tree: savings, then shares, then purpose pool`;
+  }
+  return steps || WATERFALL_SCENARIO_LABELS[rule.scenario];
 }
 
 function calculateTargetActual(
@@ -2211,7 +2432,7 @@ function scheduledRepaymentsForWindow(
       windowStart,
       windowEnd,
     );
-    return sum + activeDays * row.summary.dailyInstallment;
+    return sum + activeDays * row.summary.dailyCollectionAmount;
   }, 0);
 
   const carryoverDue = carryoverLoans.reduce((sum, row) => {

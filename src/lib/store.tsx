@@ -336,10 +336,13 @@ export const SBC_TERM_RATE_PCT_BY_DAYS: Record<LoanTermDays, number> = {
 };
 
 /**
- * SBC mandatory savings threshold (per member, before they qualify for a loan).
+ * SBC mandatory thresholds before extra savings can spill into the purpose pool.
  * Sourced from SBC policy upfront table — minimum 1,000/= savings to even apply.
  */
-export const MANDATORY_SAVINGS_THRESHOLD = 1000;
+export const MANDATORY_SAVINGS_THRESHOLD =
+  DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold;
+export const MANDATORY_SHARES_THRESHOLD =
+  DEFAULT_POLICY_SETTINGS.percentages.mandatorySharesThreshold;
 export const ROUNDING_BASE = 1; // always round UP to next whole shilling — the surplus
 // added to the round-off pool is therefore always positive (≥0).
 
@@ -1049,6 +1052,14 @@ export function loanScheduleTotal(principal: number, monthlyRatePct: number, mon
   return { interest, total, monthly: total / periods };
 }
 
+export function shareValueForUnits(units: number) {
+  return Number(units ?? 0) * SHARE_PRICE;
+}
+
+export function loanDailySavingsAmount(approvedAmount: number) {
+  return Number(approvedAmount ?? 0) <= 5000 ? 50 : 100;
+}
+
 export function loanSummary(
   loan: Pick<
     Loan,
@@ -1067,6 +1078,7 @@ export function loanSummary(
   const periods = loan.termMonths > 0 ? loan.termMonths : termPeriodsFromDays(termDays);
   const schedule = loanScheduleTotal(approved, loan.rate, periods);
   const balance = Math.max(0, schedule.total - loan.paid);
+  const dailySavingsAmount = loanDailySavingsAmount(approved);
   const dueDate = new Date(loan.startDate);
   dueDate.setDate(dueDate.getDate() + termDays);
   return {
@@ -1078,6 +1090,11 @@ export function loanSummary(
     balance,
     dueDate: dueDate.toISOString().slice(0, 10),
     dailyInstallment: schedule.total / termDays,
+    dailySavingsAmount,
+    dailyCollectionAmount: roundUpKES(
+      (schedule.total + dailySavingsAmount * termDays) / termDays,
+      5,
+    ),
     isSettled: balance <= 0,
     isOverdue: loan.status === "active" && balance > 0 && dueDate.getTime() < Date.now(),
   };
@@ -1199,6 +1216,33 @@ export function upfrontRequirementForAmount(amount: number) {
     sharesAmount,
     savingsAmount,
     total: sharesAmount + savingsAmount,
+  };
+}
+
+export function upfrontTotalsForAmount(
+  amount: number,
+  options?: {
+    membershipFeeAmount?: number;
+    cardFeeAmount?: number;
+    stickerFeeAmount?: number;
+    includeSticker?: boolean;
+  },
+) {
+  const requirement = upfrontRequirementForAmount(amount);
+  const membershipFeeAmount = Math.max(0, Number(options?.membershipFeeAmount ?? 0));
+  const cardFeeAmount = Math.max(0, Number(options?.cardFeeAmount ?? 0));
+  const stickerFeeAmount = options?.includeSticker
+    ? Math.max(0, Number(options?.stickerFeeAmount ?? 0))
+    : 0;
+  const mandatoryFeesTotal = membershipFeeAmount + cardFeeAmount + stickerFeeAmount;
+
+  return {
+    ...requirement,
+    membershipFeeAmount,
+    cardFeeAmount,
+    stickerFeeAmount,
+    mandatoryFeesTotal,
+    totalUpfrontNow: requirement.total + mandatoryFeesTotal,
   };
 }
 

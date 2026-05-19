@@ -3,7 +3,7 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 do $$ begin
-  create type public.fee_scope as enum ('all','new_only','loan_holders','investors');
+  create type public.fee_scope as enum ('all','new_only','selected_members','loan_holders','investors');
 exception when duplicate_object then null; end $$;
 
 do $$ begin
@@ -68,6 +68,7 @@ create table if not exists public.fee_policies (
   duration_days integer,
   effective_from date not null default current_date,
   scope public.fee_scope not null default 'all',
+  selected_member_ids text[] not null default '{}'::text[],
   custom boolean not null default false,
   notes text,
   created_at timestamptz not null default now(),

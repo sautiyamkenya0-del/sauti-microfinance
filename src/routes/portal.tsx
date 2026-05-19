@@ -28,7 +28,7 @@ import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
-import { isFeeActive, scopeLabel } from "@/lib/fees-policy";
+import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -85,11 +85,29 @@ function Portal() {
   const fieldOfficerName =
     member?.fieldOfficerId && staff.find((person) => person.id === member.fieldOfficerId)?.name;
   const myLoans = loans.filter((l) => l.memberId === memberId);
-  const myTx = transactions.filter((t) => t.memberId === memberId);
+  const myTx = transactions.filter(
+    (t) =>
+      t.memberId === memberId &&
+      !String(t.note ?? "").toLowerCase().includes("purpose pool contribution"),
+  );
   const myPen = penalties.filter((p) => p.memberId === memberId);
   const fees = feePolicies.filter(isFeeActive);
   const visibleFees = member
-    ? fees.filter((f) => f.key !== "sticker" || memberNeedsSticker(member))
+    ? fees.filter(
+        (f) =>
+          feePolicyAppliesToMember(
+            f,
+            {
+              id: member.id,
+              joinedAt: member.joinedAt,
+              category: member.category,
+              isInvestor: member.isInvestor,
+            },
+            {
+              hasActiveLoan: myLoans.some((loan) => loan.status === "active"),
+            },
+          ) && (f.key !== "sticker" || memberNeedsSticker(member)),
+      )
     : fees;
   const { submit } = useApprovalActions();
 

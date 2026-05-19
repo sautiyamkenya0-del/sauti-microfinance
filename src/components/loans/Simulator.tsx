@@ -6,7 +6,7 @@ import {
   loanRateForTerm,
   roundUpKES,
   sbcDeductions,
-  upfrontRequirementForAmount,
+  upfrontTotalsForAmount,
   useStore,
 } from "@/lib/store";
 
@@ -78,9 +78,12 @@ export function Simulator() {
     const totalSavingsAccrued = dailySavings * days;
     const grandTotalCollected = dailyInclusive * days;
 
-    const upfrontRequirement = upfrontRequirementForAmount(amount);
-    const upfront = upfrontRequirement.total;
-    const totalUpfrontNow = upfront + registration + membership + sticker;
+    const upfrontTotals = upfrontTotalsForAmount(amount, {
+      membershipFeeAmount: registration,
+      cardFeeAmount: membership,
+      stickerFeeAmount: sticker,
+      includeSticker: stickerOn,
+    });
     const netDisbursed = amount - deductions.total;
 
     const dueDates = Array.from({ length: days }, (_, i) => {
@@ -105,11 +108,11 @@ export function Simulator() {
       dailyInclusive,
       totalSavingsAccrued,
       grandTotalCollected,
-      upfront,
-      totalUpfrontNow,
+      upfront: upfrontTotals.total,
+      totalUpfrontNow: upfrontTotals.totalUpfrontNow,
       netDisbursed,
       dueDates,
-      tier: upfrontRequirement.tier,
+      tier: upfrontTotals.tier,
     };
   }, [amount, dailySavings, days, feePolicies, startDate, stickerOn]);
 

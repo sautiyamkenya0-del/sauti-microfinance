@@ -1,4 +1,11 @@
-export type FeeScope = "all" | "new_only" | "loan_holders" | "investors";
+import { isInvestorCategory, resolveMemberCategory } from "@/lib/membership";
+
+export type FeeScope =
+  | "all"
+  | "new_only"
+  | "selected_members"
+  | "loan_holders"
+  | "investors";
 export type FeePermanence = "permanent" | "semi";
 
 export type FeePolicy = {
@@ -9,6 +16,7 @@ export type FeePolicy = {
   durationDays?: number;
   effectiveFrom: string;
   scope: FeeScope;
+  selectedMemberIds?: string[];
   custom?: boolean;
   notes?: string;
   updatedAt: string;
@@ -56,19 +64,32 @@ export function isFeeActive(p: FeePolicy): boolean {
 }
 
 export function scopeLabel(s: FeeScope): string {
-  return s === "all"
-    ? "All members"
-    : s === "new_only"
-      ? "New members only"
-      : s === "loan_holders"
-        ? "Members with loans"
-        : "Investors";
+  switch (s) {
+    case "all":
+      return "All members";
+    case "new_only":
+      return "New members only";
+    case "selected_members":
+      return "Selected members";
+    case "loan_holders":
+      return "Members with active loans";
+    case "investors":
+      return "Investors only";
+  }
+}
+
+function normalizeSelectedMemberIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((memberId) => String(memberId ?? "").trim()).filter(Boolean))].sort();
 }
 
 export function normalizeFeePolicies(rows?: FeePolicy[] | null) {
   const merged = new Map(DEFAULT_FEE_POLICIES.map((row) => [row.key, row]));
   for (const row of rows ?? []) {
-    merged.set(row.key, row);
+    merged.set(row.key, {
+      ...row,
+      selectedMemberIds: normalizeSelectedMemberIds(row.selectedMemberIds),
+    });
   }
   return Array.from(merged.values()).sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -83,4 +104,40 @@ export function feePolicyAmount(
   if (!found) return fallback;
   if (activeOnly && !isFeeActive(found)) return fallback;
   return found.amount;
+}
+
+export type FeeTargetMember = {
+  id: string;
+  joinedAt?: string;
+  category?: string;
+  isInvestor?: boolean;
+};
+
+export function feePolicyAppliesToMember(
+  policy: FeePolicy,
+  member: FeeTargetMember,
+  options?: {
+    hasActiveLoan?: boolean;
+    today?: string;
+  },
+) {
+  if (!member?.id) return false;
+
+  if (policy.scope === "all") return true;
+  if (policy.scope === "selected_members") {
+    return normalizeSelectedMemberIds(policy.selectedMemberIds).includes(member.id);
+  }
+  if (policy.scope === "new_only") {
+    const joinedAt = String(member.joinedAt ?? "").slice(0, 10);
+    const effectiveFrom = String(policy.effectiveFrom ?? "").slice(0, 10);
+    return Boolean(joinedAt && effectiveFrom && joinedAt >= effectiveFrom);
+  }
+  if (policy.scope === "loan_holders") return options?.hasActiveLoan === true;
+
+  const category = resolveMemberCategory(member.category, member.isInvestor);
+  return isInvestorCategory(category);
+}
+
+export function feePolicyByKey(rows: FeePolicy[] | undefined, key: string) {
+  return normalizeFeePolicies(rows).find((row) => row.key === key);
 }

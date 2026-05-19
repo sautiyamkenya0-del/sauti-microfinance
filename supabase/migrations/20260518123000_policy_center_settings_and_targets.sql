@@ -24,7 +24,8 @@ values
       'penaltyDailyPct', 5,
       'defaultPenaltyPct', 2,
       'firstUpfrontAmount', 500,
-      'mandatorySavingsThreshold', 1000,
+      'mandatorySavingsThreshold', 5000,
+      'mandatorySharesThreshold', 3000,
       'roundOffStep', 1
     ),
     'Shared percentage controls for deductions, penalties, and fixed collection prompts.'
@@ -51,9 +52,7 @@ values
           'membership_fee',
           'card_fee',
           'sticker_fee',
-          'penalties',
-          'active_loan_repayment',
-          'savings'
+          'penalties'
         )
       ),
       jsonb_build_object(
@@ -62,8 +61,7 @@ values
           'membership_fee',
           'card_fee',
           'sticker_fee',
-          'penalties',
-          'savings'
+          'penalties'
         )
       ),
       jsonb_build_object(

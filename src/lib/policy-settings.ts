@@ -8,6 +8,7 @@ export type PolicyPercentages = {
   defaultPenaltyPct: number;
   firstUpfrontAmount: number;
   mandatorySavingsThreshold: number;
+  mandatorySharesThreshold: number;
   roundOffStep: number;
 };
 
@@ -73,7 +74,8 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
     penaltyDailyPct: 5,
     defaultPenaltyPct: 2,
     firstUpfrontAmount: 500,
-    mandatorySavingsThreshold: 1000,
+    mandatorySavingsThreshold: 5000,
+    mandatorySharesThreshold: 3000,
     roundOffStep: 1,
   },
   interestRates: {
@@ -86,18 +88,11 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   waterfallRules: [
     {
       scenario: "member_with_loan",
-      steps: [
-        "membership_fee",
-        "card_fee",
-        "sticker_fee",
-        "penalties",
-        "active_loan_repayment",
-        "savings",
-      ],
+      steps: ["membership_fee", "card_fee", "sticker_fee", "penalties"],
     },
     {
       scenario: "member_without_loan",
-      steps: ["membership_fee", "card_fee", "sticker_fee", "penalties", "savings"],
+      steps: ["membership_fee", "card_fee", "sticker_fee", "penalties"],
     },
     {
       scenario: "investor_only",
@@ -164,17 +159,10 @@ export function waterfallOptionsForScenario(
   scenario: WaterfallScenario,
 ): WaterfallDestination[] {
   if (scenario === "member_with_loan") {
-    return [
-      "membership_fee",
-      "card_fee",
-      "sticker_fee",
-      "penalties",
-      "active_loan_repayment",
-      "savings",
-    ];
+    return ["membership_fee", "card_fee", "sticker_fee", "penalties"];
   }
   if (scenario === "member_without_loan") {
-    return ["membership_fee", "card_fee", "sticker_fee", "penalties", "savings"];
+    return ["membership_fee", "card_fee", "sticker_fee", "penalties"];
   }
   return ["investment"];
 }
@@ -213,6 +201,10 @@ export function mergePolicySettings(rows?: PolicySettingRow[] | null): PolicySet
       mandatorySavingsThreshold: toFiniteNumber(
         percentagesRow.value.mandatorySavingsThreshold,
         DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold,
+      ),
+      mandatorySharesThreshold: toFiniteNumber(
+        percentagesRow.value.mandatorySharesThreshold,
+        DEFAULT_POLICY_SETTINGS.percentages.mandatorySharesThreshold,
       ),
       roundOffStep: Math.max(
         1,
