@@ -10,6 +10,7 @@ import {
   createInvestorRecord,
   createLoanRecord,
   createMemberRecord,
+  updateMemberRecord,
   createPettyCashRecord,
   createStaffMessageRecord,
   createStaffRecord,
@@ -432,6 +433,31 @@ type Store = {
       investorNotes?: string;
     },
   ) => Promise<string>;
+  updateMember: (m: {
+    memberId: string;
+    name: string;
+    phone: string;
+    status: "active" | "dormant";
+    shares: number;
+    savingsBalance: number;
+    category: MemberCategory;
+    firstName?: string;
+    secondName?: string;
+    thirdName?: string;
+    dob?: string;
+    gender?: "Male" | "Female";
+    email?: string;
+    address?: string;
+    city?: string;
+    county?: string;
+    village?: string;
+    oldSystemId?: string;
+    businessName?: string;
+    businessType?: string;
+    businessPermanence?: BusinessPermanence;
+    businessAddress?: string;
+    fieldOfficerId?: string;
+  }) => Promise<string>;
   addStaff: (s: Omit<Staff, "id">) => Promise<string>;
   updateStaff: (id: string, patch: Partial<Staff>) => Promise<void>;
   removeStaff: (id: string) => Promise<void>;
@@ -665,6 +691,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             category: m.category,
             investorContribution: (m as any).investorContribution,
             investorNotes: (m as any).investorNotes,
+          },
+        });
+        await refreshFromDatabase();
+        return result.id;
+      },
+      updateMember: async (m) => {
+        const result = await updateMember({
+          data: {
+            memberId: m.memberId,
+            name: m.name,
+            phone: m.phone,
+            status: m.status,
+            shares: m.shares,
+            savingsBalance: m.savingsBalance,
+            firstName: m.firstName,
+            secondName: m.secondName,
+            thirdName: m.thirdName,
+            dob: m.dob,
+            gender: m.gender,
+            email: m.email,
+            address: m.address,
+            city: m.city,
+            county: m.county,
+            village: m.village,
+            oldSystemId: m.oldSystemId,
+            businessName: m.businessName,
+            businessType: m.businessType,
+            businessPermanence: m.businessPermanence,
+            businessAddress: m.businessAddress,
+            fieldOfficerId: m.fieldOfficerId,
+            category: m.category,
           },
         });
         await refreshFromDatabase();

@@ -2116,6 +2116,130 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     return { id: memberId };
   });
 
+export const updateMemberRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      name: string;
+      phone: string;
+      status?: "active" | "dormant";
+      shares?: number;
+      savingsBalance?: number;
+      firstName?: string;
+      secondName?: string;
+      thirdName?: string;
+      dob?: string;
+      gender?: "Male" | "Female";
+      email?: string;
+      address?: string;
+      city?: string;
+      county?: string;
+      village?: string;
+      oldSystemId?: string;
+      businessName?: string;
+      businessType?: string;
+      businessPermanence?: "permanent" | "semi";
+      businessAddress?: string;
+      fieldOfficerId?: string;
+      category?: MemberCategory;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      name: String(data?.name ?? "").trim(),
+      phone: String(data?.phone ?? "").trim(),
+      status: data?.status ?? "active",
+      shares: Number(data?.shares ?? 0),
+      savingsBalance: Number(data?.savingsBalance ?? 0),
+      firstName: data?.firstName?.trim() || undefined,
+      secondName: data?.secondName?.trim() || undefined,
+      thirdName: data?.thirdName?.trim() || undefined,
+      dob: data?.dob?.trim() || undefined,
+      gender: data?.gender,
+      email: data?.email?.trim() || undefined,
+      address: data?.address?.trim() || undefined,
+      city: data?.city?.trim() || undefined,
+      county: data?.county?.trim() || undefined,
+      village: data?.village?.trim() || undefined,
+      oldSystemId: data?.oldSystemId?.trim() || undefined,
+      businessName: data?.businessName?.trim() || undefined,
+      businessType: data?.businessType?.trim() || undefined,
+      businessPermanence:
+        data?.businessPermanence === "permanent" || data?.businessPermanence === "semi"
+          ? data.businessPermanence
+          : undefined,
+      businessAddress: data?.businessAddress?.trim() || undefined,
+      fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
+      category:
+        data?.category === "investor" || data?.category === "both" || data?.category === "member"
+          ? data.category
+          : "member",
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.memberId) throw new Error("Member id is required.");
+    if (!data.name) throw new Error("Member name is required.");
+    if (!data.phone) throw new Error("Member phone is required.");
+    if (!isValidLocalKenyanPhone(data.phone)) {
+      throw new Error("Use a local phone number starting with 07 or 01.");
+    }
+
+    const supabaseAdmin = await requireSupabaseAdmin();
+    const phone = toLocalKenyanPhone(data.phone);
+    const memberCategory = resolveMemberCategory(data.category);
+    const lastName = [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || null;
+
+    const { error } = await supabaseAdmin
+      .from("members")
+      .update({
+        name: data.name,
+        phone,
+        status: data.status,
+        shares: data.shares,
+        savings_balance: data.savingsBalance,
+        first_name: data.firstName ?? null,
+        second_name: data.secondName ?? null,
+        third_name: data.thirdName ?? null,
+        last_name: lastName,
+        dob: data.dob ?? null,
+        gender: data.gender ?? null,
+        email: data.email ?? null,
+        address: data.address ?? null,
+        city: data.city ?? null,
+        county: data.county ?? null,
+        village: data.village ?? null,
+        old_system_id: data.oldSystemId ?? null,
+        business_name: data.businessName ?? null,
+        business_type: data.businessType ?? null,
+        business_permanence: data.businessPermanence ?? null,
+        business_address: data.businessAddress ?? null,
+        field_officer_id: data.fieldOfficerId ?? null,
+        member_category: memberCategory,
+        is_investor: isInvestorCategory(memberCategory),
+      })
+      .eq("id", data.memberId);
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "member.updated",
+      targetType: "member",
+      targetId: data.memberId,
+      summary: `${actor.name} updated member ${data.memberId}`,
+      details: {
+        membershipNumber: formatMembershipNumber(data.memberId),
+        category: memberCategory,
+        fieldOfficerId: data.fieldOfficerId ?? null,
+        status: data.status,
+        phone,
+        shares: data.shares,
+        savingsBalance: data.savingsBalance,
+        businessName: data.businessName ?? null,
+        businessPermanence: data.businessPermanence ?? null,
+      },
+    });
+    return { id: data.memberId };
+  });
+
 export const createStaffRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {

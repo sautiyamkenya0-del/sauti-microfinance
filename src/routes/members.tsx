@@ -25,7 +25,7 @@ export const Route = createFileRoute("/members")({
 });
 
 function MembersPage() {
-  const { members, loans, addMember, sharePrice, currentUser } = useStore();
+  const { members, loans, addMember, updateMember, sharePrice, currentUser } = useStore();
   const [open, setOpen] = useState(false);
   const nextMemberNo = useMemo(
     () =>
@@ -61,12 +61,39 @@ function MembersPage() {
     investorNotes: "",
   });
   const [form, setForm] = useState(() => buildEmptyForm(nextMemberNo));
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const isEditMode = Boolean(editingMemberId);
   const [q, setQ] = useState("");
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [payDialog, setPayDialog] = useState<{ member: Member; mode: "member" | "officer" } | null>(
     null,
   );
   const nav = useNavigate();
+
+  const buildFormFromMember = (member: Member) => ({
+    memberNo: member.id,
+    category: member.category,
+    firstName: member.firstName ?? "",
+    secondName: member.secondName ?? "",
+    thirdName: member.thirdName ?? "",
+    dob: member.dob ?? "",
+    gender: member.gender ?? "Male",
+    phone: member.phone,
+    email: member.email ?? "",
+    address: member.address ?? "",
+    city: member.city ?? "",
+    county: member.county ?? "",
+    village: member.village ?? "",
+    businessName: member.businessName ?? "",
+    businessType: member.businessType ?? "",
+    businessPermanence: member.businessPermanence ?? "",
+    businessAddress: member.businessAddress ?? "",
+    fieldOfficerId: member.fieldOfficerId ?? "",
+    shares: member.shares,
+    savingsBalance: member.savingsBalance,
+    investorContribution: 0,
+    investorNotes: "",
+  });
   const isOfficer =
     currentUser.role === "loan_officer" ||
     currentUser.role === "manager" ||
@@ -99,6 +126,7 @@ function MembersPage() {
           />
           <button
             onClick={() => {
+              setEditingMemberId(null);
               setForm(buildEmptyForm(nextMemberNo));
               setOpen(true);
             }}
@@ -179,6 +207,18 @@ function MembersPage() {
                           >
                             <Smartphone className="h-3 w-3" /> Pay
                           </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingMemberId(m.id);
+                              setForm(buildFormFromMember(m));
+                              setOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-muted/10 text-foreground hover:bg-muted/20"
+                            title="Edit member"
+                          >
+                            Edit
+                          </button>
                           {isOfficer && (
                             <button
                               onClick={(e) => {
@@ -225,13 +265,18 @@ function MembersPage() {
       {open && (
         <div
           className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4 overflow-y-auto"
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            setOpen(false);
+            setEditingMemberId(null);
+          }}
         >
           <div
             className="bg-card rounded-xl border border-border w-full max-w-2xl p-6 my-8"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="font-display text-lg font-semibold mb-4">Register Member</h3>
+            <h3 className="font-display text-lg font-semibold mb-4">
+            {isEditMode ? "Edit Member" : "Register Member"}
+          </h3>
 
             <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
               {/* Applicant Details */}
@@ -242,6 +287,7 @@ function MembersPage() {
                     <input
                       className="input"
                       value={form.memberNo}
+                      disabled={isEditMode}
                       onChange={(e) =>
                         setForm({
                           ...form,
@@ -490,7 +536,10 @@ function MembersPage() {
 
             <div className="flex justify-end gap-2 mt-5">
               <button
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  setEditingMemberId(null);
+                }}
                 className="px-3 py-1.5 text-sm rounded-md hover:bg-muted"
               >
                 Cancel
@@ -527,47 +576,76 @@ function MembersPage() {
                     return;
                   }
                   try {
-                    await addMember({
-                      memberId: normalizedMemberNo,
-                      name: fullName,
-                      phone,
-                      status: "active",
-                      shares: form.shares,
-                      savingsBalance: form.savingsBalance,
-                      joinedAt: new Date().toISOString().slice(0, 10),
-                      firstName: form.firstName || undefined,
-                      secondName: form.secondName || undefined,
-                      thirdName: form.thirdName || undefined,
-                      dob: form.dob || undefined,
-                      gender: form.gender,
-                      email: form.email || undefined,
-                      address: form.address || undefined,
-                      city: form.city || undefined,
-                      county: form.county || undefined,
-                      village: form.village || undefined,
-                      businessName: form.businessName || undefined,
-                      businessType: form.businessType || undefined,
-                      businessPermanence: form.businessPermanence || undefined,
-                      businessAddress: form.businessAddress || undefined,
-                      fieldOfficerId: form.fieldOfficerId || undefined,
-                      category: form.category,
-                      investorContribution: showInvestorFields
-                        ? form.investorContribution
-                        : undefined,
-                      investorNotes: showInvestorFields ? form.investorNotes : undefined,
-                    });
-                    toast.success(
-                      form.category === "investor"
-                        ? "Investor registered"
-                        : form.category === "both"
-                          ? "Member-investor registered"
-                          : "Member registered",
-                    );
+                    if (isEditMode && editingMemberId) {
+                      await updateMember({
+                        memberId: editingMemberId,
+                        name: fullName,
+                        phone,
+                        status: "active",
+                        shares: form.shares,
+                        savingsBalance: form.savingsBalance,
+                        category: form.category,
+                        firstName: form.firstName || undefined,
+                        secondName: form.secondName || undefined,
+                        thirdName: form.thirdName || undefined,
+                        dob: form.dob || undefined,
+                        gender: form.gender,
+                        email: form.email || undefined,
+                        address: form.address || undefined,
+                        city: form.city || undefined,
+                        county: form.county || undefined,
+                        village: form.village || undefined,
+                        businessName: form.businessName || undefined,
+                        businessType: form.businessType || undefined,
+                        businessPermanence: form.businessPermanence || undefined,
+                        businessAddress: form.businessAddress || undefined,
+                        fieldOfficerId: form.fieldOfficerId || undefined,
+                      });
+                      toast.success("Member updated");
+                    } else {
+                      await addMember({
+                        memberId: normalizedMemberNo,
+                        name: fullName,
+                        phone,
+                        status: "active",
+                        shares: form.shares,
+                        savingsBalance: form.savingsBalance,
+                        joinedAt: new Date().toISOString().slice(0, 10),
+                        firstName: form.firstName || undefined,
+                        secondName: form.secondName || undefined,
+                        thirdName: form.thirdName || undefined,
+                        dob: form.dob || undefined,
+                        gender: form.gender,
+                        email: form.email || undefined,
+                        address: form.address || undefined,
+                        city: form.city || undefined,
+                        county: form.county || undefined,
+                        village: form.village || undefined,
+                        businessName: form.businessName || undefined,
+                        businessType: form.businessType || undefined,
+                        businessPermanence: form.businessPermanence || undefined,
+                        businessAddress: form.businessAddress || undefined,
+                        fieldOfficerId: form.fieldOfficerId || undefined,
+                        category: form.category,
+                        investorContribution: showInvestorFields
+                          ? form.investorContribution
+                          : undefined,
+                        investorNotes: showInvestorFields ? form.investorNotes : undefined,
+                      });
+                      toast.success(
+                        form.category === "investor"
+                          ? "Investor registered"
+                          : form.category === "both"
+                            ? "Member-investor registered"
+                            : "Member registered",
+                      );
+                    }
                     setOpen(false);
+                    setEditingMemberId(null);
                     setForm(buildEmptyForm(nextMemberNo));
                   } catch (error: unknown) {
                     toast.error(
-                      error instanceof Error ? error.message : "Failed to register member",
+                      error instanceof Error ? error.message : "Failed to save member",
                     );
                   }
                 }}
