@@ -450,13 +450,14 @@ export function FieldVisits() {
                   </label>
                 </div>
 
-                {supportingPhotos.length > 0 && (
+                {supportingPhotos.length > 0 &&
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {supportingPhotos.map((photo) => (
-                      <div
-                        key={photo.id}
-                        className="overflow-hidden rounded-lg border border-border bg-background"
-                      >
+                    {supportingPhotos.map((photo) => {
+                      return (
+                        <div
+                          key={photo.id}
+                          className="overflow-hidden rounded-lg border border-border bg-background"
+                        >
                         <img
                           src={photo.data}
                           alt={photo.name}
@@ -491,8 +492,8 @@ export function FieldVisits() {
                                 const nextLabel = event.target.value;
                                 setSupportingPhotos((current) =>
                                   current.map((item) =>
-                                    item.id === photo.id ? { ...item, label: nextLabel } : item,
-                                  ),
+                                    item.id === photo.id ? { ...item, label: nextLabel } : item
+                                  )
                                 );
                               }}
                               placeholder="e.g. Main Gate"
@@ -505,9 +506,11 @@ export function FieldVisits() {
                           </label>
                         </div>
                       </div>
-                    ))}
+                    </div>
+                    );
+                  })}
                   </div>
-                )}
+                }
               </div>
             </div>
 
