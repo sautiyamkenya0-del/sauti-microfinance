@@ -20,8 +20,22 @@ import {
 } from "@/components/ui/table";
 import { deleteOldErrorLogs, listErrorLogs } from "@/lib/error-logging.functions";
 import { formatDistanceToNow } from "date-fns";
+import { useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/error-logs")({
+  beforeLoad: async ({ context, navigate }) => {
+    const store = useStore.getState();
+    const { authMode, currentUser, isAuthenticated } = store;
+    
+    // Only staff with director or manager role can view error logs
+    if (
+      !isAuthenticated ||
+      authMode !== "staff" ||
+      (currentUser.role !== "director" && currentUser.role !== "manager")
+    ) {
+      throw navigate({ to: "/" });
+    }
+  },
   component: ErrorLogsPage,
 });
 
