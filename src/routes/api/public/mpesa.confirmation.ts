@@ -9,3 +9,4 @@ export const Route = createFileRoute("/api/public/mpesa/confirmation")({
     },
   },
 });
+

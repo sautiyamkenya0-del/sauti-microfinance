@@ -157,6 +157,10 @@ function buildVariantFromSecrets(args: {
   const smsFallbackPhoneDetails = pickCandidateValue(args.smsFallbackPhone, args.label);
 
   const normalizedEnv = normalizeMpesaEnv(envDetails.value);
+  const pubBase = String(readServerEnv("PUBLIC_BASE_URL") ?? "").trim();
+  const callbackFallback = pubBase ? `${pubBase.replace(/\/+$/, "")}/api/public/mpesa/confirmation` : "";
+  const callbackUrlValue = (String(callbackUrlDetails.value ?? "").trim() || callbackFallback) || undefined;
+
   const variant: MpesaConfigVariant = {
     label: args.label,
     resolutionMode: args.resolutionMode,
@@ -166,7 +170,7 @@ function buildVariantFromSecrets(args: {
     consumerSecret: consumerSecretDetails.value,
     shortcode: shortcodeDetails.value,
     passkey: passkeyDetails.value,
-    callbackUrl: callbackUrlDetails.value,
+    callbackUrl: callbackUrlValue,
     smsUrl: smsUrlDetails.value,
     smsUsername: smsUsernameDetails.value,
     smsPassword: smsPasswordDetails.value,
