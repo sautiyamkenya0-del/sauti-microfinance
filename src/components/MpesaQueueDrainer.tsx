@@ -1,37 +1,42 @@
 import { useEffect } from "react";
-import { useStore } from "@/lib/store";
 import { toast } from "sonner";
 
 /** Low-frequency fallback that retries any unprocessed M-Pesa confirmations. */
 export function MpesaQueueDrainer() {
-  const { applyMpesaPayment } = useStore();
-
   useEffect(() => {
     let stop = false;
 
     async function tick() {
       if (document.hidden || stop) return;
       try {
-        const r = await fetch("/api/mpesa/queue", {
-          cache: "no-store",
-          headers: {
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-          },
-        });
-        if (!r.ok) return;
-        const { items } = await r.json();
-        if (!Array.isArray(items) || items.length === 0) return;
-        for (const it of items as Array<{
-          id: string;
-          txId: string;
-          amount: number;
-          account: string;
-          name: string;
-        }>) {
-          const res = await applyMpesaPayment(it.account, it.amount, it.name, it.txId, it.id);
-          (res.matched ? toast.success : toast.warning)(
-            `M-Pesa ${it.txId}: ${res.notes.join(" ")}`,
+        let totalProcessed = 0;
+        let totalMatched = 0;
+        let totalFailed = 0;
+
+        for (let batch = 0; batch < 8 && !stop; batch += 1) {
+          const r = await fetch("/api/mpesa/queue", {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Cache-Control": "no-cache",
+              Pragma: "no-cache",
+            },
+          });
+          if (!r.ok) break;
+          const { items, processed } = await r.json();
+          if (!Array.isArray(items) || items.length === 0 || !processed) break;
+          totalProcessed += Number(processed ?? 0);
+          totalFailed += items.filter((item: { ok?: boolean }) => !item.ok).length;
+          totalMatched += items.filter(
+            (item: { ok?: boolean; result?: { matched?: boolean } }) =>
+              item.ok && item.result?.matched,
+          ).length;
+          if (items.length < 250) break;
+        }
+
+        if (totalProcessed > 0) {
+          (totalFailed ? toast.warning : toast.success)(
+            `M-Pesa queue processed ${totalProcessed} confirmation(s); ${totalMatched} matched member account(s).${totalFailed ? ` ${totalFailed} need review.` : ""}`,
           );
         }
       } catch {
@@ -52,6 +57,6 @@ export function MpesaQueueDrainer() {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [applyMpesaPayment]);
+  }, []);
   return null;
 }

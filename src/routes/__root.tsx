@@ -142,7 +142,7 @@ function AppLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
   const canDrainMpesaQueue =
-    authMode === "staff" && (currentUser.role === "director" || currentUser.role === "manager");
+    authMode === "staff" && (currentUser?.role === "director" || currentUser?.role === "manager");
 
   if (!isHydrated) {
     return (

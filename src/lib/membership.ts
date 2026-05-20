@@ -4,7 +4,9 @@ function extractMembershipDigits(value: string | number | null | undefined) {
   const raw = String(value ?? "")
     .trim()
     .toUpperCase();
-  const match = raw.match(/(\d+)/);
+  const comparable = raw.replace(/\s+/g, "");
+  const normalized = comparable.startsWith("SBC") ? comparable.replace(/O/g, "0") : comparable;
+  const match = normalized.match(/(\d+)/);
   if (!match) return undefined;
   return match[1].replace(/^0+/, "") || "0";
 }
@@ -33,7 +35,7 @@ export function nextMembershipNumber(
   values: Array<string | number | null | undefined>,
   minimum: number = 1,
 ) {
-  const maxNumeric = values.reduce(
+  const maxNumeric = values.reduce<number>(
     (max, value) => Math.max(max, membershipSequenceValue(value)),
     0,
   );

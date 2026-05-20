@@ -43,6 +43,18 @@ function numberValue(value: unknown) {
   return Number.isFinite(next) ? next : 0;
 }
 
+function mpesaTimestampValue(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!/^\d{14}$/.test(raw)) return undefined;
+  const year = raw.slice(0, 4);
+  const month = raw.slice(4, 6);
+  const day = raw.slice(6, 8);
+  const hour = raw.slice(8, 10);
+  const minute = raw.slice(10, 12);
+  const second = raw.slice(12, 14);
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`;
+}
+
 async function readBodyObject(request: Request) {
   const rawText = await request.text();
   if (!rawText.trim()) return {};
@@ -120,6 +132,8 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
       textValue(readStkMetadataValue(metadataItems, "PhoneNumber")) ??
       textValue(requestContext?.phone);
     const mpesaReceipt = textValue(readStkMetadataValue(metadataItems, "MpesaReceiptNumber"));
+    const transactionDate =
+      mpesaTimestampValue(readStkMetadataValue(metadataItems, "TransactionDate")) ?? undefined;
     const trackingRef = mpesaReceipt ?? checkoutRequestId ?? merchantRequestId;
 
     return {
@@ -132,6 +146,7 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
       businessShortCode: textValue(root.BusinessShortCode),
       paymentRef: mpesaReceipt,
       eventRef: trackingRef,
+      createdAt: transactionDate,
       success: resultCode === 0,
       resultCode,
       resultDesc,
@@ -150,6 +165,7 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
     businessShortCode: textValue(root.BusinessShortCode ?? root.ShortCode),
     paymentRef: textValue(root.TransID ?? root.MpesaReceiptNumber),
     eventRef: textValue(root.TransID ?? root.MpesaReceiptNumber),
+    createdAt: mpesaTimestampValue(root.TransTime) ?? undefined,
     success: true,
     resultCode: 0,
     resultDesc: "Accepted",
@@ -235,6 +251,7 @@ export async function handleMpesaConfirmationRequest(request: Request) {
       payerName: normalized.payerName,
       phone: normalized.payerPhone,
       processed: !normalized.success,
+      createdAt: normalized.createdAt,
     });
 
     let processedResult: Awaited<ReturnType<typeof applyMpesaPaymentToDatabase>> | undefined;

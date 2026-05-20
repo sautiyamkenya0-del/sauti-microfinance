@@ -64,6 +64,9 @@ function TxPage() {
     return { inflow, outflow, net: inflow - outflow };
   }, [list]);
 
+  const displayDateTime = (transaction: (typeof transactions)[number]) =>
+    transaction.createdAt ? new Date(transaction.createdAt).toLocaleString() : transaction.date;
+
   return (
     <>
       <AppHeader title="Transactions" subtitle="Unified ledger across all financial activity." />
@@ -206,7 +209,7 @@ function TxPage() {
                         {transaction.ref ?? transaction.id}
                       </td>
                       <td className="px-5 py-3 text-muted-foreground text-xs">
-                        {transaction.date}
+                        {displayDateTime(transaction)}
                       </td>
                       <td className="px-5 py-3 text-xs text-muted-foreground">
                         {staffMember?.name ?? transaction.by}

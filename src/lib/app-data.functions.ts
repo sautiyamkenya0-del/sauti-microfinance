@@ -334,6 +334,7 @@ async function ensureInvestorForMember(member: {
 
 async function insertTransactionRow(row: {
   date?: string;
+  created_at?: string | null;
   type: string;
   amount: number;
   member_id?: string | null;
@@ -388,6 +389,7 @@ async function insertTransactionRow(row: {
     ref: row.ref ?? null,
     account: row.account ?? null,
     payer_name: row.payer_name ?? null,
+    created_at: row.created_at ?? undefined,
   });
   if (error) throw new Error(error.message);
   return id;
@@ -449,9 +451,11 @@ async function createUnallocatedMpesaTransaction(args: {
   mpesaRef?: string;
   note: string;
   date?: string;
+  createdAt?: string;
 }) {
   return insertTransactionRow({
     date: args.date,
+    created_at: args.createdAt ?? null,
     type: "mpesa_unallocated",
     amount: args.amount,
     member_id: null,
@@ -492,6 +496,7 @@ async function createProcessedMpesaLedgerLink(args: {
   mpesaRef?: string;
   eventId?: string;
   date?: string;
+  createdAt?: string;
 }) {
   const existing = await findExistingMpesaTransaction({
     account: args.account,
@@ -524,6 +529,7 @@ async function createProcessedMpesaLedgerLink(args: {
       mpesaRef: args.mpesaRef,
       note,
       date: args.date,
+      createdAt: args.createdAt,
     });
     await markMpesaEventProcessed(args.eventId, transactionId);
     return {
@@ -538,6 +544,7 @@ async function createProcessedMpesaLedgerLink(args: {
     "M-Pesa event was already processed without a linked transaction; created the missing savings ledger row without changing balances.";
   const transactionId = await insertTransactionRow({
     date: args.date,
+    created_at: args.createdAt ?? null,
     type: "deposit",
     amount: args.amount,
     member_id: member.id,
@@ -616,6 +623,7 @@ export async function recordMpesaConfirmationEvent(args: {
   payerName?: string;
   phone?: string;
   processed?: boolean;
+  createdAt?: string;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const ref = args.mpesaRef?.trim() || undefined;
@@ -642,6 +650,7 @@ export async function recordMpesaConfirmationEvent(args: {
       phone: args.phone ?? null,
       raw: args.raw as any,
       processed: args.processed ?? false,
+      created_at: args.createdAt ?? undefined,
     })
     .select("id, processed, transaction_id")
     .single();
@@ -781,7 +790,10 @@ export async function applyMpesaPaymentToDatabase(args: {
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const norm = args.account.trim().toUpperCase();
+  const amount = Number(args.amount ?? 0);
   const notes: string[] = [];
+  let paymentCreatedAt: string | undefined;
+  let paymentDate = new Date().toISOString().slice(0, 10);
 
   if (args.eventId) {
     const { data: event, error: eventError } = await supabaseAdmin
@@ -790,6 +802,19 @@ export async function applyMpesaPaymentToDatabase(args: {
       .eq("id", args.eventId)
       .maybeSingle();
     if (eventError) throw new Error(eventError.message);
+    paymentCreatedAt = event?.created_at ? String(event.created_at) : undefined;
+    paymentDate = paymentCreatedAt ? paymentCreatedAt.slice(0, 10) : paymentDate;
+    if (!norm || amount <= 0) {
+      const note = !norm
+        ? "M-Pesa confirmation was recorded without an account reference; no ledger transaction was created."
+        : "M-Pesa confirmation was recorded without a positive amount; no ledger transaction was created.";
+      await markMpesaEventProcessed(args.eventId, null);
+      return {
+        matched: false,
+        account: norm,
+        notes: [note],
+      };
+    }
     if (event?.processed) {
       if (event.transaction_id) {
         let matched = true;
@@ -814,17 +839,29 @@ export async function applyMpesaPaymentToDatabase(args: {
 
       const linked = await createProcessedMpesaLedgerLink({
         account: norm,
-        amount: Number(args.amount ?? 0),
+        amount,
         payerName: args.payerName,
         mpesaRef: args.mpesaRef,
         eventId: args.eventId,
-        date: String(event.created_at ?? new Date().toISOString()).slice(0, 10),
+        date: paymentDate,
+        createdAt: paymentCreatedAt,
       });
       return { account: norm, ...linked };
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  if (!norm || amount <= 0) {
+    const note = !norm
+      ? "M-Pesa confirmation was recorded without an account reference; no ledger transaction was created."
+      : "M-Pesa confirmation was recorded without a positive amount; no ledger transaction was created.";
+    await markMpesaEventProcessed(args.eventId, null);
+    return {
+      matched: false,
+      account: norm,
+      notes: [note],
+    };
+  }
+
   const membershipCandidates = membershipIdCandidates(norm);
   const member = await findMemberByMembershipInput(norm);
   if (!member) {
@@ -834,11 +871,12 @@ export async function applyMpesaPaymentToDatabase(args: {
     notes.push(note);
     const unallocatedTransactionId = await createUnallocatedMpesaTransaction({
       account: norm,
-      amount: Number(args.amount ?? 0),
+      amount,
       payerName: args.payerName,
       mpesaRef: args.mpesaRef,
       note,
-      date: today,
+      date: paymentDate,
+      createdAt: paymentCreatedAt,
     });
     await markMpesaEventProcessed(args.eventId, unallocatedTransactionId);
     return {
@@ -848,17 +886,19 @@ export async function applyMpesaPaymentToDatabase(args: {
       transactionId: unallocatedTransactionId,
       primary: {
         type: "mpesa_unallocated",
-        amount: Number(args.amount ?? 0),
+        amount,
         note,
       },
     };
   }
   const memberId = member.id;
+  const matchedMember = member;
   const memberCategory = resolveMemberCategory(member.member_category, member.is_investor);
 
-  let remaining = Number(args.amount ?? 0);
+  let remaining = amount;
   const txBatch: Array<{
     date?: string;
+    created_at?: string | null;
     type: string;
     amount: number;
     member_id?: string | null;
@@ -884,7 +924,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     | {
         id: string;
         paid: number;
-        status: string;
+        status: "pending" | "active" | "closed" | "defaulted" | "rejected";
       }
     | undefined;
 
@@ -898,7 +938,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       note: `Investment via Paybill ${norm}`,
     };
     primaryTransactionId = await insertTransactionRow({
-      date: today,
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
       type: "investor_contribution",
       amount: investorAmount,
       member_id: memberId,
@@ -1022,11 +1063,11 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   function currentSavingsBalance() {
-    return Number(memberPatch.savings_balance ?? member.savings_balance ?? 0);
+    return Number(memberPatch.savings_balance ?? matchedMember.savings_balance ?? 0);
   }
 
   function currentShareUnits() {
-    return Number(memberPatch.shares ?? member.shares ?? 0);
+    return Number(memberPatch.shares ?? matchedMember.shares ?? 0);
   }
 
   function currentShareValue() {
@@ -1043,7 +1084,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
     txBatch.push({
-      date: today,
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
       type: "deposit",
       amount: applied,
       member_id: memberId,
@@ -1076,7 +1118,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
     txBatch.push({
-      date: today,
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
       type: "share_purchase",
       amount: actualApplied,
       member_id: memberId,
@@ -1096,7 +1139,8 @@ export async function applyMpesaPaymentToDatabase(args: {
     if (applied <= 0) return;
     setPrimaryIfMissing("fee_payment", applied, `Purpose pool via Paybill ${norm}`);
     txBatch.push({
-      date: today,
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
       type: "fee_payment",
       amount: applied,
       member_id: memberId,
@@ -1126,7 +1170,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       activeLoan.id,
     );
     txBatch.push({
-      date: today,
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
       type: "loan_repayment",
       amount: safeApplied,
       member_id: memberId,
@@ -1140,7 +1185,12 @@ export async function applyMpesaPaymentToDatabase(args: {
 
     const nextPaid = Number(activeLoan.paid ?? 0) + safeApplied;
     const nextBalance = Math.max(0, summary.total - nextPaid);
-    const nextStatus = nextBalance <= 0 ? "closed" : activeLoan.status;
+    const nextStatus = (nextBalance <= 0 ? "closed" : activeLoan.status) as
+      | "pending"
+      | "active"
+      | "closed"
+      | "defaulted"
+      | "rejected";
     activeLoan.paid = nextPaid;
     activeLoan.status = nextStatus;
     activeLoanPatch = {
@@ -1149,7 +1199,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       status: nextStatus,
     };
 
-    if (!member.fee_first_upfront_paid) {
+    if (!matchedMember.fee_first_upfront_paid) {
       memberPatch.fee_first_upfront_paid = true;
     }
 
@@ -1227,7 +1277,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       memberPatch[fee.key] = true;
       setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
       txBatch.push({
-        date: today,
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
         type: "fee_payment",
         amount: fee.amount,
         member_id: memberId,
@@ -1282,7 +1333,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       memberId,
       amount: toRoundOff,
       source: primary?.type === "deposit" ? "savings_deposit" : "loan_repayment",
-      date: today,
+      date: paymentDate,
       ref: args.mpesaRef,
     });
   }
@@ -1449,6 +1500,7 @@ function mapTransactionRow(row: any) {
   return {
     id: row.id,
     date: row.date,
+    createdAt: row.created_at ?? undefined,
     type: row.type,
     account: row.account ?? undefined,
     payerName: row.payer_name ?? undefined,
@@ -1773,7 +1825,8 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
         .from("transactions")
         .select("*")
         .eq("member_id", session.memberId)
-        .order("date", { ascending: false }),
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false }),
       supabaseAdmin
         .from("penalties")
         .select("*")
@@ -1842,7 +1895,11 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     supabaseAdmin.from("staff").select("*").order("id"),
     supabaseAdmin.from("members").select("*").order("id"),
     supabaseAdmin.from("loans").select("*").order("start_date", { ascending: false }),
-    supabaseAdmin.from("transactions").select("*").order("date", { ascending: false }),
+    supabaseAdmin
+      .from("transactions")
+      .select("*")
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false }),
     supabaseAdmin.from("petty_cash").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("investors").select("*").order("joined_at", { ascending: false }),
     supabaseAdmin.from("attendance").select("*").order("date", { ascending: false }),
@@ -2791,6 +2848,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       ref?: string;
       by: string;
       note?: string;
+      allowOverdraw?: boolean;
     }) => ({
       date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
       type: data?.type ?? "deposit",
@@ -2802,6 +2860,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       ref: data?.ref?.trim() || undefined,
       by: String(data?.by ?? "").trim(),
       note: data?.note?.trim() || undefined,
+      allowOverdraw: !!data?.allowOverdraw,
     }),
   )
   .handler(async ({ data }) => {
@@ -2844,6 +2903,38 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       }
     }
 
+    const memberPatch: Record<string, unknown> = {};
+    let memberBeforeTransaction: {
+      savings_balance?: number | string | null;
+      shares?: number | string | null;
+    } | null = null;
+    if (resolvedMemberId) {
+      const { data: member, error: memberError } = await supabaseAdmin
+        .from("members")
+        .select("savings_balance, shares")
+        .eq("id", resolvedMemberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      memberBeforeTransaction = member;
+      if (memberBeforeTransaction) {
+        if (data.type === "deposit") {
+          memberPatch.savings_balance =
+            Number(memberBeforeTransaction.savings_balance ?? 0) + data.amount;
+        } else if (data.type === "withdrawal") {
+          const currentBalance = Number(memberBeforeTransaction.savings_balance ?? 0);
+          if (!data.allowOverdraw && currentBalance < data.amount) {
+            throw new Error(
+              `Withdrawal exceeds the member's savings balance of ${currentBalance}/=. Confirm overdraft to continue.`,
+            );
+          }
+          memberPatch.savings_balance = currentBalance - data.amount;
+        } else if (data.type === "share_purchase") {
+          memberPatch.shares =
+            Number(memberBeforeTransaction.shares ?? 0) + Math.floor(data.amount / SHARE_PRICE);
+        }
+      }
+    }
+
     const id = await insertTransactionRow({
       date: data.date,
       type: data.type,
@@ -2857,33 +2948,12 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       payer_name: data.payerName ?? null,
     });
 
-    if (resolvedMemberId) {
-      const { data: member, error: memberError } = await supabaseAdmin
+    if (resolvedMemberId && Object.keys(memberPatch).length > 0) {
+      const { error: updateMemberError } = await supabaseAdmin
         .from("members")
-        .select("savings_balance, shares")
-        .eq("id", resolvedMemberId)
-        .maybeSingle();
-      if (memberError) throw new Error(memberError.message);
-      if (member) {
-        const patch: Record<string, unknown> = {};
-        if (data.type === "deposit") {
-          patch.savings_balance = Number(member.savings_balance ?? 0) + data.amount;
-        } else if (data.type === "withdrawal") {
-          if (Number(member.savings_balance ?? 0) < data.amount) {
-            throw new Error("Withdrawal exceeds the member's savings balance.");
-          }
-          patch.savings_balance = Math.max(0, Number(member.savings_balance ?? 0) - data.amount);
-        } else if (data.type === "share_purchase") {
-          patch.shares = Number(member.shares ?? 0) + Math.floor(data.amount / SHARE_PRICE);
-        }
-        if (Object.keys(patch).length > 0) {
-          const { error: updateMemberError } = await supabaseAdmin
-            .from("members")
-            .update(patch as any)
-            .eq("id", resolvedMemberId);
-          if (updateMemberError) throw new Error(updateMemberError.message);
-        }
-      }
+        .update(memberPatch as any)
+        .eq("id", resolvedMemberId);
+      if (updateMemberError) throw new Error(updateMemberError.message);
     }
 
     if (data.type === "investor_contribution" && investorTarget) {

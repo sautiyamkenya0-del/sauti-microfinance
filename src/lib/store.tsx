@@ -115,6 +115,7 @@ export type Loan = {
 export type Transaction = {
   id: string;
   date: string;
+  createdAt?: string;
   type:
     | "deposit"
     | "withdrawal"
@@ -466,7 +467,9 @@ type Store = {
   ) => Promise<string>;
   approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => Promise<void>;
   rejectLoan: (loanId: string, by: string, note?: string) => Promise<void>;
-  recordTransaction: (t: Omit<Transaction, "id" | "date"> & { date?: string }) => Promise<string>;
+  recordTransaction: (
+    t: Omit<Transaction, "id" | "date"> & { date?: string; allowOverdraw?: boolean },
+  ) => Promise<string>;
   addPetty: (p: Omit<PettyCashEntry, "id" | "date"> & { date?: string }) => Promise<string>;
   addAppraisal: (a: Omit<Appraisal, "id" | "date">) => Promise<string>;
   addInvestor: (i: Omit<Investor, "id" | "joinedAt"> & { joinedAt?: string }) => Promise<string>;
@@ -697,7 +700,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return result.id;
       },
       updateMember: async (m) => {
-        const result = await updateMember({
+        const result = await updateMemberRecord({
           data: {
             memberId: m.memberId,
             name: m.name,
@@ -785,6 +788,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ref: t.ref,
             by: t.by,
             note: t.note,
+            allowOverdraw: t.allowOverdraw,
           },
         });
         await refreshFromDatabase();

@@ -88,7 +88,9 @@ function Portal() {
   const myTx = transactions.filter(
     (t) =>
       t.memberId === memberId &&
-      !String(t.note ?? "").toLowerCase().includes("purpose pool contribution"),
+      !String(t.note ?? "")
+        .toLowerCase()
+        .includes("purpose pool contribution"),
   );
   const myPen = penalties.filter((p) => p.memberId === memberId);
   const fees = feePolicies.filter(isFeeActive);
@@ -106,7 +108,8 @@ function Portal() {
             {
               hasActiveLoan: myLoans.some((loan) => loan.status === "active"),
             },
-          ) && (f.key !== "sticker" || memberNeedsSticker(member)),
+          ) &&
+          (f.key !== "sticker" || memberNeedsSticker(member)),
       )
     : fees;
   const { submit } = useApprovalActions();
@@ -522,7 +525,9 @@ function Portal() {
                     <tbody className="divide-y divide-border">
                       {myTx.map((t) => (
                         <tr key={t.id}>
-                          <td className="px-5 py-2">{t.date}</td>
+                          <td className="px-5 py-2">
+                            {t.createdAt ? new Date(t.createdAt).toLocaleString() : t.date}
+                          </td>
                           <td>{t.type.replace(/_/g, " ")}</td>
                           <td className="text-muted-foreground">{t.note ?? t.ref ?? "—"}</td>
                           <td className="text-right pr-5">{fmtKES(t.amount)}</td>

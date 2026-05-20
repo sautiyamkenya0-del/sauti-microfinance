@@ -263,7 +263,10 @@ function PolicyCenterPage() {
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
-  const carryoverLoanDraftSummary = summarizeLegacyCarryoverLoan(carryoverLoanDraft, policySettings);
+  const carryoverLoanDraftSummary = summarizeLegacyCarryoverLoan(
+    carryoverLoanDraft,
+    policySettings,
+  );
   const derivedCarryoverTotalCollected =
     carryoverProfile.feesPaidTotal +
     carryoverProfile.loanRepaymentsTotal +
@@ -304,8 +307,56 @@ function PolicyCenterPage() {
       ].includes(transaction.type),
     )
     .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientInflow = selectedClientTransactions
+    .filter((transaction) =>
+      [
+        "deposit",
+        "loan_repayment",
+        "share_purchase",
+        "fee_payment",
+        "investor_contribution",
+      ].includes(transaction.type),
+    )
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientOutflow = selectedClientTransactions
+    .filter((transaction) => ["withdrawal", "loan_disbursement"].includes(transaction.type))
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientNet = selectedClientInflow - selectedClientOutflow;
   const combinedCollections = totalCollections + derivedCarryoverTotalCollected;
   const combinedOutstandingBalance = totalBalance + carryoverBalance;
+  const clientLifetimeNet = selectedClientNet + derivedCarryoverTotalCollected;
+  const selectedClientTransactionTotals = [
+    {
+      label: "Deposits",
+      value: selectedClientTransactions
+        .filter((transaction) => transaction.type === "deposit")
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    },
+    {
+      label: "Withdrawals",
+      value: selectedClientTransactions
+        .filter((transaction) => transaction.type === "withdrawal")
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    },
+    {
+      label: "Loan repayments",
+      value: selectedClientTransactions
+        .filter((transaction) => transaction.type === "loan_repayment")
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    },
+    {
+      label: "Shares",
+      value: selectedClientTransactions
+        .filter((transaction) => transaction.type === "share_purchase")
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    },
+    {
+      label: "Fees",
+      value: selectedClientTransactions
+        .filter((transaction) => transaction.type === "fee_payment")
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    },
+  ];
   const clientRating = selectedClient
     ? buildClientRating(selectedClient, selectedClientLoans, selectedClientPenalties)
     : null;
@@ -316,7 +367,9 @@ function PolicyCenterPage() {
     carryoverLoanSummaries
       .filter(({ loan, summary }) => loan.status !== "closed" && !summary.isFinished)
       .reduce((sum, row) => sum + row.summary.dailyInclusive, 0);
-  const openLiveLoans = loans.filter((loan) => loan.status === "active" || loan.status === "defaulted");
+  const openLiveLoans = loans.filter(
+    (loan) => loan.status === "active" || loan.status === "defaulted",
+  );
   const openLiveLoanSummaries = openLiveLoans.map((loan) => ({
     loan,
     summary: loanSummary(loan),
@@ -330,11 +383,11 @@ function PolicyCenterPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const systemTargetRows = useMemo(
     () =>
-      ([
+      [
         { label: "Today", period: "daily" as const },
         { label: "Next 7 days", period: "weekly" as const },
         { label: "Next 30 days", period: "monthly" as const },
-      ]).map(({ label, period }) => {
+      ].map(({ label, period }) => {
         const window = targetWindow(period, todayIso);
         const expectedValue = scheduledRepaymentsForWindow(
           window.start,
@@ -403,7 +456,10 @@ function PolicyCenterPage() {
     if (!editingFee) return;
     if (!editingFee.label.trim()) return toast.error("Label required.");
     if (editingFee.amount < 0) return toast.error("Amount must be 0 or more.");
-    if (editingFee.scope === "selected_members" && (editingFee.selectedMemberIds?.length ?? 0) === 0) {
+    if (
+      editingFee.scope === "selected_members" &&
+      (editingFee.selectedMemberIds?.length ?? 0) === 0
+    ) {
       return toast.error("Pick at least one member for a selected-members fee.");
     }
     await saveFee({ data: editingFee });
@@ -439,7 +495,10 @@ function PolicyCenterPage() {
       data: {
         ...carryoverProfile,
         totalCollected: derivedCarryoverTotalCollected,
-        pendingBalance: carryoverLoanSummaries.reduce((sum, row) => sum + row.summary.totalOwedNow, 0),
+        pendingBalance: carryoverLoanSummaries.reduce(
+          (sum, row) => sum + row.summary.totalOwedNow,
+          0,
+        ),
         completedLoanCycles: carryoverLoanSummaries.filter(
           ({ loan, summary }) => loan.status === "closed" || summary.isFinished,
         ).length,
@@ -707,7 +766,7 @@ function PolicyCenterPage() {
                           scope: event.target.value as FeeScope,
                           selectedMemberIds:
                             event.target.value === "selected_members"
-                              ? editingFee.selectedMemberIds ?? []
+                              ? (editingFee.selectedMemberIds ?? [])
                               : [],
                         })
                       }
@@ -723,7 +782,10 @@ function PolicyCenterPage() {
                   {editingFee.scope === "new_only" && (
                     <div className="sm:col-span-2 rounded-xl border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                       New-member fees automatically apply to members whose join date is on or after{" "}
-                      <span className="font-medium text-foreground">{editingFee.effectiveFrom}</span>.
+                      <span className="font-medium text-foreground">
+                        {editingFee.effectiveFrom}
+                      </span>
+                      .
                     </div>
                   )}
                   {editingFee.scope === "selected_members" && (
@@ -743,7 +805,9 @@ function PolicyCenterPage() {
                               onClick={() =>
                                 setEditingFee({
                                   ...editingFee,
-                                  selectedMemberIds: feeSelectableMembers.map((member) => member.id),
+                                  selectedMemberIds: feeSelectableMembers.map(
+                                    (member) => member.id,
+                                  ),
                                 })
                               }
                               className="rounded-md border border-border px-2 py-1 hover:bg-muted"
@@ -755,7 +819,9 @@ function PolicyCenterPage() {
                               onClick={() =>
                                 setEditingFee({
                                   ...editingFee,
-                                  selectedMemberIds: newFeeSelectableMembers.map((member) => member.id),
+                                  selectedMemberIds: newFeeSelectableMembers.map(
+                                    (member) => member.id,
+                                  ),
                                 })
                               }
                               className="rounded-md border border-border px-2 py-1 hover:bg-muted"
@@ -784,7 +850,9 @@ function PolicyCenterPage() {
                         />
                         <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
                           {filteredFeeSelectableMembers.map((member) => {
-                            const checked = (editingFee.selectedMemberIds ?? []).includes(member.id);
+                            const checked = (editingFee.selectedMemberIds ?? []).includes(
+                              member.id,
+                            );
                             const isNewMember =
                               String(member.joinedAt ?? "").slice(0, 10) >=
                               String(editingFee.effectiveFrom ?? "").slice(0, 10);
@@ -800,7 +868,12 @@ function PolicyCenterPage() {
                                     setEditingFee({
                                       ...editingFee,
                                       selectedMemberIds: event.target.checked
-                                        ? [...new Set([...(editingFee.selectedMemberIds ?? []), member.id])]
+                                        ? [
+                                            ...new Set([
+                                              ...(editingFee.selectedMemberIds ?? []),
+                                              member.id,
+                                            ]),
+                                          ]
                                         : (editingFee.selectedMemberIds ?? []).filter(
                                             (candidate) => candidate !== member.id,
                                           ),
@@ -964,10 +1037,10 @@ function PolicyCenterPage() {
             <div className="border-t border-border px-5 py-4">
               <div className="text-sm font-medium">Tiered upfront reference</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                Premium upfront is no longer treated as one fixed figure here. It follows the
-                shared SBC loan bands already used by the simulator and first-time application
-                flow, and the full prompt total now includes membership, card, and sticker fees
-                where applicable.
+                Premium upfront is no longer treated as one fixed figure here. It follows the shared
+                SBC loan bands already used by the simulator and first-time application flow, and
+                the full prompt total now includes membership, card, and sticker fees where
+                applicable.
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 {SBC_UPFRONT_TABLE.map((tier) => {
@@ -978,7 +1051,10 @@ function PolicyCenterPage() {
                     includeSticker: true,
                   });
                   return (
-                    <div key={tier.range} className="rounded-lg border border-border bg-muted/20 p-3">
+                    <div
+                      key={tier.range}
+                      className="rounded-lg border border-border bg-muted/20 p-3"
+                    >
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         {tier.range}
                       </div>
@@ -987,7 +1063,8 @@ function PolicyCenterPage() {
                         Upfront {fmtKES(totals.total)} · fees {fmtKES(totals.mandatoryFeesTotal)}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        Shares {fmtKES(totals.sharesAmount)} · Savings {fmtKES(totals.savingsAmount)}
+                        Shares {fmtKES(totals.sharesAmount)} · Savings{" "}
+                        {fmtKES(totals.savingsAmount)}
                       </div>
                     </div>
                   );
@@ -1256,6 +1333,12 @@ function PolicyCenterPage() {
                     tone="accent"
                   />
                   <StatCard
+                    label="Lifetime Net"
+                    value={fmtKES(clientLifetimeNet)}
+                    hint={`${fmtKES(selectedClientInflow)} in / ${fmtKES(selectedClientOutflow)} out`}
+                    tone={clientLifetimeNet >= 0 ? "success" : "destructive"}
+                  />
+                  <StatCard
                     label="Daily target"
                     value={fmtKES(selectedClientDailyTarget)}
                     tone="warning"
@@ -1270,6 +1353,21 @@ function PolicyCenterPage() {
                       <MetricRow label="Member ID" value={selectedClient.id} />
                       <MetricRow label="Phone" value={selectedClient.phone} />
                       <MetricRow label="Joined" value={selectedClient.joinedAt} />
+                      <div className="border-t border-border pt-3">
+                        <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                          Transaction totals
+                        </div>
+                        <div className="space-y-2">
+                          {selectedClientTransactionTotals.map((row) => (
+                            <MetricRow
+                              key={row.label}
+                              label={row.label}
+                              value={fmtKES(row.value)}
+                            />
+                          ))}
+                          <MetricRow label="Live net" value={fmtKES(selectedClientNet)} />
+                        </div>
+                      </div>
                     </div>
                     <div className="space-y-3">
                       {clientLoansSummary.length === 0 && (
@@ -1480,17 +1578,25 @@ function PolicyCenterPage() {
                       />
                     </Field>
                     <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-3">
-                      <MetricCard label="Derived total collected" value={fmtKES(derivedCarryoverTotalCollected)} />
+                      <MetricCard
+                        label="Derived total collected"
+                        value={fmtKES(derivedCarryoverTotalCollected)}
+                      />
                       <MetricCard
                         label="Derived pending balance"
                         value={fmtKES(
-                          carryoverLoanSummaries.reduce((sum, row) => sum + row.summary.totalOwedNow, 0),
+                          carryoverLoanSummaries.reduce(
+                            (sum, row) => sum + row.summary.totalOwedNow,
+                            0,
+                          ),
                         )}
                       />
                       <MetricCard
                         label="Completed carryover cycles"
                         value={carryoverLoanSummaries
-                          .filter(({ loan, summary }) => loan.status === "closed" || summary.isFinished)
+                          .filter(
+                            ({ loan, summary }) => loan.status === "closed" || summary.isFinished,
+                          )
                           .length.toFixed(0)}
                       />
                     </div>
@@ -1709,10 +1815,7 @@ function PolicyCenterPage() {
                         label="Rate used"
                         value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
                       />
-                      <MetricCard
-                        label="Auto due date"
-                        value={carryoverLoanDraftSummary.dueDate}
-                      />
+                      <MetricCard label="Auto due date" value={carryoverLoanDraftSummary.dueDate} />
                       <MetricCard
                         label="Repayment total"
                         value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
@@ -1938,9 +2041,7 @@ function PolicyCenterPage() {
                           {target.gap >= 0 ? "+" : ""}
                           {fmtKES(target.gap)}
                         </td>
-                        <td className="px-5 py-3 text-right">
-                          {target.progressPct.toFixed(1)}%
-                        </td>
+                        <td className="px-5 py-3 text-right">{target.progressPct.toFixed(1)}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2004,7 +2105,8 @@ function PolicyCenterPage() {
                     className="input"
                   />
                   <div className="mt-1 text-xs text-muted-foreground">
-                    Suggested from the live book: {formatTargetValue(targetDraft.metric, suggestedTargetValue)}
+                    Suggested from the live book:{" "}
+                    {formatTargetValue(targetDraft.metric, suggestedTargetValue)}
                   </div>
                 </Field>
                 <Field label="Start date">

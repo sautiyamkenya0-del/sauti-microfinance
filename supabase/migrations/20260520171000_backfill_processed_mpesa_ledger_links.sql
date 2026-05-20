@@ -65,7 +65,8 @@ begin
         note,
         ref,
         account,
-        payer_name
+        payer_name,
+        created_at
       )
       values (
         tx_id,
@@ -77,7 +78,8 @@ begin
         'M-Pesa ledger backfill for processed confirmation',
         row.mpesa_ref,
         row.normalized_account,
-        row.payer_name
+        row.payer_name,
+        row.created_at
       );
     end if;
 

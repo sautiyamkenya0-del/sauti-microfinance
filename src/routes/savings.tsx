@@ -21,6 +21,7 @@ function SavingsPage() {
   const [memberId, setMemberId] = useState(memberAccounts[0]?.id ?? "");
   const [amount, setAmount] = useState(0);
   const [type, setType] = useState<"deposit" | "withdrawal">("deposit");
+  const [withdrawalRef, setWithdrawalRef] = useState("");
 
   useEffect(() => {
     if (!memberAccounts.some((member) => member.id === memberId)) {
@@ -35,6 +36,7 @@ function SavingsPage() {
   const withdrawals = transactions
     .filter((t) => t.type === "withdrawal")
     .reduce((s, t) => s + t.amount, 0);
+  const selectedMember = memberAccounts.find((member) => member.id === memberId);
 
   return (
     <>
@@ -70,7 +72,10 @@ function SavingsPage() {
                 {(["deposit", "withdrawal"] as const).map((t) => (
                   <button
                     key={t}
-                    onClick={() => setType(t)}
+                    onClick={() => {
+                      setType(t);
+                      if (t === "deposit") setWithdrawalRef("");
+                    }}
                     className={`flex-1 py-2 text-sm rounded-md capitalize ${type === t ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/70"}`}
                   >
                     {t}
@@ -95,12 +100,52 @@ function SavingsPage() {
                 onChange={(e) => setAmount(Number(e.target.value))}
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
               />
+              {type === "withdrawal" ? (
+                <input
+                  value={withdrawalRef}
+                  onChange={(event) => setWithdrawalRef(event.target.value)}
+                  placeholder="M-Pesa receipt or payout note"
+                  className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                />
+              ) : null}
               <button
                 onClick={async () => {
                   if (amount <= 0) return;
-                  await recordTransaction({ type, amount, memberId, by: currentUser.id });
+                  let allowOverdraw = false;
+                  const confirmedPayoutRef = withdrawalRef.trim();
+                  if (
+                    type === "withdrawal" &&
+                    selectedMember &&
+                    amount > selectedMember.savingsBalance
+                  ) {
+                    allowOverdraw = window.confirm(
+                      `${selectedMember.name} has ${fmtKES(selectedMember.savingsBalance)} available. Confirm withdrawing ${fmtKES(amount)} and leaving a negative balance of ${fmtKES(selectedMember.savingsBalance - amount)}?`,
+                    );
+                    if (!allowOverdraw) return;
+                  }
+                  if (type === "withdrawal" && selectedMember) {
+                    const confirmed = window.confirm(
+                      `Confirm ${fmtKES(amount)} has already been paid out to ${selectedMember.name}${confirmedPayoutRef ? ` (ref: ${confirmedPayoutRef})` : ""}. The ledger will only deduct after this confirmation.`,
+                    );
+                    if (!confirmed) return;
+                  }
+                  await recordTransaction({
+                    type,
+                    amount,
+                    memberId,
+                    by: currentUser.id,
+                    allowOverdraw,
+                    ref: type === "withdrawal" ? confirmedPayoutRef || undefined : undefined,
+                    note:
+                      type === "withdrawal"
+                        ? confirmedPayoutRef
+                          ? `Withdrawal payout confirmed: ${confirmedPayoutRef}`
+                          : "Withdrawal payout confirmed by officer"
+                        : undefined,
+                  });
                   toast.success(`${type === "deposit" ? "Deposit" : "Withdrawal"} recorded`);
                   setAmount(0);
+                  setWithdrawalRef("");
                 }}
                 className="w-full bg-primary text-primary-foreground py-2 rounded-md text-sm font-medium hover:bg-primary/90"
               >
