@@ -1,28 +1,5 @@
 import { DEFAULT_POLICY_SETTINGS, type PolicySettings } from "@/lib/policy-settings";
 
-export type LegacyTopupImport = {
-  id: string;
-  sourceRowKey: string;
-  sourceTable: string;
-  sourceCreatedAt?: string;
-  sourceAccount?: string;
-  sourceMemberHint?: string;
-  sourcePayerName?: string;
-  sourcePhone?: string;
-  sourceAmount: number;
-  sourceRef?: string;
-  raw: Record<string, unknown>;
-  matchedMemberId?: string;
-  allocationStatus: "pending" | "applied" | "held" | "error";
-  allocationNotes: string[];
-  allocatedTransactionId?: string;
-  allocatedAt?: string;
-  syncRunId?: string;
-  readOnly: boolean;
-  lastSeenAt: string;
-  createdAt: string;
-};
-
 export type LegacyCarryoverProfile = {
   memberId: string;
   savingsBalance: number;

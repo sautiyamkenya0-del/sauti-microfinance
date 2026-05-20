@@ -63,19 +63,32 @@ async function requireSupabaseAdmin() {
   return supabaseAdmin;
 }
 
-export const getLegacyDbStatus = createServerFn({ method: "POST" }).handler(async () => {
-  const { getLegacyDbEnvStatus } = await import("@/lib/legacy-db.server");
-  const legacyStatus = getLegacyDbEnvStatus();
-  return {
-    ok: legacyStatus.ok,
-    mode: legacyStatus.mode,
-    missing: legacyStatus.missing,
-    bridgeUrl: legacyStatus.bridgeUrl,
-    host: legacyStatus.host,
-    database: legacyStatus.database,
-    table: legacyStatus.table,
-  };
-});
+const MPESA_SYSTEM_STAFF_ID = "MPESA";
+const MPESA_SYSTEM_STAFF_NAME = "M-Pesa Auto";
+
+async function ensureSystemStaffActor(supabaseAdmin: any, staffId?: string | null) {
+  if (staffId !== MPESA_SYSTEM_STAFF_ID) return;
+
+  const { data, error } = await supabaseAdmin
+    .from("staff")
+    .select("id")
+    .eq("id", MPESA_SYSTEM_STAFF_ID)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (data) return;
+
+  const { error: insertError } = await supabaseAdmin.from("staff").insert({
+    id: MPESA_SYSTEM_STAFF_ID,
+    name: MPESA_SYSTEM_STAFF_NAME,
+    role: "loan_officer",
+    can_mark_attendance: false,
+    fingerprint_enrolled: false,
+  });
+
+  if (insertError && insertError.code !== "23505") {
+    throw new Error(insertError.message);
+  }
+}
 
 function toNumber(value: number | string | null | undefined) {
   return Number(value ?? 0);
@@ -332,6 +345,36 @@ async function insertTransactionRow(row: {
   payer_name?: string | null;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
+  await ensureSystemStaffActor(supabaseAdmin, row.by_staff);
+
+  const ref = row.ref?.trim();
+  if (row.by_staff === MPESA_SYSTEM_STAFF_ID && ref) {
+    let duplicateQuery = supabaseAdmin
+      .from("transactions")
+      .select("id")
+      .eq("ref", ref)
+      .eq("type", row.type as never)
+      .eq("amount", row.amount)
+      .limit(1);
+
+    duplicateQuery = row.account
+      ? duplicateQuery.eq("account", row.account)
+      : duplicateQuery.is("account", null);
+    duplicateQuery = row.member_id
+      ? duplicateQuery.eq("member_id", row.member_id)
+      : duplicateQuery.is("member_id", null);
+    duplicateQuery = row.loan_id
+      ? duplicateQuery.eq("loan_id", row.loan_id)
+      : duplicateQuery.is("loan_id", null);
+    duplicateQuery = row.note
+      ? duplicateQuery.eq("note", row.note)
+      : duplicateQuery.is("note", null);
+
+    const { data: existing, error: duplicateError } = await duplicateQuery.maybeSingle();
+    if (duplicateError) throw new Error(duplicateError.message);
+    if (existing?.id) return String(existing.id);
+  }
+
   const id = await nextPrefixedId("transactions", "T", 1);
   const { error } = await supabaseAdmin.from("transactions").insert({
     id,
@@ -358,6 +401,21 @@ async function insertRoundOffRow(row: {
   ref?: string;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
+  const ref = row.ref?.trim();
+  if (ref) {
+    const { data: existing, error: duplicateError } = await supabaseAdmin
+      .from("round_off")
+      .select("id")
+      .eq("member_id", row.memberId)
+      .eq("amount", row.amount)
+      .eq("source", row.source as never)
+      .eq("ref", ref)
+      .limit(1)
+      .maybeSingle();
+    if (duplicateError) throw new Error(duplicateError.message);
+    if (existing?.id) return String(existing.id);
+  }
+
   const id = await nextPrefixedId("round_off", "RO", 1);
   const { error } = await supabaseAdmin.from("round_off").insert({
     id,
@@ -397,12 +455,106 @@ async function createUnallocatedMpesaTransaction(args: {
     type: "mpesa_unallocated",
     amount: args.amount,
     member_id: null,
-    by_staff: "MPESA",
+    by_staff: MPESA_SYSTEM_STAFF_ID,
     note: args.note,
     ref: args.mpesaRef ?? null,
     account: args.account,
     payer_name: args.payerName ?? null,
   });
+}
+
+async function findExistingMpesaTransaction(args: {
+  account: string;
+  amount: number;
+  mpesaRef?: string;
+}) {
+  const ref = args.mpesaRef?.trim();
+  if (!ref) return null;
+
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("transactions")
+    .select("id, type, member_id")
+    .eq("ref", ref)
+    .eq("account", args.account)
+    .eq("amount", args.amount)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function createProcessedMpesaLedgerLink(args: {
+  account: string;
+  amount: number;
+  payerName?: string;
+  mpesaRef?: string;
+  eventId?: string;
+  date?: string;
+}) {
+  const existing = await findExistingMpesaTransaction({
+    account: args.account,
+    amount: args.amount,
+    mpesaRef: args.mpesaRef,
+  });
+  if (existing?.id) {
+    await markMpesaEventProcessed(args.eventId, String(existing.id));
+    return {
+      matched: existing.type !== "mpesa_unallocated",
+      memberId: existing.member_id ?? undefined,
+      transactionId: String(existing.id),
+      primary: {
+        type: String(existing.type),
+        amount: args.amount,
+        note: "M-Pesa event was already processed and has been linked to an existing ledger row.",
+      },
+      notes: ["M-Pesa event was already processed and has been linked to an existing ledger row."],
+    };
+  }
+
+  const member = await findMemberByMembershipInput(args.account);
+  if (!member) {
+    const note =
+      "M-Pesa event was already processed without a linked member; created the missing unallocated ledger row without changing balances.";
+    const transactionId = await createUnallocatedMpesaTransaction({
+      account: args.account,
+      amount: args.amount,
+      payerName: args.payerName,
+      mpesaRef: args.mpesaRef,
+      note,
+      date: args.date,
+    });
+    await markMpesaEventProcessed(args.eventId, transactionId);
+    return {
+      matched: false,
+      transactionId,
+      primary: { type: "mpesa_unallocated", amount: args.amount, note },
+      notes: [note],
+    };
+  }
+
+  const note =
+    "M-Pesa event was already processed without a linked transaction; created the missing savings ledger row without changing balances.";
+  const transactionId = await insertTransactionRow({
+    date: args.date,
+    type: "deposit",
+    amount: args.amount,
+    member_id: member.id,
+    by_staff: MPESA_SYSTEM_STAFF_ID,
+    note,
+    ref: args.mpesaRef ?? null,
+    account: args.account,
+    payer_name: args.payerName ?? null,
+  });
+  await markMpesaEventProcessed(args.eventId, transactionId);
+  return {
+    matched: true,
+    memberId: member.id,
+    transactionId,
+    primary: { type: "deposit", amount: args.amount, note },
+    notes: [note],
+  };
 }
 
 async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
@@ -634,13 +786,13 @@ export async function applyMpesaPaymentToDatabase(args: {
   if (args.eventId) {
     const { data: event, error: eventError } = await supabaseAdmin
       .from("mpesa_events")
-      .select("processed, transaction_id")
+      .select("processed, transaction_id, created_at")
       .eq("id", args.eventId)
       .maybeSingle();
     if (eventError) throw new Error(eventError.message);
     if (event?.processed) {
-      let matched = true;
       if (event.transaction_id) {
+        let matched = true;
         const { data: transaction, error: transactionError } = await supabaseAdmin
           .from("transactions")
           .select("type")
@@ -648,18 +800,27 @@ export async function applyMpesaPaymentToDatabase(args: {
           .maybeSingle();
         if (transactionError) throw new Error(transactionError.message);
         matched = transaction?.type !== "mpesa_unallocated";
+        return {
+          matched,
+          account: norm,
+          transactionId: event.transaction_id ?? undefined,
+          notes: [
+            matched
+              ? "M-Pesa event already processed."
+              : "M-Pesa event already recorded as an unallocated payment.",
+          ],
+        };
       }
 
-      return {
-        matched,
+      const linked = await createProcessedMpesaLedgerLink({
         account: norm,
-        transactionId: event.transaction_id ?? undefined,
-        notes: [
-          matched
-            ? "M-Pesa event already processed."
-            : "M-Pesa event already recorded as an unallocated payment.",
-        ],
-      };
+        amount: Number(args.amount ?? 0),
+        payerName: args.payerName,
+        mpesaRef: args.mpesaRef,
+        eventId: args.eventId,
+        date: String(event.created_at ?? new Date().toISOString()).slice(0, 10),
+      });
+      return { account: norm, ...linked };
     }
   }
 
@@ -719,35 +880,46 @@ export async function applyMpesaPaymentToDatabase(args: {
     | undefined;
   let toRoundOff = 0;
   let primaryTransactionId: string | undefined;
+  let activeLoanPatch:
+    | {
+        id: string;
+        paid: number;
+        status: string;
+      }
+    | undefined;
 
   if (isInvestorOnlyCategory(memberCategory)) {
     const investor = await ensureInvestorForMember(member);
     if (!investor) throw new Error("Investor account could not be resolved.");
-    const { error: updateInvestorError } = await supabaseAdmin
-      .from("investors")
-      .update({
-        contributed: Number(investor.contributed ?? 0) + remaining,
-      })
-      .eq("id", investor.id);
-    if (updateInvestorError) throw new Error(updateInvestorError.message);
-
+    const investorAmount = remaining;
     primary = {
       type: "investor_contribution",
-      amount: remaining,
+      amount: investorAmount,
       note: `Investment via Paybill ${norm}`,
     };
     primaryTransactionId = await insertTransactionRow({
       date: today,
       type: "investor_contribution",
-      amount: remaining,
+      amount: investorAmount,
       member_id: memberId,
-      by_staff: "MPESA",
+      by_staff: MPESA_SYSTEM_STAFF_ID,
       ref: args.mpesaRef,
       account: norm,
       payer_name: args.payerName,
       note: `Investment top-up via Paybill ${norm}`,
     });
-    notes.push(`Routed ${remaining}/= to the investment pool for investor account ${member.name}.`);
+
+    const { error: updateInvestorError } = await supabaseAdmin
+      .from("investors")
+      .update({
+        contributed: Number(investor.contributed ?? 0) + investorAmount,
+      })
+      .eq("id", investor.id);
+    if (updateInvestorError) throw new Error(updateInvestorError.message);
+
+    notes.push(
+      `Routed ${investorAmount}/= to the investment pool for investor account ${member.name}.`,
+    );
     await markMpesaEventProcessed(args.eventId, primaryTransactionId);
     return {
       matched: true,
@@ -875,7 +1047,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       type: "deposit",
       amount: applied,
       member_id: memberId,
-      by_staff: "MPESA",
+      by_staff: MPESA_SYSTEM_STAFF_ID,
       ref: args.mpesaRef,
       account: norm,
       payer_name: args.payerName,
@@ -908,7 +1080,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       type: "share_purchase",
       amount: actualApplied,
       member_id: memberId,
-      by_staff: "MPESA",
+      by_staff: MPESA_SYSTEM_STAFF_ID,
       ref: args.mpesaRef,
       account: norm,
       payer_name: args.payerName,
@@ -928,7 +1100,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       type: "fee_payment",
       amount: applied,
       member_id: memberId,
-      by_staff: "MPESA",
+      by_staff: MPESA_SYSTEM_STAFF_ID,
       ref: args.mpesaRef,
       account: norm,
       payer_name: args.payerName,
@@ -959,7 +1131,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       amount: safeApplied,
       member_id: memberId,
       loan_id: activeLoan.id,
-      by_staff: "MPESA",
+      by_staff: MPESA_SYSTEM_STAFF_ID,
       ref: args.mpesaRef,
       account: norm,
       payer_name: args.payerName,
@@ -971,14 +1143,11 @@ export async function applyMpesaPaymentToDatabase(args: {
     const nextStatus = nextBalance <= 0 ? "closed" : activeLoan.status;
     activeLoan.paid = nextPaid;
     activeLoan.status = nextStatus;
-    const { error: loanUpdateError } = await supabaseAdmin
-      .from("loans")
-      .update({
-        paid: nextPaid,
-        status: nextStatus,
-      })
-      .eq("id", activeLoan.id);
-    if (loanUpdateError) throw new Error(loanUpdateError.message);
+    activeLoanPatch = {
+      id: activeLoan.id,
+      paid: nextPaid,
+      status: nextStatus,
+    };
 
     if (!member.fee_first_upfront_paid) {
       memberPatch.fee_first_upfront_paid = true;
@@ -1062,7 +1231,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         type: "fee_payment",
         amount: fee.amount,
         member_id: memberId,
-        by_staff: "MPESA",
+        by_staff: MPESA_SYSTEM_STAFF_ID,
         ref: args.mpesaRef,
         account: norm,
         payer_name: args.payerName,
@@ -1086,30 +1255,12 @@ export async function applyMpesaPaymentToDatabase(args: {
 
   await allocateMemberPaymentAfterFeesAndPenalties();
 
-  if (penaltiesCleared.length > 0) {
-    for (const penalty of penaltiesCleared) {
-      const { error } = await supabaseAdmin
-        .from("penalties")
-        .update({ status: "paid", paid_from: "mpesa" })
-        .eq("id", penalty.id);
-      if (error) throw new Error(error.message);
-    }
-  }
-
   if (remaining > 0) {
     allocateSavingsWaterfall(remaining, "Safety fallback:");
     notes.push(
       "Remaining balance was routed through the savings/shares/purpose-pool flow because the configured preprocessing steps ended before the full amount was allocated.",
     );
     remaining = 0;
-  }
-
-  if (Object.keys(memberPatch).length > 0) {
-    const { error: memberUpdateError } = await supabaseAdmin
-      .from("members")
-      .update(memberPatch as any)
-      .eq("id", memberId);
-    if (memberUpdateError) throw new Error(memberUpdateError.message);
   }
 
   for (const tx of txBatch) {
@@ -1134,6 +1285,35 @@ export async function applyMpesaPaymentToDatabase(args: {
       date: today,
       ref: args.mpesaRef,
     });
+  }
+
+  if (penaltiesCleared.length > 0) {
+    for (const penalty of penaltiesCleared) {
+      const { error } = await supabaseAdmin
+        .from("penalties")
+        .update({ status: "paid", paid_from: "mpesa" })
+        .eq("id", penalty.id);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  if (activeLoanPatch) {
+    const { error: loanUpdateError } = await supabaseAdmin
+      .from("loans")
+      .update({
+        paid: activeLoanPatch.paid,
+        status: activeLoanPatch.status,
+      })
+      .eq("id", activeLoanPatch.id);
+    if (loanUpdateError) throw new Error(loanUpdateError.message);
+  }
+
+  if (Object.keys(memberPatch).length > 0) {
+    const { error: memberUpdateError } = await supabaseAdmin
+      .from("members")
+      .update(memberPatch as any)
+      .eq("id", memberId);
+    if (memberUpdateError) throw new Error(memberUpdateError.message);
   }
 
   await markMpesaEventProcessed(args.eventId, primaryTransactionId ?? null);
@@ -3488,231 +3668,6 @@ export const deletePerformanceTargetRecord = createServerFn({ method: "POST" })
       },
     });
     return { ok: true };
-  });
-
-export const syncLegacyTopupsRecord = createServerFn({ method: "POST" })
-  .inputValidator((data: { limit?: number }) => ({
-    limit: Math.max(1, Math.min(500, Math.floor(Number(data?.limit ?? 100) || 100))),
-  }))
-  .handler(async ({ data }) => {
-    const actor = await requireDirectorActor();
-    const runtimeDb = (await requireSupabaseAdmin()) as any;
-    const { loadLegacyTopupRows } = await import("@/lib/legacy-db.server");
-    const scan = await loadLegacyTopupRows(data.limit);
-    const runId = makeId("LSYNC");
-    const now = new Date().toISOString();
-
-    const { error: runInsertError } = await runtimeDb.from("legacy_import_sync_runs").insert({
-      id: runId,
-      source_table: scan.rows[0]?.sourceTable ?? "api_topup",
-      created_by: actor.id,
-      status: "success",
-      note: `Detected columns: ${scan.columns.join(", ") || "none"}`,
-    });
-    if (runInsertError) throw new Error(runInsertError.message);
-
-    try {
-      const sourceKeys = scan.rows.map((row) => row.sourceKey);
-      const refs = Array.from(new Set(scan.rows.map((row) => row.sourceRef).filter(Boolean)));
-
-      const existingImportsResult = sourceKeys.length
-        ? await runtimeDb
-            .from("legacy_topup_imports")
-            .select(
-              "id, source_row_key, allocation_status, allocated_transaction_id, matched_member_id",
-            )
-            .in("source_row_key", sourceKeys)
-        : { data: [], error: null };
-      if (existingImportsResult.error) throw new Error(existingImportsResult.error.message);
-
-      const existingTransactionsResult = refs.length
-        ? await runtimeDb
-            .from("transactions")
-            .select("id, ref, amount, member_id, account")
-            .in("ref", refs)
-        : { data: [], error: null };
-      if (existingTransactionsResult.error)
-        throw new Error(existingTransactionsResult.error.message);
-
-      const existingByKey = new Map(
-        (existingImportsResult.data ?? []).map((row: any) => [row.source_row_key as string, row]),
-      );
-      const existingTransactionsByRef = new Map<string, any[]>();
-      for (const row of existingTransactionsResult.data ?? []) {
-        const ref = String(row.ref ?? "").trim();
-        if (!ref) continue;
-        const list = existingTransactionsByRef.get(ref) ?? [];
-        list.push(row);
-        existingTransactionsByRef.set(ref, list);
-      }
-
-      let upsertedRows = 0;
-      let appliedRows = 0;
-      let heldRows = 0;
-      let skippedRows = 0;
-      let erroredRows = 0;
-
-      for (const row of scan.rows) {
-        const existing = existingByKey.get(row.sourceKey) as
-          | {
-              id?: string;
-              allocation_status?: string;
-              allocated_transaction_id?: string | null;
-              matched_member_id?: string | null;
-            }
-          | undefined;
-
-        const accountOrHint = row.sourceAccount ?? row.sourceMemberHint ?? undefined;
-        const notes = [...row.mappingNotes];
-        let allocationStatus: "pending" | "applied" | "held" | "error" = "pending";
-        let matchedMemberId = existing?.matched_member_id ?? null;
-        let allocatedTransactionId = existing?.allocated_transaction_id ?? null;
-        let allocatedAt: string | null = null;
-
-        if (existing?.allocation_status === "applied" && existing.allocated_transaction_id) {
-          skippedRows += 1;
-          allocationStatus = "applied";
-          notes.push("Already imported earlier; kept the existing allocation.");
-        } else {
-          const duplicate = row.sourceRef
-            ? (existingTransactionsByRef.get(row.sourceRef) ?? []).find(
-                (transaction) =>
-                  Number(transaction.amount ?? 0) === Number(row.sourceAmount) &&
-                  (!accountOrHint ||
-                    String(transaction.account ?? "")
-                      .trim()
-                      .toUpperCase() === accountOrHint.trim().toUpperCase()),
-              )
-            : undefined;
-
-          if (duplicate) {
-            allocationStatus = "applied";
-            appliedRows += 1;
-            matchedMemberId = duplicate.member_id ?? null;
-            allocatedTransactionId = duplicate.id;
-            allocatedAt = now;
-            notes.push("Matched an existing ledger transaction by reference, amount, and account.");
-          } else if (row.sourceAmount <= 0) {
-            allocationStatus = "held";
-            heldRows += 1;
-            notes.push("Held because the imported amount is missing or zero.");
-          } else if (!accountOrHint) {
-            allocationStatus = "held";
-            heldRows += 1;
-            notes.push("Held because no SBC/member account could be detected in the old row.");
-          } else {
-            try {
-              const result = await applyMpesaPaymentToDatabase({
-                account: accountOrHint,
-                amount: row.sourceAmount,
-                payerName: row.sourcePayerName,
-                mpesaRef: row.sourceRef,
-              });
-              allocationStatus = result.matched ? "applied" : "held";
-              matchedMemberId = result.memberId ?? null;
-              allocatedTransactionId = result.transactionId ?? null;
-              allocatedAt = result.matched ? now : null;
-              notes.push(...result.notes);
-              if (result.matched) {
-                appliedRows += 1;
-              } else {
-                heldRows += 1;
-              }
-            } catch (error: any) {
-              allocationStatus = "error";
-              erroredRows += 1;
-              notes.push(error?.message ?? "Legacy import allocation failed.");
-            }
-          }
-        }
-
-        const dedupedNotes = Array.from(
-          new Set(notes.map((note) => String(note).trim()).filter(Boolean)),
-        );
-        const { error: importError } = await runtimeDb.from("legacy_topup_imports").upsert({
-          id: existing?.id ?? makeId("LTP"),
-          source_row_key: row.sourceKey,
-          source_table: row.sourceTable,
-          source_created_at: row.sourceCreatedAt ?? null,
-          source_account: row.sourceAccount ?? null,
-          source_member_hint: row.sourceMemberHint ?? null,
-          source_payer_name: row.sourcePayerName ?? null,
-          source_phone: row.sourcePhone ?? null,
-          source_amount: row.sourceAmount,
-          source_ref: row.sourceRef ?? null,
-          raw: row.raw,
-          matched_member_id: matchedMemberId,
-          allocation_status: allocationStatus,
-          allocation_notes: dedupedNotes,
-          allocated_transaction_id: allocatedTransactionId,
-          allocated_at: allocatedAt,
-          sync_run_id: runId,
-          read_only: true,
-          last_seen_at: now,
-        });
-        if (importError) throw new Error(importError.message);
-        upsertedRows += 1;
-      }
-
-      const status = erroredRows > 0 ? "partial" : heldRows > 0 ? "partial" : "success";
-      const note =
-        scan.columns.length > 0
-          ? `Columns detected: ${scan.columns.join(", ")}`
-          : "No columns were detected in the legacy source.";
-
-      const { error: runUpdateError } = await runtimeDb
-        .from("legacy_import_sync_runs")
-        .update({
-          fetched_rows: scan.rows.length,
-          upserted_rows: upsertedRows,
-          applied_rows: appliedRows,
-          held_rows: heldRows,
-          skipped_rows: skippedRows,
-          status,
-          note,
-        })
-        .eq("id", runId);
-      if (runUpdateError) throw new Error(runUpdateError.message);
-
-      await auditAction({
-        actor,
-        action: "legacy_topups.synced",
-        targetType: "legacy_import_sync_run",
-        targetId: runId,
-        summary: `${actor.name} synced ${scan.rows.length} old topup rows`,
-        details: {
-          columns: scan.columns,
-          mappings: scan.mappings,
-          fetchedRows: scan.rows.length,
-          upsertedRows,
-          appliedRows,
-          heldRows,
-          skippedRows,
-          erroredRows,
-        },
-      });
-
-      return {
-        syncRunId: runId,
-        columns: scan.columns,
-        mappings: scan.mappings,
-        fetchedRows: scan.rows.length,
-        upsertedRows,
-        appliedRows,
-        heldRows,
-        skippedRows,
-        erroredRows,
-      };
-    } catch (error: any) {
-      await runtimeDb
-        .from("legacy_import_sync_runs")
-        .update({
-          status: "error",
-          note: error?.message ?? "Legacy import failed.",
-        })
-        .eq("id", runId);
-      throw error;
-    }
   });
 
 export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST" })

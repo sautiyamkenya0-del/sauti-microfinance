@@ -14,59 +14,6 @@ exception
 end
 $$;
 
-create table if not exists public.legacy_import_sync_runs (
-  id text primary key,
-  source_table text not null default 'api_topup',
-  fetched_rows integer not null default 0,
-  upserted_rows integer not null default 0,
-  applied_rows integer not null default 0,
-  held_rows integer not null default 0,
-  skipped_rows integer not null default 0,
-  status text not null default 'success',
-  note text,
-  created_by text references public.staff(id) on delete set null,
-  created_at timestamptz not null default now(),
-  constraint legacy_import_sync_runs_status_check
-    check (status in ('success', 'partial', 'error'))
-);
-
-alter table public.legacy_import_sync_runs enable row level security;
-create index if not exists idx_legacy_import_sync_runs_created_at
-  on public.legacy_import_sync_runs(created_at desc);
-
-create table if not exists public.legacy_topup_imports (
-  id text primary key,
-  source_row_key text not null unique,
-  source_table text not null default 'api_topup',
-  source_created_at timestamptz,
-  source_account text,
-  source_member_hint text,
-  source_payer_name text,
-  source_phone text,
-  source_amount numeric(14,2) not null default 0,
-  source_ref text,
-  raw jsonb not null default '{}'::jsonb,
-  matched_member_id text references public.members(id) on delete set null,
-  allocation_status text not null default 'pending',
-  allocation_notes text[] not null default '{}'::text[],
-  allocated_transaction_id text references public.transactions(id) on delete set null,
-  allocated_at timestamptz,
-  sync_run_id text references public.legacy_import_sync_runs(id) on delete set null,
-  read_only boolean not null default true,
-  last_seen_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  constraint legacy_topup_imports_status_check
-    check (allocation_status in ('pending', 'applied', 'held', 'error'))
-);
-
-alter table public.legacy_topup_imports enable row level security;
-create index if not exists idx_legacy_topup_imports_status_created
-  on public.legacy_topup_imports(allocation_status, created_at desc);
-create index if not exists idx_legacy_topup_imports_member_created
-  on public.legacy_topup_imports(matched_member_id, created_at desc);
-create index if not exists idx_legacy_topup_imports_ref
-  on public.legacy_topup_imports(source_ref);
-
 create table if not exists public.member_carryover_profiles (
   member_id text primary key references public.members(id) on delete cascade,
   savings_balance numeric(14,2) not null default 0,

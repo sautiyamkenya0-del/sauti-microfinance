@@ -524,6 +524,27 @@ insert into public.staff (id, name, role, email, temp_password, can_mark_attenda
 values ('S1','System Admin','director','admin@sauti.co.ke','Sauti1234', true)
 on conflict (id) do nothing;
 
+insert into public.staff (
+  id,
+  name,
+  role,
+  can_mark_attendance,
+  fingerprint_enrolled
+)
+values (
+  'MPESA',
+  'M-Pesa Auto',
+  'loan_officer',
+  false,
+  false
+)
+on conflict (id) do update
+set
+  name = excluded.name,
+  role = excluded.role,
+  can_mark_attendance = false,
+  fingerprint_enrolled = false;
+
 -- =====================================================================
 -- End of full.sql
 -- =====================================================================

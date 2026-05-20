@@ -129,33 +129,6 @@ function mapPerformanceTargetRow(row: DbRow) {
   };
 }
 
-function mapLegacyTopupImportRow(row: DbRow) {
-  return {
-    id: readText(row.id),
-    sourceRowKey: readText(row.source_row_key),
-    sourceTable: readText(row.source_table),
-    sourceCreatedAt: optionalText(row.source_created_at),
-    sourceAccount: optionalText(row.source_account),
-    sourceMemberHint: optionalText(row.source_member_hint),
-    sourcePayerName: optionalText(row.source_payer_name),
-    sourcePhone: optionalText(row.source_phone),
-    sourceAmount: readNumber(row.source_amount),
-    sourceRef: optionalText(row.source_ref),
-    raw: row.raw && typeof row.raw === "object" ? (row.raw as Record<string, unknown>) : {},
-    matchedMemberId: optionalText(row.matched_member_id),
-    allocationStatus: readText(row.allocation_status) as "pending" | "applied" | "held" | "error",
-    allocationNotes: Array.isArray(row.allocation_notes)
-      ? row.allocation_notes.map((value) => readText(value)).filter(Boolean)
-      : [],
-    allocatedTransactionId: optionalText(row.allocated_transaction_id),
-    allocatedAt: optionalText(row.allocated_at),
-    syncRunId: optionalText(row.sync_run_id),
-    readOnly: row.read_only !== false,
-    lastSeenAt: readText(row.last_seen_at),
-    createdAt: readText(row.created_at),
-  };
-}
-
 function mapCarryoverProfileRow(row: DbRow) {
   return {
     memberId: readText(row.member_id),
@@ -329,20 +302,6 @@ export const listPerformanceTargets = createServerFn({ method: "POST" }).handler
 
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => mapPerformanceTargetRow(row as DbRow));
-});
-
-export const listLegacyTopupImports = createServerFn({ method: "POST" }).handler(async () => {
-  await requireDirectorActor();
-  const runtimeDb = requireSupabaseAdmin() as any;
-  const { data, error } = await runtimeDb
-    .from("legacy_topup_imports")
-    .select("*")
-    .order("source_created_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(150);
-
-  if (error) throw new Error(error.message);
-  return (data ?? []).map((row: DbRow) => mapLegacyTopupImportRow(row));
 });
 
 export const loadMemberCarryover = createServerFn({ method: "POST" })

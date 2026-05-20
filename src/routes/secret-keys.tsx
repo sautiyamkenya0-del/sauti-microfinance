@@ -430,7 +430,9 @@ function SecretKeysPage() {
         )}
 
         {tab === "audit" && <AuditTab fetchAudit={fetchAudit} fetchActors={fetchActors} />}
-        {tab === "errors" && <ErrorLogsTab errorLogsList={errorLogsList} errorLogsClear={errorLogsClear} />}
+        {tab === "errors" && (
+          <ErrorLogsTab errorLogsList={errorLogsList} errorLogsClear={errorLogsClear} />
+        )}
         {tab === "ai" && <WatchdogTab ask={ask} />}
       </main>
     </>
@@ -733,9 +735,7 @@ function ErrorLogsTab({
   });
 
   const handleClearOld = async () => {
-    if (
-      window.confirm("Delete error logs older than 30 days? This cannot be undone.")
-    ) {
+    if (window.confirm("Delete error logs older than 30 days? This cannot be undone.")) {
       try {
         await errorLogsClear({ data: { daysOld: 30 } });
         toast.success("Old logs cleared");
@@ -808,8 +808,8 @@ function ErrorLogsTab({
 
         {data && (
           <p className="text-xs text-muted-foreground">
-            Showing {page * limit + 1} to {Math.min((page + 1) * limit, data.total)} of{" "}
-            {data.total} errors
+            Showing {page * limit + 1} to {Math.min((page + 1) * limit, data.total)} of {data.total}{" "}
+            errors
           </p>
         )}
       </div>

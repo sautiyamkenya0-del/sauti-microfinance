@@ -1,19 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
+import { useMemo, useState } from "react";
+import { ArrowDownCircle, ArrowUpCircle, Scale } from "lucide-react";
+
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
-import { Section, Badge, DirectorOnly, StatCard } from "@/components/ui-bits";
-import { useStore, fmtKES } from "@/lib/store";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, Database, RefreshCw, Scale } from "lucide-react";
-import { toast } from "sonner";
-
-import { getLegacyDbStatus, syncLegacyTopupsRecord } from "@/lib/app-data.functions";
-import { type LegacyTopupImport } from "@/lib/legacy-finance";
-import { listLegacyTopupImports } from "@/lib/runtime-data.functions";
+import { Badge, DirectorOnly, Section, StatCard } from "@/components/ui-bits";
+import { fmtKES, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/transactions")({
-  head: () => ({ meta: [{ title: "Transactions — Sauti Microfinance" }] }),
+  head: () => ({ meta: [{ title: "Transactions - Sauti Microfinance" }] }),
   component: TxPage,
 });
 
@@ -42,70 +37,32 @@ const OUTFLOWS: ReadonlyArray<string> = ["withdrawal", "loan_disbursement", "pet
 
 function TxPage() {
   const { transactions, members, staff } = useStore();
-  const loadLegacyImports = useServerFn(listLegacyTopupImports);
-  const syncLegacyImports = useServerFn(syncLegacyTopupsRecord);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
-  const [from, setFrom] = useState<string>("");
-  const [to, setTo] = useState<string>("");
-  const [memberFilter, setMemberFilter] = useState<string>("");
-  const [legacyImports, setLegacyImports] = useState<LegacyTopupImport[]>([]);
-  const [syncingLegacy, setSyncingLegacy] = useState(false);
-  const loadLegacyDbStatus = useServerFn(getLegacyDbStatus);
-  const [legacyDbStatus, setLegacyDbStatus] = useState<{
-    ok: boolean;
-    mode?: "bridge" | "direct";
-    missing: string[];
-    bridgeUrl?: string;
-    host?: string;
-    database?: string;
-    table?: string;
-  } | null>(null);
-
-  const refreshLegacyImports = useCallback(async () => {
-    try {
-      setLegacyImports(await loadLegacyImports());
-    } catch (error: any) {
-      toast.error(error?.message ?? "Failed to load old-database topups.");
-    }
-  }, [loadLegacyImports]);
-
-  useEffect(() => {
-    refreshLegacyImports().catch(() => {});
-  }, [refreshLegacyImports]);
-
-  useEffect(() => {
-    loadLegacyDbStatus()
-      .then((status) => setLegacyDbStatus(status))
-      .catch(() => setLegacyDbStatus({ ok: false, missing: [] }));
-  }, [loadLegacyDbStatus]);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [memberFilter, setMemberFilter] = useState("");
 
   const list = useMemo(
     () =>
-      transactions.filter((t) => {
-        if (filter !== "all" && t.type !== filter) return false;
-        if (from && t.date < from) return false;
-        if (to && t.date > to) return false;
-        if (memberFilter && t.memberId !== memberFilter) return false;
+      transactions.filter((transaction) => {
+        if (filter !== "all" && transaction.type !== filter) return false;
+        if (from && transaction.date < from) return false;
+        if (to && transaction.date > to) return false;
+        if (memberFilter && transaction.memberId !== memberFilter) return false;
         return true;
       }),
     [transactions, filter, from, to, memberFilter],
   );
 
   const totals = useMemo(() => {
-    const inflow = list.filter((t) => INFLOWS.includes(t.type)).reduce((s, t) => s + t.amount, 0);
-    const outflow = list.filter((t) => OUTFLOWS.includes(t.type)).reduce((s, t) => s + t.amount, 0);
+    const inflow = list
+      .filter((transaction) => INFLOWS.includes(transaction.type))
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const outflow = list
+      .filter((transaction) => OUTFLOWS.includes(transaction.type))
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
     return { inflow, outflow, net: inflow - outflow };
   }, [list]);
-
-  const legacyCounts = useMemo(
-    () => ({
-      applied: legacyImports.filter((row) => row.allocationStatus === "applied").length,
-      held: legacyImports.filter((row) => row.allocationStatus === "held").length,
-      pending: legacyImports.filter((row) => row.allocationStatus === "pending").length,
-      error: legacyImports.filter((row) => row.allocationStatus === "error").length,
-    }),
-    [legacyImports],
-  );
 
   return (
     <>
@@ -131,154 +88,11 @@ function TxPage() {
             <StatCard
               label="Net"
               value={fmtKES(totals.net)}
-              hint="Inflow − Outflow"
+              hint="Inflow minus outflow"
               icon={<Scale className="h-5 w-5" />}
               tone={totals.net >= 0 ? "success" : "destructive"}
             />
           </div>
-        </DirectorOnly>
-
-        <DirectorOnly>
-          <Section
-            title="Old DB Topup Sync"
-            action={
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => void refreshLegacyImports()}
-                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs hover:bg-muted"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  Refresh
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      setSyncingLegacy(true);
-                      const result = await syncLegacyImports({ data: { limit: 150 } });
-                      await refreshLegacyImports();
-                      toast.success(
-                        `Old DB sync finished: ${result.appliedRows} applied, ${result.heldRows} held, ${result.erroredRows} errors.`,
-                      );
-                    } catch (error: any) {
-                      toast.error(error?.message ?? "Old DB sync failed.");
-                    } finally {
-                      setSyncingLegacy(false);
-                    }
-                  }}
-                  disabled={syncingLegacy || legacyDbStatus?.ok !== true}
-                  className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
-                >
-                  <Database className="h-3.5 w-3.5" />
-                  {syncingLegacy ? "Syncing..." : "Sync api_topup (Read-only)"}
-                </button>
-              </div>
-            }
-          >
-            <div className="grid gap-4 p-5 md:grid-cols-4">
-              <StatCard label="Imported" value={legacyImports.length} />
-              <StatCard label="Applied" value={legacyCounts.applied} tone="success" />
-              <StatCard label="Held" value={legacyCounts.held} tone="warning" />
-              <StatCard label="Errors" value={legacyCounts.error} tone="destructive" />
-            </div>
-            <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              The old `api_topup` source is read-only. Sync only reads rows, stores a local audit
-              copy, and uses the SBC account/member number to distribute funds through the existing
-              waterfall.
-              {legacyDbStatus?.ok ? (
-                <div className="mt-2">
-                  Mode:{" "}
-                  <span className="font-medium text-foreground">
-                    {legacyDbStatus.mode === "bridge" ? "Bridge server" : "Direct MySQL"}
-                  </span>
-                  {legacyDbStatus.mode === "bridge" && legacyDbStatus.bridgeUrl ? (
-                    <>
-                      {" "}
-                      · URL{" "}
-                      <span className="font-mono text-foreground">{legacyDbStatus.bridgeUrl}</span>
-                    </>
-                  ) : legacyDbStatus.host ? (
-                    <>
-                      {" "}
-                      · Host{" "}
-                      <span className="font-mono text-foreground">{legacyDbStatus.host}</span>
-                    </>
-                  ) : null}
-                  {legacyDbStatus.database ? (
-                    <>
-                      {" "}
-                      · DB{" "}
-                      <span className="font-mono text-foreground">{legacyDbStatus.database}</span>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-              {legacyDbStatus?.ok === false ? (
-                <div className="mt-2 text-xs text-destructive">
-                  Legacy DB sync is not configured for this deployment. Set `OLD_DB_BRIDGE_URL` to a
-                  running bridge server, or set `OLD_DB_HOST`, `OLD_DB_NAME`, `OLD_DB_USER`, and
-                  `OLD_DB_PASS` on a host that can reach the cPanel MySQL database directly.
-                </div>
-              ) : null}
-            </div>
-            <div className="overflow-x-auto border-t border-border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
-                  <tr>
-                    <th className="px-5 py-3 text-left">Source Ref</th>
-                    <th className="px-5 py-3 text-left">Account</th>
-                    <th className="px-5 py-3 text-right">Amount</th>
-                    <th className="px-5 py-3 text-left">Matched Member</th>
-                    <th className="px-5 py-3 text-left">Status</th>
-                    <th className="px-5 py-3 text-left">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {legacyImports.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="px-5 py-8 text-center text-sm text-muted-foreground"
-                      >
-                        No old topups have been imported yet.
-                      </td>
-                    </tr>
-                  )}
-                  {legacyImports.map((row) => (
-                    <tr key={row.id}>
-                      <td className="px-5 py-3 font-mono text-xs">
-                        {row.sourceRef ?? row.sourceRowKey}
-                      </td>
-                      <td className="px-5 py-3 font-mono text-xs">
-                        {row.sourceAccount ?? row.sourceMemberHint ?? "—"}
-                      </td>
-                      <td className="px-5 py-3 text-right font-semibold">
-                        {fmtKES(row.sourceAmount)}
-                      </td>
-                      <td className="px-5 py-3 text-xs">{row.matchedMemberId ?? "Unmatched"}</td>
-                      <td className="px-5 py-3">
-                        <Badge
-                          tone={
-                            row.allocationStatus === "applied"
-                              ? "success"
-                              : row.allocationStatus === "held"
-                                ? "warning"
-                                : row.allocationStatus === "error"
-                                  ? "destructive"
-                                  : "muted"
-                          }
-                        >
-                          {row.allocationStatus}
-                        </Badge>
-                      </td>
-                      <td className="px-5 py-3 text-xs text-muted-foreground">
-                        {row.allocationNotes.join(" ")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
         </DirectorOnly>
 
         <div className="bg-card border border-border rounded-xl p-4 grid md:grid-cols-4 gap-3 items-end">
@@ -287,7 +101,7 @@ function TxPage() {
             <input
               type="date"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(event) => setFrom(event.target.value)}
               className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
             />
           </label>
@@ -296,7 +110,7 @@ function TxPage() {
             <input
               type="date"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(event) => setTo(event.target.value)}
               className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
             />
           </label>
@@ -306,13 +120,13 @@ function TxPage() {
             </span>
             <select
               value={memberFilter}
-              onChange={(e) => setMemberFilter(e.target.value)}
+              onChange={(event) => setMemberFilter(event.target.value)}
               className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
             >
               <option value="">All members</option>
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id} · {m.name}
+              {members.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.id} - {member.name}
                 </option>
               ))}
             </select>
@@ -321,13 +135,13 @@ function TxPage() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {TYPES.map((t) => (
+          {TYPES.map((type) => (
             <button
-              key={t}
-              onClick={() => setFilter(t)}
-              className={`px-3 py-1.5 rounded-full text-xs capitalize ${filter === t ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}
+              key={type}
+              onClick={() => setFilter(type)}
+              className={`px-3 py-1.5 rounded-full text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}
             >
-              {t.replace(/_/g, " ")}
+              {type.replace(/_/g, " ")}
             </button>
           ))}
         </div>
@@ -347,37 +161,56 @@ function TxPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {list.map((t) => {
-                  const m = members.find((x) => x.id === t.memberId);
-                  const s = staff.find((x) => x.id === t.by);
+                {list.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
+                      No transactions found for the selected filters.
+                    </td>
+                  </tr>
+                ) : null}
+                {list.map((transaction) => {
+                  const member = members.find((item) => item.id === transaction.memberId);
+                  const staffMember = staff.find((item) => item.id === transaction.by);
                   const tone =
-                    t.type === "mpesa_unallocated"
+                    transaction.type === "mpesa_unallocated"
                       ? "warning"
-                      : t.type.includes("withdrawal") || t.type === "petty_cash"
+                      : transaction.type.includes("withdrawal") || transaction.type === "petty_cash"
                         ? "warning"
-                        : t.type.includes("repayment")
+                        : transaction.type.includes("repayment")
                           ? "success"
-                          : t.type.includes("disbursement")
+                          : transaction.type.includes("disbursement")
                             ? "destructive"
                             : "default";
-                  const account = t.account ?? t.memberId ?? "—";
-                  const displayName = t.payerName ?? m?.name ?? t.note ?? "—";
+                  const account = transaction.account ?? transaction.memberId ?? "-";
+                  const displayName =
+                    transaction.payerName ?? member?.name ?? transaction.note ?? "-";
                   return (
-                    <tr key={t.id} className="hover:bg-muted/30">
+                    <tr key={transaction.id} className="hover:bg-muted/30">
                       <td className="px-5 py-3 font-medium">
                         {displayName}
-                        {t.loanId && (
-                          <span className="text-xs text-muted-foreground"> · {t.loanId}</span>
-                        )}
+                        {transaction.loanId ? (
+                          <span className="text-xs text-muted-foreground">
+                            {" "}
+                            - {transaction.loanId}
+                          </span>
+                        ) : null}
                       </td>
-                      <td className="px-5 py-3 text-right font-semibold">{fmtKES(t.amount)}</td>
+                      <td className="px-5 py-3 text-right font-semibold">
+                        {fmtKES(transaction.amount)}
+                      </td>
                       <td className="px-5 py-3">
-                        <Badge tone={tone}>{t.type.replace(/_/g, " ")}</Badge>
+                        <Badge tone={tone}>{transaction.type.replace(/_/g, " ")}</Badge>
                       </td>
                       <td className="px-5 py-3 font-mono text-xs">{account}</td>
-                      <td className="px-5 py-3 font-mono text-xs">{t.ref ?? t.id}</td>
-                      <td className="px-5 py-3 text-muted-foreground text-xs">{t.date}</td>
-                      <td className="px-5 py-3 text-xs text-muted-foreground">{s?.name ?? t.by}</td>
+                      <td className="px-5 py-3 font-mono text-xs">
+                        {transaction.ref ?? transaction.id}
+                      </td>
+                      <td className="px-5 py-3 text-muted-foreground text-xs">
+                        {transaction.date}
+                      </td>
+                      <td className="px-5 py-3 text-xs text-muted-foreground">
+                        {staffMember?.name ?? transaction.by}
+                      </td>
                     </tr>
                   );
                 })}
