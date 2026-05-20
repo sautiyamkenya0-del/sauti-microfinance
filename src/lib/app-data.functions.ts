@@ -961,6 +961,29 @@ export async function applyMpesaPaymentToDatabase(args: {
     paymentCreatedAt = event?.created_at ? String(event.created_at) : undefined;
     paymentDate = paymentCreatedAt ? paymentCreatedAt.slice(0, 10) : paymentDate;
     if (!norm || amount <= 0) {
+      // If there's no account but a positive amount, create an unallocated ledger row
+      if (!norm && amount > 0) {
+        const note =
+          "M-Pesa confirmation was recorded without an account reference; created an unallocated ledger row.";
+        const transactionId = await createUnallocatedMpesaTransaction({
+          account: args.account?.trim() ?? "",
+          amount,
+          payerName: args.payerName,
+          mpesaRef: args.mpesaRef,
+          note,
+          date: paymentDate,
+          createdAt: paymentCreatedAt,
+        });
+        await markMpesaEventProcessed(args.eventId, transactionId);
+        return {
+          matched: false,
+          account: norm,
+          transactionId,
+          notes: [note],
+          primary: { type: "mpesa_unallocated", amount, note },
+        };
+      }
+
       const note = !norm
         ? "M-Pesa confirmation was recorded without an account reference; no ledger transaction was created."
         : "M-Pesa confirmation was recorded without a positive amount; no ledger transaction was created.";
@@ -1007,6 +1030,30 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   if (!norm || amount <= 0) {
+    // If there's no account but a positive amount, create an unallocated ledger row
+    if (!norm && amount > 0) {
+      const note =
+        "M-Pesa confirmation was recorded without an account reference; created an unallocated ledger row.";
+      const unallocatedTransactionId = await createUnallocatedMpesaTransaction({
+        account: args.account?.trim() ?? "",
+        amount,
+        payerName: args.payerName,
+        mpesaRef: args.mpesaRef,
+        note,
+        date: paymentDate,
+        createdAt: paymentCreatedAt,
+      });
+      // args.eventId may be undefined; markMpesaEventProcessed will no-op if so
+      await markMpesaEventProcessed(args.eventId, unallocatedTransactionId);
+      return {
+        matched: false,
+        account: norm,
+        transactionId: unallocatedTransactionId,
+        notes: [note],
+        primary: { type: "mpesa_unallocated", amount, note },
+      };
+    }
+
     const note = !norm
       ? "M-Pesa confirmation was recorded without an account reference; no ledger transaction was created."
       : "M-Pesa confirmation was recorded without a positive amount; no ledger transaction was created.";
