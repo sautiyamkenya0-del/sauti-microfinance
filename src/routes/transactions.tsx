@@ -14,6 +14,7 @@ export const Route = createFileRoute("/transactions")({
 
 const TYPES = [
   "all",
+  "mpesa",
   "deposit",
   "withdrawal",
   "loan_disbursement",
@@ -33,7 +34,6 @@ const INFLOWS: ReadonlyArray<string> = [
   "investor_contribution",
   "fee_payment",
   "mpesa_unallocated",
-  "staff_payroll",
 ];
 const OUTFLOWS: ReadonlyArray<string> = [
   "withdrawal",
@@ -52,7 +52,11 @@ function TxPage() {
   const list = useMemo(
     () =>
       transactions.filter((transaction) => {
-        if (filter !== "all" && transaction.type !== filter) return false;
+        if (filter === "mpesa") {
+          if (transaction.by !== "MPESA") return false;
+        } else if (filter !== "all" && transaction.type !== filter) {
+          return false;
+        }
         if (from && transaction.date < from) return false;
         if (to && transaction.date > to) return false;
         if (memberFilter && transaction.memberId !== memberFilter) return false;
@@ -158,7 +162,7 @@ function TxPage() {
               onClick={() => setFilter(type)}
               className={`px-3 py-1.5 rounded-full text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}
             >
-              {type.replace(/_/g, " ")}
+              {type === "mpesa" ? "M-Pesa" : type.replace(/_/g, " ")}
             </button>
           ))}
         </div>

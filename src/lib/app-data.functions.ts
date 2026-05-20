@@ -112,6 +112,34 @@ function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const SUPABASE_PAGE_SIZE = 1000;
+
+async function fetchAllRows<T = any>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const to = from + SUPABASE_PAGE_SIZE - 1;
+    const { data, error } = await queryFactory().range(from, to);
+    if (error) throw new Error(error.message);
+
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < SUPABASE_PAGE_SIZE) break;
+  }
+
+  return rows;
+}
+
+function isMissingColumnError(error: any, column: string) {
+  const message = String(error?.message ?? "");
+  return error?.code === "42703" || message.includes(column);
+}
+
+function isMissingRelationError(error: any) {
+  const message = String(error?.message ?? "").toLowerCase();
+  return error?.code === "42P01" || message.includes("does not exist");
+}
+
 type AuditActor = {
   id: string;
   name: string;
@@ -548,22 +576,27 @@ async function createUnallocatedMpesaTransaction(args: {
 
 async function findExistingMpesaTransaction(args: {
   account: string;
-  amount: number;
+  amount?: number;
   mpesaRef?: string;
 }) {
   const ref = args.mpesaRef?.trim();
   if (!ref) return null;
 
   const supabaseAdmin = await requireSupabaseAdmin();
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("transactions")
-    .select("id, type, member_id")
+    .select("id, type, member_id, amount")
+    .eq("by_staff", MPESA_SYSTEM_STAFF_ID)
     .eq("ref", ref)
     .eq("account", args.account)
-    .eq("amount", args.amount)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  if (typeof args.amount === "number") {
+    query = query.eq("amount", args.amount);
+  }
+
+  const { data, error } = await query.maybeSingle();
   if (error) throw new Error(error.message);
   return data;
 }
@@ -713,6 +746,9 @@ export async function recordMpesaConfirmationEvent(args: {
       .select("id, processed, transaction_id")
       .eq("kind", "confirmation")
       .eq("mpesa_ref", ref)
+      .order("processed", { ascending: false })
+      .order("created_at", { ascending: true })
+      .limit(1)
       .maybeSingle();
     if (existingError) throw new Error(existingError.message);
     if (existing) return existing;
@@ -938,6 +974,27 @@ export async function applyMpesaPaymentToDatabase(args: {
       matched: false,
       account: norm,
       notes: [note],
+    };
+  }
+
+  const existingReceipt = await findExistingMpesaTransaction({
+    account: norm,
+    mpesaRef: args.mpesaRef,
+  });
+  if (existingReceipt?.id) {
+    await markMpesaEventProcessed(args.eventId, String(existingReceipt.id));
+    const matched = existingReceipt.type !== "mpesa_unallocated";
+    return {
+      matched,
+      memberId: existingReceipt.member_id ?? undefined,
+      account: norm,
+      transactionId: String(existingReceipt.id),
+      primary: {
+        type: String(existingReceipt.type),
+        amount: Number(existingReceipt.amount ?? amount),
+        note: "Duplicate M-Pesa confirmation was linked to the existing ledger row.",
+      },
+      notes: ["Duplicate M-Pesa confirmation was linked to the existing ledger row."],
     };
   }
 
@@ -2269,45 +2326,34 @@ async function loadRuntimePolicySettings(supabaseAdmin: any) {
 }
 
 async function redistributePurposePoolBalances(runtimeDb: any, actor: AuditActor) {
-  const [
-    policySettings,
-    feePolicies,
-    membersResult,
-    activeLoansResult,
-    transactionsResult,
-    penaltiesResult,
-  ] = await Promise.all([
-    loadRuntimePolicySettings(runtimeDb),
-    loadRuntimeFeePolicies(runtimeDb),
-    runtimeDb.from("members").select("*").order("id"),
-    runtimeDb.from("loans").select("member_id").eq("status", "active"),
-    runtimeDb
-      .from("transactions")
-      .select("member_id, amount, note")
-      .eq("type", "fee_payment")
-      .order("created_at", { ascending: true }),
-    runtimeDb
-      .from("penalties")
-      .select("*")
-      .eq("status", "outstanding")
-      .order("date", { ascending: true }),
-  ]);
-
-  const resultError = [membersResult, activeLoansResult, transactionsResult, penaltiesResult].find(
-    (result) => result.error,
-  );
-  if (resultError?.error) throw new Error(resultError.error.message);
+  const [policySettings, feePolicies, memberRows, activeLoanRows, purposePoolRows, penaltyRows] =
+    await Promise.all([
+      loadRuntimePolicySettings(runtimeDb),
+      loadRuntimeFeePolicies(runtimeDb),
+      fetchAllRows(() => runtimeDb.from("members").select("*").order("id")),
+      fetchAllRows(() => runtimeDb.from("loans").select("member_id").eq("status", "active")),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("transactions")
+          .select("member_id, amount, note")
+          .eq("type", "fee_payment")
+          .order("created_at", { ascending: true }),
+      ),
+      fetchAllRows(() =>
+        runtimeDb.from("penalties").select("*").eq("status", "outstanding").order("date", {
+          ascending: true,
+        }),
+      ),
+    ]);
 
   const activeLoanMemberIds = new Set(
-    (activeLoansResult.data ?? []).map((row: { member_id?: string | null }) =>
-      String(row.member_id ?? "").trim(),
-    ),
+    activeLoanRows.map((row: { member_id?: string | null }) => String(row.member_id ?? "").trim()),
   );
   const purposePoolByMember = new Map<
     string,
     Array<{ amount: number | string | null; note?: string | null }>
   >();
-  for (const row of transactionsResult.data ?? []) {
+  for (const row of purposePoolRows) {
     const memberId = String(row.member_id ?? "").trim();
     if (!memberId || !isPurposePoolFeeTransaction(row.note)) continue;
     const list = purposePoolByMember.get(memberId) ?? [];
@@ -2316,7 +2362,7 @@ async function redistributePurposePoolBalances(runtimeDb: any, actor: AuditActor
   }
 
   const outstandingPenaltiesByMember = new Map<string, any[]>();
-  for (const penalty of penaltiesResult.data ?? []) {
+  for (const penalty of penaltyRows) {
     const memberId = String(penalty.member_id ?? "").trim();
     if (!memberId) continue;
     const list = outstandingPenaltiesByMember.get(memberId) ?? [];
@@ -2329,7 +2375,7 @@ async function redistributePurposePoolBalances(runtimeDb: any, actor: AuditActor
   let penaltiesSettled = 0;
   const redistributionDate = new Date().toISOString().slice(0, 10);
 
-  for (const member of membersResult.data ?? []) {
+  for (const member of memberRows) {
     const memberId = String(member.id ?? "").trim();
     if (!memberId) continue;
 
@@ -2659,7 +2705,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       memberResult,
       staffResult,
       loansResult,
-      transactionsResult,
+      transactionRows,
       penaltiesResult,
       roundOffResult,
       feePoliciesResult,
@@ -2672,12 +2718,14 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
         .select("*")
         .eq("member_id", session.memberId)
         .order("start_date", { ascending: false }),
-      supabaseAdmin
-        .from("transactions")
-        .select("*")
-        .eq("member_id", session.memberId)
-        .order("date", { ascending: false })
-        .order("created_at", { ascending: false }),
+      fetchAllRows(() =>
+        supabaseAdmin
+          .from("transactions")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("date", { ascending: false })
+          .order("created_at", { ascending: false }),
+      ),
       supabaseAdmin
         .from("penalties")
         .select("*")
@@ -2696,7 +2744,6 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       memberResult,
       staffResult,
       loansResult,
-      transactionsResult,
       penaltiesResult,
       roundOffResult,
       feePoliciesResult,
@@ -2714,7 +2761,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
       staff: (staffResult.data ?? []).map(mapStaffRow),
       members: [mapMemberRow(memberResult.data)],
       loans: (loansResult.data ?? []).map(mapLoanRow),
-      transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
+      transactions: transactionRows.map(mapTransactionRow),
       penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
       roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
       feePolicies: normalizeFeePolicies((feePoliciesResult.data ?? []).map(mapFeePolicyRow)),
@@ -2730,7 +2777,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     staffResult,
     membersResult,
     loansResult,
-    transactionsResult,
+    transactionRows,
     pettyCashResult,
     investorsResult,
     attendanceResult,
@@ -2746,11 +2793,13 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     supabaseAdmin.from("staff").select("*").order("id"),
     supabaseAdmin.from("members").select("*").order("id"),
     supabaseAdmin.from("loans").select("*").order("start_date", { ascending: false }),
-    supabaseAdmin
-      .from("transactions")
-      .select("*")
-      .order("date", { ascending: false })
-      .order("created_at", { ascending: false }),
+    fetchAllRows(() =>
+      supabaseAdmin
+        .from("transactions")
+        .select("*")
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false }),
+    ),
     supabaseAdmin.from("petty_cash").select("*").order("date", { ascending: false }),
     supabaseAdmin.from("investors").select("*").order("joined_at", { ascending: false }),
     supabaseAdmin.from("attendance").select("*").order("date", { ascending: false }),
@@ -2776,7 +2825,6 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     staffResult,
     membersResult,
     loansResult,
-    transactionsResult,
     pettyCashResult,
     investorsResult,
     attendanceResult,
@@ -2802,7 +2850,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     staff: staffRows,
     members: (membersResult.data ?? []).map(mapMemberRow),
     loans: (loansResult.data ?? []).map(mapLoanRow),
-    transactions: (transactionsResult.data ?? []).map(mapTransactionRow),
+    transactions: transactionRows.map(mapTransactionRow),
     pettyCash: (pettyCashResult.data ?? []).map(mapPettyCashRow),
     investors: (investorsResult.data ?? []).map(mapInvestorRow),
     attendance: (attendanceResult.data ?? []).map(mapAttendanceRow),
@@ -3174,7 +3222,10 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         .from("fee_policies")
         .select("key, selected_member_ids")
         .contains("selected_member_ids", [fromMemberId]);
-      if (feePoliciesError) throw new Error(feePoliciesError.message);
+      if (feePoliciesError) {
+        if (isMissingColumnError(feePoliciesError, "selected_member_ids")) return;
+        throw new Error(feePoliciesError.message);
+      }
 
       for (const policy of feePolicies ?? []) {
         const nextIds = uniqueTextValues(
@@ -3186,7 +3237,10 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
           .from("fee_policies")
           .update({ selected_member_ids: nextIds })
           .eq("key", policy.key);
-        if (error) throw new Error(error.message);
+        if (error) {
+          if (isMissingColumnError(error, "selected_member_ids")) return;
+          throw new Error(error.message);
+        }
       }
     };
 
@@ -3227,7 +3281,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     };
 
     if (targetMemberId !== currentMemberId) {
-      const { error: insertError } = await supabaseAdmin.from("members").insert({
+      const targetMemberPayload = {
         id: targetMemberId,
         joined_at: currentMember.joined_at,
         fee_membership: currentMember.fee_membership,
@@ -3238,8 +3292,45 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         savings_only: currentMember.savings_only,
         created_at: currentMember.created_at,
         ...memberPayload,
-      });
-      if (insertError) throw new Error(insertError.message);
+      };
+      const { error: insertError } = await supabaseAdmin
+        .from("members")
+        .insert(targetMemberPayload);
+      if (insertError) {
+        if (insertError.code !== "23505") throw new Error(insertError.message);
+
+        const { data: existingTarget, error: existingTargetError } = await supabaseAdmin
+          .from("members")
+          .select("id, name, phone")
+          .eq("id", targetMemberId)
+          .maybeSingle();
+        if (existingTargetError) throw new Error(existingTargetError.message);
+
+        const existingComparablePhone = toComparableKenyanPhone(existingTarget?.phone);
+        const nextComparablePhone = toComparableKenyanPhone(phone);
+        const samePhone =
+          !!existingComparablePhone &&
+          !!nextComparablePhone &&
+          existingComparablePhone === nextComparablePhone;
+        const sameName =
+          String(existingTarget?.name ?? "")
+            .trim()
+            .toLowerCase() ===
+          String(currentMember.name ?? data.name)
+            .trim()
+            .toLowerCase();
+        if (!existingTarget || (!samePhone && !sameName)) {
+          throw new Error(
+            `Membership number ${targetMembershipNumber} already belongs to another member.`,
+          );
+        }
+
+        const { error: updateTargetError } = await supabaseAdmin
+          .from("members")
+          .update(targetMemberPayload)
+          .eq("id", targetMemberId);
+        if (updateTargetError) throw new Error(updateTargetError.message);
+      }
 
       const moveMemberReference = async (table: string) => {
         const { error } = await supabaseAdmin
@@ -3247,6 +3338,36 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
           .update({ member_id: targetMemberId } as any)
           .eq("member_id", currentMemberId);
         if (error) throw new Error(error.message);
+      };
+      const moveOptionalMemberReference = async (table: string) => {
+        const { error } = await supabaseAdmin
+          .from(table)
+          .update({ member_id: targetMemberId } as any)
+          .eq("member_id", currentMemberId);
+        if (error && !isMissingRelationError(error)) throw new Error(error.message);
+      };
+      const mergeCarryoverProfileReference = async () => {
+        const { data: sourceProfile, error: sourceProfileError } = await supabaseAdmin
+          .from("member_carryover_profiles")
+          .select("*")
+          .eq("member_id", currentMemberId)
+          .maybeSingle();
+        if (sourceProfileError) {
+          if (isMissingRelationError(sourceProfileError)) return;
+          throw new Error(sourceProfileError.message);
+        }
+        if (!sourceProfile) return;
+
+        const { error: upsertProfileError } = await supabaseAdmin
+          .from("member_carryover_profiles")
+          .upsert({ ...sourceProfile, member_id: targetMemberId } as any);
+        if (upsertProfileError) throw new Error(upsertProfileError.message);
+
+        const { error: deleteProfileError } = await supabaseAdmin
+          .from("member_carryover_profiles")
+          .delete()
+          .eq("member_id", currentMemberId);
+        if (deleteProfileError) throw new Error(deleteProfileError.message);
       };
 
       await moveMemberReference("investors");
@@ -3258,8 +3379,9 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       await moveMemberReference("penalties");
       await moveMemberReference("round_off");
       await moveMemberReference("support_threads");
-      await moveMemberReference("member_carryover_profiles");
+      await mergeCarryoverProfileReference();
       await moveMemberReference("member_carryover_loans");
+      await moveOptionalMemberReference("system_payout_requests");
 
       const currentAccountAliases = membershipAccountAliases(currentMemberId);
       for (const accountAlias of currentAccountAliases) {
@@ -3273,7 +3395,6 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         const { error: pendingMpesaAccountError } = await supabaseAdmin
           .from("mpesa_events")
           .update({ account: targetMembershipNumber })
-          .eq("processed", false)
           .eq("account", accountAlias);
         if (pendingMpesaAccountError) throw new Error(pendingMpesaAccountError.message);
       }
@@ -3840,26 +3961,26 @@ function isOutflowTransactionType(type: string) {
 }
 
 async function computeSystemCashSummary(runtimeDb: any) {
-  const [transactionsResult, pendingPayoutsResult] = await Promise.all([
-    runtimeDb.from("transactions").select("type, amount"),
-    runtimeDb.from("system_payout_requests").select("amount").eq("status", "requested"),
+  const [transactionRows, pendingPayoutRows] = await Promise.all([
+    fetchAllRows(() => runtimeDb.from("transactions").select("type, amount")),
+    fetchAllRows(() =>
+      runtimeDb.from("system_payout_requests").select("amount").eq("status", "requested"),
+    ),
   ]);
-  if (transactionsResult.error) throw new Error(transactionsResult.error.message);
-  if (pendingPayoutsResult.error) throw new Error(pendingPayoutsResult.error.message);
 
-  const inflow = (transactionsResult.data ?? [])
+  const inflow = transactionRows
     .filter((row: { type?: string | null }) => isInflowTransactionType(String(row.type ?? "")))
     .reduce(
       (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
       0,
     );
-  const outflow = (transactionsResult.data ?? [])
+  const outflow = transactionRows
     .filter((row: { type?: string | null }) => isOutflowTransactionType(String(row.type ?? "")))
     .reduce(
       (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
       0,
     );
-  const pending = (pendingPayoutsResult.data ?? []).reduce(
+  const pending = pendingPayoutRows.reduce(
     (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
     0,
   );
@@ -5004,7 +5125,7 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       throw new Error("Select at least one member for a selected-members fee.");
     }
     const runtimeDb = (await requireSupabaseAdmin()) as any;
-    const { error } = await runtimeDb.from("fee_policies").upsert({
+    const payload = {
       key: data.key,
       label: data.label,
       amount: data.amount,
@@ -5015,7 +5136,14 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       selected_member_ids: data.scope === "selected_members" ? data.selectedMemberIds : [],
       custom: data.custom,
       notes: data.notes ?? null,
-    });
+    };
+    let { error } = await runtimeDb.from("fee_policies").upsert(payload);
+    if (error && isMissingColumnError(error, "selected_member_ids")) {
+      const fallbackPayload = { ...payload };
+      delete (fallbackPayload as Partial<typeof payload>).selected_member_ids;
+      const retry = await runtimeDb.from("fee_policies").upsert(fallbackPayload);
+      error = retry.error;
+    }
     if (error) throw new Error(error.message);
     const redistribution = await redistributePurposePoolBalances(runtimeDb, actor);
     await auditAction({

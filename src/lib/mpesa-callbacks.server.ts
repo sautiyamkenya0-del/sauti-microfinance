@@ -297,7 +297,12 @@ export async function handleMpesaConfirmationRequest(request: Request) {
     });
 
     let processedResult: Awaited<ReturnType<typeof applyMpesaPaymentToDatabase>> | undefined;
-    if (normalized.success && !event.processed && normalized.amount > 0 && normalized.account) {
+    if (
+      normalized.success &&
+      normalized.amount > 0 &&
+      normalized.account &&
+      (!event.processed || !event.transaction_id)
+    ) {
       processedResult = await applyMpesaPaymentToDatabase({
         eventId: event.id,
         account: normalized.account,

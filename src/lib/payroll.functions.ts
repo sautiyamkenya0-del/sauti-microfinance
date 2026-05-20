@@ -8,6 +8,20 @@ function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const SUPABASE_PAGE_SIZE = 1000;
+
+async function fetchAllRows<T = any>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const { data, error } = await queryFactory().range(from, from + SUPABASE_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < SUPABASE_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 async function requireSupabaseAdmin() {
   const { getSupabaseAdminOrNull } = await import("@/integrations/supabase/client.server");
   const supabaseAdmin = getSupabaseAdminOrNull();
@@ -47,20 +61,26 @@ function isOutflowType(type: string) {
 }
 
 async function computeSystemCashSummary(runtimeDb: any) {
-  const [transactionsResult, pendingPayoutsResult] = await Promise.all([
-    runtimeDb.from("transactions").select("type, amount"),
-    runtimeDb.from("system_payout_requests").select("amount").eq("status", "requested"),
+  const [transactionRows, pendingPayoutRows] = await Promise.all([
+    fetchAllRows(() => runtimeDb.from("transactions").select("type, amount")),
+    fetchAllRows(() =>
+      runtimeDb.from("system_payout_requests").select("amount").eq("status", "requested"),
+    ),
   ]);
-  if (transactionsResult.error) throw new Error(transactionsResult.error.message);
-  if (pendingPayoutsResult.error) throw new Error(pendingPayoutsResult.error.message);
 
-  const inflow = (transactionsResult.data ?? [])
+  const inflow = transactionRows
     .filter((row: { type?: string | null }) => isInflowType(readText(row.type)))
-    .reduce((sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount), 0);
-  const outflow = (transactionsResult.data ?? [])
+    .reduce(
+      (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
+      0,
+    );
+  const outflow = transactionRows
     .filter((row: { type?: string | null }) => isOutflowType(readText(row.type)))
-    .reduce((sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount), 0);
-  const pending = (pendingPayoutsResult.data ?? []).reduce(
+    .reduce(
+      (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
+      0,
+    );
+  const pending = pendingPayoutRows.reduce(
     (sum: number, row: { amount?: number | string | null }) => sum + toNumber(row.amount),
     0,
   );
@@ -190,19 +210,18 @@ export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" }
 
     const alreadyPaid = (priorPaymentsResult.data ?? [])
       .filter((row: { status?: string | null }) => readText(row.status) === "paid")
-      .reduce((sum: number, row: { paid_amount?: number | string | null }) => sum + toNumber(row.paid_amount), 0);
+      .reduce(
+        (sum: number, row: { paid_amount?: number | string | null }) =>
+          sum + toNumber(row.paid_amount),
+        0,
+      );
 
     const payroll = payableSalaryFromAttendance({
       baseSalary: toNumber(profileResult.data.base_salary),
       rows: (attendanceResult.data ?? []).map((row: Record<string, unknown>) => ({
         staffId: readText(row.staff_id),
         date: readText(row.date),
-        status: readText(row.status) as
-          | "present"
-          | "late"
-          | "signed_out"
-          | "permission"
-          | "absent",
+        status: readText(row.status) as "present" | "late" | "signed_out" | "permission" | "absent",
       })),
       staffId: data.staffId,
       start: period.start,
@@ -220,7 +239,8 @@ export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" }
       );
     }
 
-    const payoutPhone = readText(profileResult.data.payout_phone) || readText(staffResult.data.phone);
+    const payoutPhone =
+      readText(profileResult.data.payout_phone) || readText(staffResult.data.phone);
     if (!payoutPhone) throw new Error("The selected staff member does not have a payroll phone.");
 
     const paymentId = makeId("PAY");
