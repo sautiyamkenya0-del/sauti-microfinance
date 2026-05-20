@@ -1,8 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
-import { requireManagerOrDirectorActor } from "@/lib/auth.server";
-import { applyMpesaPaymentToDatabase } from "@/lib/app-data.functions";
+import { requireStaffActor } from "@/lib/auth.server";
+import {
+  applyMpesaPaymentToDatabase,
+  cleanupDuplicateTransactionRefs,
+} from "@/lib/app-data.functions";
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
@@ -42,7 +45,7 @@ export const Route = createFileRoute("/api/mpesa/queue")({
         return Response.json({ items }, { headers: NO_STORE_HEADERS });
       },
       POST: async () => {
-        await requireManagerOrDirectorActor();
+        await requireStaffActor();
         const supabaseAdmin = getSupabaseAdminOrNull();
         if (!supabaseAdmin) {
           return Response.json({ processed: 0, items: [] }, { headers: NO_STORE_HEADERS });
@@ -82,7 +85,11 @@ export const Route = createFileRoute("/api/mpesa/queue")({
           }
         }
 
-        return Response.json({ processed: items.length, items }, { headers: NO_STORE_HEADERS });
+        const duplicatesRemoved = await cleanupDuplicateTransactionRefs();
+        return Response.json(
+          { processed: items.length, items, duplicatesRemoved },
+          { headers: NO_STORE_HEADERS },
+        );
       },
     },
   },

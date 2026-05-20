@@ -456,31 +456,9 @@ async function insertTransactionRow(row: {
   await ensureSystemStaffActor(supabaseAdmin, row.by_staff);
 
   const ref = row.ref?.trim();
-  if (row.by_staff === MPESA_SYSTEM_STAFF_ID && ref) {
-    let duplicateQuery = supabaseAdmin
-      .from("transactions")
-      .select("id")
-      .eq("ref", ref)
-      .eq("type", row.type as never)
-      .eq("amount", row.amount)
-      .limit(1);
-
-    duplicateQuery = row.account
-      ? duplicateQuery.eq("account", row.account)
-      : duplicateQuery.is("account", null);
-    duplicateQuery = row.member_id
-      ? duplicateQuery.eq("member_id", row.member_id)
-      : duplicateQuery.is("member_id", null);
-    duplicateQuery = row.loan_id
-      ? duplicateQuery.eq("loan_id", row.loan_id)
-      : duplicateQuery.is("loan_id", null);
-    duplicateQuery = row.note
-      ? duplicateQuery.eq("note", row.note)
-      : duplicateQuery.is("note", null);
-
-    const { data: existing, error: duplicateError } = await duplicateQuery.maybeSingle();
-    if (duplicateError) throw new Error(duplicateError.message);
-    if (existing?.id) return String(existing.id);
+  if (ref) {
+    const existingTransactionId = await resolveExistingTransactionRef(supabaseAdmin, ref);
+    if (existingTransactionId) return existingTransactionId;
   }
 
   const id = await nextPrefixedId("transactions", "T", 1);
@@ -500,6 +478,71 @@ async function insertTransactionRow(row: {
   });
   if (error) throw new Error(error.message);
   return id;
+}
+
+async function resolveExistingTransactionRef(supabaseAdmin: any, ref: string) {
+  const normalizedRef = ref.trim();
+  if (!normalizedRef) return null;
+
+  const { data: existingRows, error } = await supabaseAdmin
+    .from("transactions")
+    .select("id, type, member_id, created_at")
+    .eq("ref", normalizedRef)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  if (!existingRows || existingRows.length === 0) return null;
+
+  const preferred =
+    existingRows.find((row: any) => row.type !== "mpesa_unallocated" && row.member_id) ?? existingRows[0];
+  const duplicateIds = existingRows.filter((row: any) => row.id !== preferred.id).map((row: any) => row.id);
+
+  if (duplicateIds.length > 0) {
+    const { error: deleteError } = await supabaseAdmin
+      .from("transactions")
+      .delete()
+      .in("id", duplicateIds);
+    if (deleteError) throw new Error(deleteError.message);
+  }
+
+  return String(preferred.id);
+}
+
+export async function cleanupDuplicateTransactionRefs() {
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("transactions")
+    .select("id, ref, type, member_id, created_at")
+    .not("ref", "is", null)
+    .order("ref", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const rows = data ?? [];
+  const grouped = new Map<string, Array<Record<string, any>>>();
+  for (const row of rows) {
+    const normalizedRef = String(row.ref ?? "").trim();
+    if (!normalizedRef) continue;
+    const bucket = grouped.get(normalizedRef) ?? [];
+    bucket.push(row);
+    grouped.set(normalizedRef, bucket);
+  }
+
+  let removed = 0;
+  for (const [, refRows] of grouped.entries()) {
+    if (refRows.length <= 1) continue;
+    const preferred =
+      refRows.find((row) => row.type !== "mpesa_unallocated" && row.member_id) ?? refRows[0];
+    const duplicateIds = refRows.filter((row) => row.id !== preferred.id).map((row) => row.id);
+    if (duplicateIds.length === 0) continue;
+    const { error: deleteError } = await supabaseAdmin
+      .from("transactions")
+      .delete()
+      .in("id", duplicateIds);
+    if (deleteError) throw new Error(deleteError.message);
+    removed += duplicateIds.length;
+  }
+
+  return removed;
 }
 
 async function insertRoundOffRow(row: {
@@ -588,17 +631,15 @@ async function findExistingMpesaTransaction(args: {
     .select("id, type, member_id, amount")
     .eq("by_staff", MPESA_SYSTEM_STAFF_ID)
     .eq("ref", ref)
-    .eq("account", args.account)
-    .order("created_at", { ascending: false })
-    .limit(1);
+    .order("created_at", { ascending: false });
 
   if (typeof args.amount === "number") {
     query = query.eq("amount", args.amount);
   }
 
-  const { data, error } = await query.maybeSingle();
+  const { data, error } = await query.limit(1);
   if (error) throw new Error(error.message);
-  return data;
+  return (data?.[0] ?? null) as { id: string; type: string; member_id?: string | null; amount?: number } | null;
 }
 
 async function createProcessedMpesaLedgerLink(args: {

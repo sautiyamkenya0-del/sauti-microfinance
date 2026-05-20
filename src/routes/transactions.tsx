@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { ArrowDownCircle, ArrowUpCircle, ListOrdered, Scale } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
@@ -43,11 +44,13 @@ const OUTFLOWS: ReadonlyArray<string> = [
 ];
 
 function TxPage() {
-  const { transactions, members, staff } = useStore();
+  const { transactions, members, staff, reloadAppData } = useStore();
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [memberFilter, setMemberFilter] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
   const list = useMemo(
     () =>
@@ -75,6 +78,37 @@ function TxPage() {
     const gross = list.reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
     return { inflow, outflow, net: inflow - outflow, gross };
   }, [list]);
+
+  async function handleRefreshTransactions() {
+    setIsSyncing(true);
+    try {
+      const response = await fetch("/api/mpesa/queue", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+          Accept: "application/json",
+        },
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || "Failed to refresh transactions.");
+      }
+      const result = await response.json();
+      await reloadAppData();
+      toast.success(
+        `Transactions refreshed. Processed ${result.processed} M-Pesa confirmation(s) and cleaned ${
+          result.duplicatesRemoved ?? 0
+        } duplicate ref(s).`,
+      );
+      setLastRefreshedAt(new Date().toLocaleString());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to refresh transactions.");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
 
   const displayDateTime = (transaction: (typeof transactions)[number]) =>
     transaction.createdAt ? new Date(transaction.createdAt).toLocaleString() : transaction.date;
@@ -155,7 +189,7 @@ function TxPage() {
           <div />
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           {TYPES.map((type) => (
             <button
               key={type}
@@ -165,7 +199,18 @@ function TxPage() {
               {type === "mpesa" ? "M-Pesa" : type.replace(/_/g, " ")}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={handleRefreshTransactions}
+            disabled={isSyncing}
+            className="ml-auto rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSyncing ? "Refreshing…" : "Refresh transactions"}
+          </button>
         </div>
+        {lastRefreshedAt ? (
+          <p className="text-xs text-muted-foreground">Last refreshed: {lastRefreshedAt}</p>
+        ) : null}
 
         <Section title={`Filtered Ledger (${list.length} of ${transactions.length})`}>
           <div className="overflow-x-auto">
