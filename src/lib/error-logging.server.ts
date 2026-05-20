@@ -1,6 +1,8 @@
 import "@tanstack/react-start/server-only";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
+import fs from "fs";
+import path from "path";
 
 export type ErrorLogEntry = {
   id: string;
@@ -28,7 +30,38 @@ export async function logErrorToServer(args: {
   user_id?: string;
 }) {
   const supabaseAdmin = getSupabaseAdminOrNull();
-  if (!supabaseAdmin) return;
+  if (!supabaseAdmin) {
+    // Supabase admin client not available (local dev or missing env). Fallback to
+    // console output and append to a local JSONL file for inspection.
+    try {
+      const entry = {
+        id: args.user_id ?? "local",
+        timestamp: new Date().toISOString(),
+        level: args.level,
+        category: args.category,
+        message: args.message,
+        file: args.file,
+        line: args.line,
+        stack: args.stack,
+        context: args.context,
+        user_id: args.user_id,
+      };
+      // Console log so it appears in server logs
+      console.error("[LocalErrorLog]", entry);
+
+      // Append to a local file next to the project root for easier inspection
+      const outPath = path.resolve(process.cwd(), "local-error-logs.jsonl");
+      const line = JSON.stringify(entry) + "\n";
+      try {
+        fs.appendFileSync(outPath, line, { encoding: "utf8" });
+      } catch (fsErr) {
+        console.error("Failed to write local error log", fsErr);
+      }
+    } catch (err) {
+      console.error("Error while falling back to local logging", err);
+    }
+    return;
+  }
 
   try {
     await supabaseAdmin.from("error_logs").insert({

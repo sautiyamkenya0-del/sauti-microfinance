@@ -7,6 +7,7 @@ import {
   type SecretValueInspection,
 } from "@/lib/runtime-secrets.server";
 import { readServerEnv } from "@/lib/server-env";
+import { logErrorToServer } from "@/lib/error-logging.server";
 
 export type MpesaConfigVariant = {
   label: "effective" | "hosting_env" | "runtime_vault";
@@ -249,10 +250,21 @@ async function fetchDarajaToken(
   };
 
   if (!config.completeness.oauthReady) {
-    return {
+    const result = {
       ...attempt,
       error: "Consumer key/secret are not fully configured for this source.",
     };
+    try {
+      await logErrorToServer({
+        level: "warning",
+        category: "mpesa.auth",
+        message: "Daraja oauth not configured for candidate",
+        context: { candidate: config.label, sources: config.sources },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
+    return result;
   }
 
   try {
@@ -291,6 +303,16 @@ async function fetchDarajaToken(
         timeoutMs: error.timeoutMs,
         error: error.message,
       };
+    }
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.auth",
+        message: "Daraja token fetch failed",
+        context: { candidate: config.label, error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
     }
     return {
       ...attempt,
@@ -379,6 +401,17 @@ export async function getDarajaAccessToken() {
   }
 
   const lastAttempt = attempts[attempts.length - 1];
+  try {
+    await logErrorToServer({
+      level: "error",
+      category: "mpesa.auth",
+      message: "All Daraja token attempts failed",
+      context: { lastAttempt, attempts, variants },
+    });
+  } catch (_) {
+    /* ignore logging failure */
+  }
+
   return {
     ok: false as const,
     status: lastAttempt?.status,

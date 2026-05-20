@@ -7,6 +7,7 @@ import {
   recordMpesaConfirmationEvent,
   recordMpesaValidationEvent,
 } from "@/lib/app-data.functions";
+import { logErrorToServer } from "@/lib/error-logging.server";
 import { listConfiguredMpesaShortcodes } from "@/lib/mpesa-config.server";
 import { sendMpesaReceiptSms } from "@/lib/mpesa.server";
 
@@ -94,8 +95,18 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
       merchantRequestId,
       phone: textValue(readStkMetadataValue(metadataItems, "PhoneNumber")),
       amount: numberValue(readStkMetadataValue(metadataItems, "Amount")),
-    }).catch((error) => {
+    }).catch(async (error) => {
       console.error("mpesa stk request lookup error", error);
+      try {
+        await logErrorToServer({
+          level: "warning",
+          category: "mpesa.stk_lookup",
+          message: "Failed to lookup STK request context",
+          context: { error: String(error ?? "") },
+        });
+      } catch (_) {
+        /* ignore logging failure */
+      }
       return null;
     });
 
@@ -164,6 +175,16 @@ export async function handleMpesaValidationRequest(request: Request) {
       });
     } catch (error) {
       console.error("mpesa validation audit error", error);
+      try {
+        await logErrorToServer({
+          level: "warning",
+          category: "mpesa.validation",
+          message: "Failed to record validation event",
+          context: { error: String(error ?? ""), body },
+        });
+      } catch (_) {
+        /* ignore logging failure */
+      }
     }
 
     return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
@@ -179,6 +200,16 @@ export async function handleMpesaConfirmationRequest(request: Request) {
     body = await readBodyObject(request);
   } catch (error) {
     console.error("mpesa confirmation parse error", error);
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.confirmation.parse",
+        message: "Failed to parse confirmation callback body",
+        context: { error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
     return successAck("Accepted");
   }
 
@@ -235,6 +266,16 @@ export async function handleMpesaConfirmationRequest(request: Request) {
     return successAck();
   } catch (error) {
     console.error("mpesa confirmation handling error", error);
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.confirmation",
+        message: "Error handling mpesa confirmation",
+        context: { error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
     return retryAck();
   }
 }
