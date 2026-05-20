@@ -280,6 +280,7 @@ export type FieldVisit = {
   lng?: number;
   locationNotes: string;
   photos?: string[];
+  photoLabels?: string[];
   by: string;
 };
 
@@ -577,6 +578,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(hydrationGuard);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || authMode !== "staff") return;
+    const interval = window.setInterval(() => {
+      refreshInBackground("Auto-sync failed.");
+    }, 60000);
+    return () => window.clearInterval(interval);
+  }, [authMode, isAuthenticated]);
 
   useEffect(() => {
     if (!staff.length || authMode !== "staff") return;

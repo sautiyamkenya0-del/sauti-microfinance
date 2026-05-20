@@ -1554,6 +1554,7 @@ function mapFieldVisitRow(row: any) {
     lng: row.lng == null ? undefined : toNumber(row.lng),
     locationNotes: row.location_notes ?? "",
     photos: row.photos ?? undefined,
+    photoLabels: row.photo_labels ?? undefined,
     by: row.by_staff ?? "",
   };
 }
@@ -2378,6 +2379,7 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       lat?: number;
       lng?: number;
       photos?: string[];
+      photoLabels?: string[];
       byStaff?: string;
       date?: string;
     }) => ({
@@ -2391,6 +2393,9 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       lng: data?.lng == null ? undefined : Number(data.lng),
       photos: Array.isArray(data?.photos)
         ? data.photos.map((photo) => String(photo ?? "").trim()).filter(Boolean)
+        : [],
+      photoLabels: Array.isArray(data?.photoLabels)
+        ? data.photoLabels.map((label) => String(label ?? "").trim())
         : [],
       byStaff: data?.byStaff?.trim() || undefined,
       date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
@@ -2414,12 +2419,17 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
     if (data.photos.length > MAX_FIELD_VISIT_PHOTOS) {
       throw new Error(`Attach at most ${MAX_FIELD_VISIT_PHOTOS} photos per field visit.`);
     }
+    if (data.photoLabels.length && data.photoLabels.length !== data.photos.length) {
+      throw new Error("Each photo must have a matching description.");
+    }
     const totalPhotoBytes = data.photos.reduce((sum, photo) => sum + approxDataUrlBytes(photo), 0);
     if (totalPhotoBytes > MAX_FIELD_VISIT_TOTAL_BYTES) {
       throw new Error(
         "The selected field visit photos are too large. Remove some photos and try again.",
       );
     }
+
+    const photoLabels = data.photoLabels.length === data.photos.length ? data.photoLabels : [];
 
     const supabaseAdmin = await requireSupabaseAdmin();
     const id = await nextPrefixedId("field_visits", "FV", 1);
@@ -2432,6 +2442,7 @@ export const createFieldVisitRecord = createServerFn({ method: "POST" })
       lng: data.lng ?? null,
       location_notes: data.locationNotes || null,
       photos: data.photos.length ? data.photos : null,
+      photo_labels: photoLabels.length ? photoLabels : null,
       by_staff: actor.id,
     };
     const { error } = await supabaseAdmin.from("field_visits").insert(insertPayload);

@@ -235,6 +235,7 @@ export type Database = {
           location_notes: string | null;
           member_id: string;
           photos: string[] | null;
+          photo_labels: string[] | null;
           type: Database["public"]["Enums"]["field_visit_type"];
         };
         Insert: {
@@ -247,6 +248,7 @@ export type Database = {
           location_notes?: string | null;
           member_id: string;
           photos?: string[] | null;
+          photo_labels?: string[] | null;
           type: Database["public"]["Enums"]["field_visit_type"];
         };
         Update: {
@@ -259,6 +261,7 @@ export type Database = {
           location_notes?: string | null;
           member_id?: string;
           photos?: string[] | null;
+          photo_labels?: string[] | null;
           type?: Database["public"]["Enums"]["field_visit_type"];
         };
         Relationships: [

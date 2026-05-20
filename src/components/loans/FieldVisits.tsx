@@ -20,10 +20,23 @@ type PhotoDraft = {
   id: string;
   name: string;
   size: number;
+  label: string;
   data: string;
 };
 
 const MAX_VISIT_PHOTOS = 6;
+const PHOTO_LABEL_OPTIONS = [
+  "Main Gate",
+  "While seated in the house",
+  "Kitchen",
+  "Full house view",
+  "Opposite to",
+  "On the left",
+  "On the right",
+  "Main street",
+  "Near landmark",
+  "Other",
+];
 
 const VISIT_LABEL: Record<VisitType, string> = {
   business: "Business Point",
@@ -189,6 +202,7 @@ export function FieldVisits() {
             id: `${Date.now()}-${index}-${file.name}`,
             name: file.name,
             size: file.size,
+            label: "",
             data,
           };
         }),
@@ -217,6 +231,10 @@ export function FieldVisits() {
       toast.error("Latitude and longitude must both be filled.");
       return;
     }
+    if (supportingPhotos.some((photo) => !photo.label.trim())) {
+      toast.error("Please add a description or category for every selected photo.");
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -227,6 +245,7 @@ export function FieldVisits() {
         lat: lat ? Number(lat) : undefined,
         lng: lng ? Number(lng) : undefined,
         photos: supportingPhotos.map((photo) => photo.data),
+        photoLabels: supportingPhotos.map((photo) => photo.label.trim()),
         by: currentUser.id,
       });
       toast.success("Field visit saved to the database.");
@@ -415,7 +434,7 @@ export function FieldVisits() {
                   <div>
                     <div className="text-sm font-medium">Supporting photos</div>
                     <div className="text-xs text-muted-foreground">
-                      Add up to {MAX_VISIT_PHOTOS} photos before saving this field visit.
+                      Add up to {MAX_VISIT_PHOTOS} photos before saving this field visit. Use labels like Main Gate, Kitchen, Full house view, Opposite to, On the left, On the right, Main street, or Near landmark.
                     </div>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted">
@@ -444,19 +463,46 @@ export function FieldVisits() {
                           className="h-32 w-full object-cover"
                         />
                         <div className="space-y-2 p-3">
-                          <div className="truncate text-sm font-medium">{photo.name}</div>
+                          <div className="space-y-2 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate text-sm font-medium">{photo.name}</div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removePhoto(photo.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Remove
+                            </Button>
+                          </div>
                           <div className="text-xs text-muted-foreground">
                             {formatBytes(photo.size)}
                           </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removePhoto(photo.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Remove
-                          </Button>
+                          <label className="block">
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                              Photo description
+                            </span>
+                            <input
+                              list="photo-label-options"
+                              className="mt-1 w-full rounded-md border border-border bg-muted px-2 py-2 text-sm"
+                              value={photo.label}
+                              onChange={(event) => {
+                                const nextLabel = event.target.value;
+                                setSupportingPhotos((current) =>
+                                  current.map((item) =>
+                                    item.id === photo.id ? { ...item, label: nextLabel } : item,
+                                  ),
+                                );
+                              }}
+                              placeholder="e.g. Main Gate"
+                            />
+                            <datalist id="photo-label-options">
+                              {PHOTO_LABEL_OPTIONS.map((option) => (
+                                <option key={option} value={option} />
+                              ))}
+                            </datalist>
+                          </label>
                         </div>
                       </div>
                     ))}
@@ -583,21 +629,31 @@ function VisitLocationCell({
 
       {photoCount > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {visit.photos!.slice(0, 4).map((photo, index) => (
-            <a
-              key={`${visit.id}-photo-${index}`}
-              href={photo}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shrink-0"
-            >
-              <img
-                src={photo}
-                alt={`${memberName} ${label} evidence ${index + 1}`}
-                className="h-12 w-12 rounded-md border border-border object-cover"
-              />
-            </a>
-          ))}
+          {visit.photos!.slice(0, 4).map((photo, index) => {
+            const labelText = visit.photoLabels?.[index];
+            return (
+              <a
+                key={`${visit.id}-photo-${index}`}
+                href={photo}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0"
+              >
+                <div className="flex flex-col items-center gap-1">
+                  <img
+                    src={photo}
+                    alt={labelText || `${memberName} ${label} evidence ${index + 1}`}
+                    className="h-12 w-12 rounded-md border border-border object-cover"
+                  />
+                  {labelText ? (
+                    <div className="max-w-[80px] text-[10px] text-center text-muted-foreground">
+                      {labelText}
+                    </div>
+                  ) : null}
+                </div>
+              </a>
+            );
+          })}
           {photoCount > 4 && (
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md border border-border bg-muted text-[11px] text-muted-foreground">
               +{photoCount - 4}
