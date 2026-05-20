@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
+import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
 import { useStore } from "@/lib/store";
 import {
@@ -10,8 +11,10 @@ import {
 } from "@/lib/runtime-secrets.functions";
 import { listAudit, listAuditActors } from "@/lib/audit.functions";
 import { askWatchdog } from "@/lib/watchdog.functions";
+import { deleteOldErrorLogs, listErrorLogs } from "@/lib/error-logging.functions";
 import { runOnce } from "@/lib/dedupe";
 import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
 import {
   KeyRound,
   Trash2,
@@ -22,6 +25,7 @@ import {
   Download,
   Send,
   RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 
 export const Route = createFileRoute("/secret-keys")({
@@ -153,8 +157,10 @@ function SecretKeysPage() {
   const fetchAudit = useServerFn(listAudit);
   const fetchActors = useServerFn(listAuditActors);
   const ask = useServerFn(askWatchdog);
+  const errorLogsList = useServerFn(listErrorLogs);
+  const errorLogsClear = useServerFn(deleteOldErrorLogs);
 
-  const [tab, setTab] = useState<"keys" | "audit" | "ai">("keys");
+  const [tab, setTab] = useState<"keys" | "audit" | "ai" | "errors">("keys");
 
   const [items, setItems] = useState<
     Array<{ key: string; preview: string; length: number; updated_at: string }>
@@ -253,6 +259,7 @@ function SecretKeysPage() {
             [
               { id: "keys", label: "Keys", Icon: KeyRound },
               { id: "audit", label: "Audit log", Icon: ScrollText },
+              { id: "errors", label: "Error logs", Icon: AlertCircle },
               { id: "ai", label: "Watchdog AI", Icon: Bot },
             ] as const
           ).map(({ id, label, Icon }) => (
@@ -423,6 +430,7 @@ function SecretKeysPage() {
         )}
 
         {tab === "audit" && <AuditTab fetchAudit={fetchAudit} fetchActors={fetchActors} />}
+        {tab === "errors" && <ErrorLogsTab errorLogsList={errorLogsList} errorLogsClear={errorLogsClear} />}
         {tab === "ai" && <WatchdogTab ask={ask} />}
       </main>
     </>
@@ -691,6 +699,225 @@ function WatchdogTab({ ask }: { ask: any }) {
           <Send className="h-4 w-4" /> Ask
         </button>
       </form>
+    </section>
+  );
+}
+
+/* ---------------- Error Logs tab ---------------- */
+function ErrorLogsTab({
+  errorLogsList,
+  errorLogsClear,
+}: {
+  errorLogsList: any;
+  errorLogsClear: any;
+}) {
+  const [page, setPage] = useState(0);
+  const [level, setLevel] = useState<"error" | "warning" | "info" | "">();
+  const [category, setCategory] = useState("");
+  const [daysFilter, setDaysFilter] = useState("7");
+
+  const limit = 50;
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["error-logs", page, level, category, daysFilter],
+    queryFn: () =>
+      errorLogsList({
+        data: {
+          limit,
+          offset: page * limit,
+          level: level ? (level as "error" | "warning" | "info") : undefined,
+          category: category || undefined,
+          days: parseInt(daysFilter),
+        },
+      }),
+  });
+
+  const handleClearOld = async () => {
+    if (
+      window.confirm("Delete error logs older than 30 days? This cannot be undone.")
+    ) {
+      try {
+        await errorLogsClear({ data: { daysOld: 30 } });
+        toast.success("Old logs cleared");
+        refetch();
+      } catch (e: any) {
+        toast.error(e?.message ?? "Failed to clear logs");
+      }
+    }
+  };
+
+  const handleReset = () => {
+    setPage(0);
+    setLevel(undefined);
+    setCategory("");
+    setDaysFilter("7");
+  };
+
+  return (
+    <section className="bg-card border border-border rounded-xl space-y-4">
+      {/* Filters */}
+      <div className="px-5 py-3 border-b border-border space-y-3">
+        <div className="font-medium text-sm flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" /> Error Logs
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <select
+            value={level || ""}
+            onChange={(e) => setLevel(e.target.value as "error" | "warning" | "info" | "")}
+            className="text-xs bg-muted border border-border rounded-md px-2 py-1.5"
+          >
+            <option value="">All levels</option>
+            <option value="error">Error</option>
+            <option value="warning">Warning</option>
+            <option value="info">Info</option>
+          </select>
+
+          <input
+            placeholder="Category"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="text-xs bg-muted border border-border rounded-md px-2 py-1.5"
+          />
+
+          <select
+            value={daysFilter}
+            onChange={(e) => setDaysFilter(e.target.value)}
+            className="text-xs bg-muted border border-border rounded-md px-2 py-1.5"
+          >
+            <option value="1">Last 24h</option>
+            <option value="7">Last 7d</option>
+            <option value="30">Last 30d</option>
+            <option value="90">Last 90d</option>
+          </select>
+
+          <div className="flex gap-1">
+            <button
+              onClick={handleReset}
+              className="text-xs flex-1 bg-muted hover:bg-accent border border-border rounded-md px-2 py-1.5"
+            >
+              Reset
+            </button>
+            <button
+              onClick={handleClearOld}
+              className="text-xs flex-1 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/30 rounded-md px-2 py-1.5"
+            >
+              Clear old
+            </button>
+          </div>
+        </div>
+
+        {data && (
+          <p className="text-xs text-muted-foreground">
+            Showing {page * limit + 1} to {Math.min((page + 1) * limit, data.total)} of{" "}
+            {data.total} errors
+          </p>
+        )}
+      </div>
+
+      {/* Error Table */}
+      {!data?.readable ? (
+        <div className="px-5 py-8 text-center text-red-600">
+          <p className="font-semibold text-sm mb-1">Unable to load error logs</p>
+          <p className="text-xs">{data?.reason}</p>
+        </div>
+      ) : data?.items?.length === 0 ? (
+        <div className="px-5 py-8 text-center text-muted-foreground text-sm">No errors found</div>
+      ) : (
+        <>
+          <div className="overflow-auto max-h-[50vh] px-5">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/40">
+                <tr className="text-left">
+                  <th className="px-2 py-2 font-medium whitespace-nowrap">Timestamp</th>
+                  <th className="px-2 py-2 font-medium whitespace-nowrap">Level</th>
+                  <th className="px-2 py-2 font-medium">Category</th>
+                  <th className="px-2 py-2 font-medium">Message</th>
+                  <th className="px-2 py-2 font-medium whitespace-nowrap">File</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((log: any) => (
+                  <tr key={log.id} className="border-t border-border hover:bg-muted/30">
+                    <td className="px-2 py-2 text-muted-foreground whitespace-nowrap text-xs">
+                      <div>{new Date(log.created_at).toLocaleString()}</div>
+                      <div className="text-[10px] text-muted-foreground/60">
+                        {formatDistanceToNow(new Date(log.created_at), {
+                          addSuffix: true,
+                        })}
+                      </div>
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-xs font-mono ${
+                          log.level === "error"
+                            ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                            : log.level === "warning"
+                              ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                              : "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                        }`}
+                      >
+                        {log.level.toUpperCase().slice(0, 3)}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 font-mono text-muted-foreground">{log.category}</td>
+                    <td className="px-2 py-2">
+                      <div className="truncate text-xs">{log.message}</div>
+                      {(log.stack || log.context) && (
+                        <details className="mt-1 cursor-pointer">
+                          <summary className="text-xs text-blue-600 hover:underline">
+                            Details
+                          </summary>
+                          {log.stack && (
+                            <pre className="text-xs bg-muted p-2 mt-1 rounded overflow-auto max-h-24">
+                              {log.stack}
+                            </pre>
+                          )}
+                          {log.context && (
+                            <pre className="text-xs bg-muted p-2 mt-1 rounded overflow-auto max-h-24">
+                              {JSON.stringify(log.context, null, 2)}
+                            </pre>
+                          )}
+                        </details>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                      {log.file && (
+                        <>
+                          <div className="truncate">{log.file.split("/").pop()}</div>
+                          {log.line && <div className="text-muted-foreground/60">:{log.line}</div>}
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="px-5 py-3 border-t border-border flex items-center justify-between bg-muted/20">
+            <div className="text-xs text-muted-foreground">
+              Page {page + 1} of {Math.ceil((data?.total ?? 0) / limit)}
+            </div>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setPage(Math.max(0, page - 1))}
+                disabled={page === 0 || isLoading}
+                className="text-xs bg-muted hover:bg-accent disabled:opacity-50 border border-border rounded-md px-2 py-1.5"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage(page + 1)}
+                disabled={(page + 1) * limit >= (data?.total ?? 0) || isLoading}
+                className="text-xs bg-muted hover:bg-accent disabled:opacity-50 border border-border rounded-md px-2 py-1.5"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   );
 }
