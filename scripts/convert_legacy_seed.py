@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 
+TOPUPS_CHUNK_COUNT = 8
+
 
 def parse_row_values(row_text):
     values = []
@@ -106,6 +108,61 @@ def values_table(rows, column_names):
     return "values\n" + "\n".join(lines)
 
 
+def chunk_rows(rows, chunk_count):
+    if not rows:
+        return []
+    chunk_size = (len(rows) + chunk_count - 1) // chunk_count
+    return [rows[idx:idx + chunk_size] for idx in range(0, len(rows), chunk_size)]
+
+
+def build_event_sql(rows, chunk_index=None, chunk_count=None):
+    lines = []
+    if chunk_index is not None and chunk_count is not None:
+        lines.extend([
+            f"-- Chunk {chunk_index} of {chunk_count} from legacy api_topups seed.",
+            "-- Paste this file directly into Supabase SQL Editor.",
+            "",
+        ])
+    lines.extend([
+        "-- Legacy api_topups seed mapped into public.mpesa_events.",
+        "-- These are confirmed receipts. They remain unprocessed so the app's Mpesa allocator",
+        "-- distributes them through the same fees/savings/shares/loan flow used by live callbacks.",
+        "begin;",
+        "",
+        "create or replace function pg_temp.legacy_mpesa_timestamp(value text)",
+        "returns timestamptz",
+        "language sql",
+        "immutable",
+        "as $$",
+        "  select make_timestamptz(",
+        "    substring(value from 1 for 4)::int,",
+        "    substring(value from 5 for 2)::int,",
+        "    substring(value from 7 for 2)::int,",
+        "    substring(value from 9 for 2)::int,",
+        "    substring(value from 11 for 2)::int,",
+        "    substring(value from 13 for 2)::double precision,",
+        "    'Africa/Nairobi'",
+        "  )",
+        "  where value ~ '^\\d{14}$';",
+        "$$;",
+        "",
+        "with legacy_mpesa(account, phone, amount, mpesa_ref, payer_name, raw, created_at) as (",
+        values_table(rows, []),
+        ")",
+        "insert into public.mpesa_events (kind, account, phone, amount, mpesa_ref, payer_name, raw, processed, created_at)",
+        "select 'confirmation', account, phone, amount::numeric, mpesa_ref, payer_name, raw, false, created_at",
+        "from legacy_mpesa lm",
+        "where not exists (",
+        "  select 1 from public.mpesa_events existing",
+        "  where existing.kind = 'confirmation'",
+        "    and existing.mpesa_ref is not distinct from lm.mpesa_ref",
+        ");",
+        "",
+        "commit;",
+    ])
+    return lines
+
+
 client_seed_path = Path('supabase/seeds/client_list.sql')
 api_seed_path = Path('supabase/seeds/api_topups.sql')
 
@@ -209,45 +266,19 @@ member_sql = [
     "commit;",
 ]
 
-event_sql = [
-    "-- Legacy api_topups seed mapped into public.mpesa_events.",
-    "-- These are confirmed receipts. They remain unprocessed so the app's Mpesa allocator",
-    "-- distributes them through the same fees/savings/shares/loan flow used by live callbacks.",
-    "begin;",
-    "",
-    "create or replace function pg_temp.legacy_mpesa_timestamp(value text)",
-    "returns timestamptz",
-    "language sql",
-    "immutable",
-    "as $$",
-    "  select make_timestamptz(",
-    "    substring(value from 1 for 4)::int,",
-    "    substring(value from 5 for 2)::int,",
-    "    substring(value from 7 for 2)::int,",
-    "    substring(value from 9 for 2)::int,",
-    "    substring(value from 11 for 2)::int,",
-    "    substring(value from 13 for 2)::double precision,",
-    "    'Africa/Nairobi'",
-    "  )",
-    "  where value ~ '^\\d{14}$';",
-    "$$;",
-    "",
-    "with legacy_mpesa(account, phone, amount, mpesa_ref, payer_name, raw, created_at) as (",
-    values_table(event_value_rows, []),
-    ")",
-    "insert into public.mpesa_events (kind, account, phone, amount, mpesa_ref, payer_name, raw, processed, created_at)",
-    "select 'confirmation', account, phone, amount::numeric, mpesa_ref, payer_name, raw, false, created_at",
-    "from legacy_mpesa lm",
-    "where not exists (",
-    "  select 1 from public.mpesa_events existing",
-    "  where existing.kind = 'confirmation'",
-    "    and existing.mpesa_ref is not distinct from lm.mpesa_ref",
-    ");",
-    "",
-    "commit;",
-]
+event_sql = build_event_sql(event_value_rows)
 
 client_seed_path.write_text('\n'.join(member_sql) + '\n', encoding='utf-8')
 api_seed_path.write_text('\n'.join(event_sql) + '\n', encoding='utf-8')
+for stale_chunk in api_seed_path.parent.glob('api_topups_*.sql'):
+    stale_chunk.unlink()
+
+topups_chunks = chunk_rows(event_value_rows, TOPUPS_CHUNK_COUNT)
+for chunk_index, chunk_rows_part in enumerate(topups_chunks, start=1):
+    chunk_path = api_seed_path.with_name(f'api_topups_{chunk_index}.sql')
+    chunk_sql = build_event_sql(chunk_rows_part, chunk_index, len(topups_chunks))
+    chunk_path.write_text('\n'.join(chunk_sql) + '\n', encoding='utf-8')
+
 print('Converted client_list.sql to', len(member_value_rows), 'member seed rows')
 print('Converted api_topups.sql to', len(event_value_rows), 'confirmed Mpesa seed events')
+print('Split api_topups into', len(topups_chunks), 'standalone SQL editor chunks')

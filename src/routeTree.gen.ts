@@ -20,6 +20,7 @@ import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as PortalRouteImport } from './routes/portal'
 import { Route as PoliciesRouteImport } from './routes/policies'
 import { Route as PettycashRouteImport } from './routes/pettycash'
+import { Route as PayrollRouteImport } from './routes/payroll'
 import { Route as MemosRouteImport } from './routes/memos'
 import { Route as MembersRouteImport } from './routes/members'
 import { Route as LoginRouteImport } from './routes/login'
@@ -39,6 +40,8 @@ import { Route as ApiPublicMpesaValidationRouteImport } from './routes/api/publi
 import { Route as ApiPublicMpesaStkpushRouteImport } from './routes/api/public/mpesa.stkpush'
 import { Route as ApiPublicMpesaDiagnoseRouteImport } from './routes/api/public/mpesa.diagnose'
 import { Route as ApiPublicMpesaConfirmationRouteImport } from './routes/api/public/mpesa.confirmation'
+import { Route as ApiPublicMpesaB2cTimeoutRouteImport } from './routes/api/public/mpesa.b2c.timeout'
+import { Route as ApiPublicMpesaB2cResultRouteImport } from './routes/api/public/mpesa.b2c.result'
 
 const TransactionsRoute = TransactionsRouteImport.update({
   id: '/transactions',
@@ -93,6 +96,11 @@ const PoliciesRoute = PoliciesRouteImport.update({
 const PettycashRoute = PettycashRouteImport.update({
   id: '/pettycash',
   path: '/pettycash',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PayrollRoute = PayrollRouteImport.update({
+  id: '/payroll',
+  path: '/payroll',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MemosRoute = MemosRouteImport.update({
@@ -192,6 +200,17 @@ const ApiPublicMpesaConfirmationRoute =
     path: '/api/public/mpesa/confirmation',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicMpesaB2cTimeoutRoute =
+  ApiPublicMpesaB2cTimeoutRouteImport.update({
+    id: '/api/public/mpesa/b2c/timeout',
+    path: '/api/public/mpesa/b2c/timeout',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicMpesaB2cResultRoute = ApiPublicMpesaB2cResultRouteImport.update({
+  id: '/api/public/mpesa/b2c/result',
+  path: '/api/public/mpesa/b2c/result',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -204,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
+  '/payroll': typeof PayrollRoute
   '/pettycash': typeof PettycashRoute
   '/policies': typeof PoliciesRoute
   '/portal': typeof PortalRoute
@@ -224,6 +244,8 @@ export interface FileRoutesByFullPath {
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
+  '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -236,6 +258,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
+  '/payroll': typeof PayrollRoute
   '/pettycash': typeof PettycashRoute
   '/policies': typeof PoliciesRoute
   '/portal': typeof PortalRoute
@@ -256,6 +279,8 @@ export interface FileRoutesByTo {
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
+  '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -269,6 +294,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
+  '/payroll': typeof PayrollRoute
   '/pettycash': typeof PettycashRoute
   '/policies': typeof PoliciesRoute
   '/portal': typeof PortalRoute
@@ -289,6 +315,8 @@ export interface FileRoutesById {
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
+  '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -303,6 +331,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/members'
     | '/memos'
+    | '/payroll'
     | '/pettycash'
     | '/policies'
     | '/portal'
@@ -323,6 +352,8 @@ export interface FileRouteTypes {
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/mpesa/b2c/result'
+    | '/api/public/mpesa/b2c/timeout'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -335,6 +366,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/members'
     | '/memos'
+    | '/payroll'
     | '/pettycash'
     | '/policies'
     | '/portal'
@@ -355,6 +387,8 @@ export interface FileRouteTypes {
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/mpesa/b2c/result'
+    | '/api/public/mpesa/b2c/timeout'
   id:
     | '__root__'
     | '/'
@@ -367,6 +401,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/members'
     | '/memos'
+    | '/payroll'
     | '/pettycash'
     | '/policies'
     | '/portal'
@@ -387,6 +422,8 @@ export interface FileRouteTypes {
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/mpesa/b2c/result'
+    | '/api/public/mpesa/b2c/timeout'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -400,6 +437,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   MembersRoute: typeof MembersRoute
   MemosRoute: typeof MemosRoute
+  PayrollRoute: typeof PayrollRoute
   PettycashRoute: typeof PettycashRoute
   PoliciesRoute: typeof PoliciesRoute
   PortalRoute: typeof PortalRoute
@@ -420,6 +458,8 @@ export interface RootRouteChildren {
   ApiPublicMpesaDiagnoseRoute: typeof ApiPublicMpesaDiagnoseRoute
   ApiPublicMpesaStkpushRoute: typeof ApiPublicMpesaStkpushRoute
   ApiPublicMpesaValidationRoute: typeof ApiPublicMpesaValidationRoute
+  ApiPublicMpesaB2cResultRoute: typeof ApiPublicMpesaB2cResultRoute
+  ApiPublicMpesaB2cTimeoutRoute: typeof ApiPublicMpesaB2cTimeoutRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -499,6 +539,13 @@ declare module '@tanstack/react-router' {
       path: '/pettycash'
       fullPath: '/pettycash'
       preLoaderRoute: typeof PettycashRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payroll': {
+      id: '/payroll'
+      path: '/payroll'
+      fullPath: '/payroll'
+      preLoaderRoute: typeof PayrollRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/memos': {
@@ -634,6 +681,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicMpesaConfirmationRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/mpesa/b2c/timeout': {
+      id: '/api/public/mpesa/b2c/timeout'
+      path: '/api/public/mpesa/b2c/timeout'
+      fullPath: '/api/public/mpesa/b2c/timeout'
+      preLoaderRoute: typeof ApiPublicMpesaB2cTimeoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/mpesa/b2c/result': {
+      id: '/api/public/mpesa/b2c/result'
+      path: '/api/public/mpesa/b2c/result'
+      fullPath: '/api/public/mpesa/b2c/result'
+      preLoaderRoute: typeof ApiPublicMpesaB2cResultRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -648,6 +709,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   MembersRoute: MembersRoute,
   MemosRoute: MemosRoute,
+  PayrollRoute: PayrollRoute,
   PettycashRoute: PettycashRoute,
   PoliciesRoute: PoliciesRoute,
   PortalRoute: PortalRoute,
@@ -668,6 +730,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicMpesaDiagnoseRoute: ApiPublicMpesaDiagnoseRoute,
   ApiPublicMpesaStkpushRoute: ApiPublicMpesaStkpushRoute,
   ApiPublicMpesaValidationRoute: ApiPublicMpesaValidationRoute,
+  ApiPublicMpesaB2cResultRoute: ApiPublicMpesaB2cResultRoute,
+  ApiPublicMpesaB2cTimeoutRoute: ApiPublicMpesaB2cTimeoutRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

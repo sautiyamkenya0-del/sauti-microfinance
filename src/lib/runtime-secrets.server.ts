@@ -96,7 +96,7 @@ function secretResolutionModeForKey(key: string): SecretResolutionMode {
     ? (readServerEnv("SAUTI_MPESA_SECRET_SOURCE") ?? readServerEnv("MPESA_SECRET_SOURCE"))
     : undefined;
   if (normalizedKey.startsWith("MPESA_")) {
-    return normalizeResolutionMode(mpesaOverride) ?? "runtime-only";
+    return normalizeResolutionMode(mpesaOverride) ?? "env-first";
   }
   return normalizeResolutionMode(readServerEnv("SAUTI_SECRET_SOURCE")) ?? "runtime-first";
 }

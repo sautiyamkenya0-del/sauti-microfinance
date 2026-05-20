@@ -19,6 +19,31 @@ import { MemberLoanHistory } from "@/components/loans/LoanBook";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { Smartphone, Send } from "lucide-react";
 
+type MemberForm = {
+  memberNo: string;
+  category: MemberCategory;
+  firstName: string;
+  secondName: string;
+  thirdName: string;
+  dob: string;
+  gender: "Male" | "Female";
+  phone: string;
+  email: string;
+  address: string;
+  city: string;
+  county: string;
+  village: string;
+  businessName: string;
+  businessType: string;
+  businessPermanence: "" | BusinessPermanence;
+  businessAddress: string;
+  fieldOfficerId: string;
+  shares: number;
+  savingsBalance: number;
+  investorContribution: number;
+  investorNotes: string;
+};
+
 export const Route = createFileRoute("/members")({
   head: () => ({ meta: [{ title: "Members — Sauti Microfinance" }] }),
   component: MembersPage,
@@ -36,7 +61,7 @@ function MembersPage() {
     [members],
   );
 
-  const buildEmptyForm = (memberNo: string) => ({
+  const buildEmptyForm = (memberNo: string): MemberForm => ({
     memberNo,
     category: "member" as MemberCategory,
     firstName: "",
@@ -70,7 +95,7 @@ function MembersPage() {
   );
   const nav = useNavigate();
 
-  const buildFormFromMember = (member: Member) => ({
+  const buildFormFromMember = (member: Member): MemberForm => ({
     memberNo: member.id,
     category: member.category,
     firstName: member.firstName ?? "",
@@ -275,8 +300,8 @@ function MembersPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display text-lg font-semibold mb-4">
-            {isEditMode ? "Edit Member" : "Register Member"}
-          </h3>
+              {isEditMode ? "Edit Member" : "Register Member"}
+            </h3>
 
             <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
               {/* Applicant Details */}
@@ -287,7 +312,6 @@ function MembersPage() {
                     <input
                       className="input"
                       value={form.memberNo}
-                      disabled={isEditMode}
                       onChange={(e) =>
                         setForm({
                           ...form,
@@ -579,6 +603,8 @@ function MembersPage() {
                     if (isEditMode && editingMemberId) {
                       await updateMember({
                         memberId: editingMemberId,
+                        nextMemberId:
+                          normalizedMemberNo !== editingMemberId ? normalizedMemberNo : undefined,
                         name: fullName,
                         phone,
                         status: "active",
@@ -644,9 +670,7 @@ function MembersPage() {
                     setEditingMemberId(null);
                     setForm(buildEmptyForm(nextMemberNo));
                   } catch (error: unknown) {
-                    toast.error(
-                      error instanceof Error ? error.message : "Failed to save member",
-                    );
+                    toast.error(error instanceof Error ? error.message : "Failed to save member");
                   }
                 }}
                 className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"

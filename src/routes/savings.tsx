@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
 import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
+import { requestWithdrawalPayoutRecord } from "@/lib/app-data.functions";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PiggyBank, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
@@ -14,6 +16,7 @@ export const Route = createFileRoute("/savings")({
 
 function SavingsPage() {
   const { members, transactions, recordTransaction, currentUser } = useStore();
+  const requestWithdrawalPayout = useServerFn(requestWithdrawalPayoutRecord);
   const memberAccounts = useMemo(
     () => members.filter((member) => isMemberCategory(member.category)),
     [members],
@@ -101,51 +104,73 @@ function SavingsPage() {
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
               />
               {type === "withdrawal" ? (
-                <input
-                  value={withdrawalRef}
-                  onChange={(event) => setWithdrawalRef(event.target.value)}
-                  placeholder="M-Pesa receipt or payout note"
-                  className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                />
+                <>
+                  <input
+                    value={withdrawalRef}
+                    onChange={(event) => setWithdrawalRef(event.target.value)}
+                    placeholder="Payout note (optional)"
+                    className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                  />
+                  {selectedMember ? (
+                    <div className="text-xs text-muted-foreground">
+                      Registered payout phone: {selectedMember.phone}
+                    </div>
+                  ) : null}
+                </>
               ) : null}
               <button
                 onClick={async () => {
-                  if (amount <= 0) return;
-                  let allowOverdraw = false;
-                  const confirmedPayoutRef = withdrawalRef.trim();
-                  if (
-                    type === "withdrawal" &&
-                    selectedMember &&
-                    amount > selectedMember.savingsBalance
-                  ) {
-                    allowOverdraw = window.confirm(
-                      `${selectedMember.name} has ${fmtKES(selectedMember.savingsBalance)} available. Confirm withdrawing ${fmtKES(amount)} and leaving a negative balance of ${fmtKES(selectedMember.savingsBalance - amount)}?`,
+                  try {
+                    if (amount <= 0) return;
+                    let allowOverdraw = false;
+                    const confirmedPayoutRef = withdrawalRef.trim();
+                    if (
+                      type === "withdrawal" &&
+                      selectedMember &&
+                      amount > selectedMember.savingsBalance
+                    ) {
+                      allowOverdraw = window.confirm(
+                        `${selectedMember.name} has ${fmtKES(selectedMember.savingsBalance)} available. Confirm withdrawing ${fmtKES(amount)} and leaving a negative balance of ${fmtKES(selectedMember.savingsBalance - amount)}?`,
+                      );
+                      if (!allowOverdraw) return;
+                    }
+                    if (type === "withdrawal" && selectedMember) {
+                      const confirmed = window.confirm(
+                        `Send ${fmtKES(amount)} to ${selectedMember.name} on ${selectedMember.phone}? The ledger will only deduct after M-Pesa confirms success.`,
+                      );
+                      if (!confirmed) return;
+                    }
+                    if (type === "withdrawal") {
+                      await requestWithdrawalPayout({
+                        data: {
+                          memberId,
+                          amount,
+                          remarks: confirmedPayoutRef || undefined,
+                          allowOverdraw,
+                        },
+                      });
+                      toast.success(
+                        "Withdrawal request sent. Savings will update after M-Pesa confirms the payout.",
+                      );
+                    } else {
+                      await recordTransaction({
+                        type,
+                        amount,
+                        memberId,
+                        by: currentUser.id,
+                        allowOverdraw,
+                      });
+                      toast.success("Deposit recorded");
+                    }
+                    setAmount(0);
+                    setWithdrawalRef("");
+                  } catch (error: unknown) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Failed to submit the savings movement.",
                     );
-                    if (!allowOverdraw) return;
                   }
-                  if (type === "withdrawal" && selectedMember) {
-                    const confirmed = window.confirm(
-                      `Confirm ${fmtKES(amount)} has already been paid out to ${selectedMember.name}${confirmedPayoutRef ? ` (ref: ${confirmedPayoutRef})` : ""}. The ledger will only deduct after this confirmation.`,
-                    );
-                    if (!confirmed) return;
-                  }
-                  await recordTransaction({
-                    type,
-                    amount,
-                    memberId,
-                    by: currentUser.id,
-                    allowOverdraw,
-                    ref: type === "withdrawal" ? confirmedPayoutRef || undefined : undefined,
-                    note:
-                      type === "withdrawal"
-                        ? confirmedPayoutRef
-                          ? `Withdrawal payout confirmed: ${confirmedPayoutRef}`
-                          : "Withdrawal payout confirmed by officer"
-                        : undefined,
-                  });
-                  toast.success(`${type === "deposit" ? "Deposit" : "Withdrawal"} recorded`);
-                  setAmount(0);
-                  setWithdrawalRef("");
                 }}
                 className="w-full bg-primary text-primary-foreground py-2 rounded-md text-sm font-medium hover:bg-primary/90"
               >

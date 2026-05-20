@@ -17,6 +17,7 @@ import {
   CalendarCheck,
   FileBarChart,
   BookOpen,
+  HandCoins,
 } from "lucide-react";
 
 export type Tab = { to: string; label: string; icon: ComponentType<{ className?: string }> };
@@ -43,6 +44,7 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
   admin: [
     { to: "/staff-mgmt", label: "Staff Management", icon: UserCog },
+    { to: "/payroll", label: "Payroll", icon: HandCoins },
     { to: "/fees-policy", label: "Policy Center", icon: Receipt },
     { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/reports", label: "Reports", icon: FileBarChart },

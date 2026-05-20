@@ -139,11 +139,30 @@ const SUGGESTED: Suggested[] = [
     help: "B2C/Reversal initiator username (e.g. apiop).",
   },
   {
+    key: "MPESA_SECURITY_CREDENTIAL",
+    group: "M-Pesa",
+    secret: true,
+    label: "MPESA_SECURITY_CREDENTIAL",
+    help: "Encrypted Daraja security credential used for B2C withdrawals and balance checks.",
+  },
+  {
     key: "MPESA_INITIATOR_PASSWORD",
     group: "M-Pesa",
     secret: true,
     label: "MPESA_INITIATOR_PASSWORD",
     help: "Plaintext password used to encrypt the SecurityCredential.",
+  },
+  {
+    key: "MPESA_B2C_RESULT_URL",
+    group: "M-Pesa",
+    label: "MPESA_B2C_RESULT_URL (optional)",
+    help: "Optional B2C success callback URL. Leave blank to use this app's public result endpoint.",
+  },
+  {
+    key: "MPESA_B2C_TIMEOUT_URL",
+    group: "M-Pesa",
+    label: "MPESA_B2C_TIMEOUT_URL (optional)",
+    help: "Optional B2C timeout callback URL. Leave blank to use this app's public timeout endpoint.",
   },
 ];
 const GROUPS: Array<Suggested["group"]> = ["AI", "M-Pesa"];

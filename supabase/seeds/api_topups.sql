@@ -1,4 +1,5 @@
 -- Legacy api_topups seed mapped into public.mpesa_events.
+-- Standalone SQL Editor chunks live beside this file as api_topups_1.sql through api_topups_8.sql.
 -- These are confirmed receipts. They remain unprocessed so the app's Mpesa allocator
 -- distributes them through the same fees/savings/shares/loan flow used by live callbacks.
 begin;

@@ -4,17 +4,17 @@ import {
   useStore,
   formatMembershipNumber,
   fmtKES,
+  loanPricingPreview,
   loanRateForTerm,
   nextMembershipNumber,
   normalizeMembershipNumber,
-  loanScheduleTotal,
   normalizeLoanTermDays,
-  sbcDeductions,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
   upfrontTotalsForAmount,
+  type LoanChargeMode,
 } from "@/lib/store";
 import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import { Input, Select, Row, inputCss } from "./atoms";
@@ -84,6 +84,8 @@ export function FirstTimeApplication({
     collateralAddedToLoan: false,
     collateralPhotosAttached: false,
     dailySavingsPlan: "50" as "50" | "100",
+    processingFeeMode: "financed" as LoanChargeMode,
+    insuranceFeeMode: "financed" as LoanChargeMode,
   }));
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const loanCategory = useMemo<"Normal" | "Premium">(
@@ -164,12 +166,15 @@ export function FirstTimeApplication({
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDays(f.repaymentDays);
     const ratePct = loanRateForTerm(termDays);
-    const { interest, total } = loanScheduleTotal(
-      f.loanAmount,
+    const pricing = loanPricingPreview({
+      netAmount: f.loanAmount,
+      termDays,
       ratePct,
-      termPeriodsFromDays(termDays),
-    );
-    const ded = sbcDeductions(f.loanAmount);
+      processingFeeMode: f.processingFeeMode,
+      insuranceFeeMode: f.insuranceFeeMode,
+      dailySavingsAmount: Number(f.dailySavingsPlan),
+    });
+    const ded = pricing.deductions;
     const upfrontTotals = upfrontTotalsForAmount(f.loanAmount, {
       membershipFeeAmount: membershipFeeDue,
       cardFeeAmount: cardFeeDue,
@@ -179,8 +184,8 @@ export function FirstTimeApplication({
     return {
       ratePct,
       termDays,
-      interest,
-      total,
+      interest: pricing.interest,
+      total: pricing.totalRepayment,
       ded,
       upfront: {
         range: upfrontTotals.tier?.range ?? "",
@@ -188,13 +193,17 @@ export function FirstTimeApplication({
         minSavings: upfrontTotals.savingsAmount,
       },
       upfrontTotals,
-      netDisbursed: f.loanAmount - ded.total,
-      dailyPay: total / termDays,
+      netDisbursed: pricing.netDisbursedAmount,
+      financedPrincipal: pricing.financedPrincipal,
+      dailyPay: pricing.dailyLoanInstallment,
     };
   }, [
     cardFeeDue,
     f.loanAmount,
+    f.insuranceFeeMode,
+    f.processingFeeMode,
     f.repaymentDays,
+    f.dailySavingsPlan,
     membershipFeeDue,
     stickerApplicable,
     stickerFeeDue,
@@ -242,6 +251,14 @@ export function FirstTimeApplication({
       startDate: new Date().toISOString().slice(0, 10),
       officerId: currentUser.id,
       status: "pending",
+      financedPrincipalAmount: calc.financedPrincipal,
+      netDisbursedAmount: calc.netDisbursed,
+      processingFeeAmount: calc.ded.processing,
+      insuranceFeeAmount: calc.ded.insurance,
+      transactionFeeAmount: calc.ded.transactionCost,
+      processingFeeMode: f.processingFeeMode,
+      insuranceFeeMode: f.insuranceFeeMode,
+      disbursementStatus: "not_requested",
       purpose: f.purpose,
     });
     toast.success("Application submitted — awaiting appraisal & review.");
@@ -406,6 +423,18 @@ export function FirstTimeApplication({
             value={f.dailySavingsPlan}
             onChange={(v) => set("dailySavingsPlan", v as "50" | "100")}
             options={["50", "100"]}
+          />
+          <Select
+            label="Processing Fee"
+            value={f.processingFeeMode}
+            onChange={(v) => set("processingFeeMode", v as LoanChargeMode)}
+            options={["financed", "upfront"]}
+          />
+          <Select
+            label="Insurance Fee"
+            value={f.insuranceFeeMode}
+            onChange={(v) => set("insuranceFeeMode", v as LoanChargeMode)}
+            options={["financed", "upfront"]}
           />
         </div>
       </Section>
@@ -655,13 +684,14 @@ export function FirstTimeApplication({
               value={fmtKES(calc.ded.insurance)}
             />
             <Row
-              label={`Transaction Cost (${SBC_FEES.transactionCostPct}%)`}
+              label="Fixed Transaction Fee"
               value={fmtKES(calc.ded.transactionCost)}
             />
             <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
           </div>
           <div className="space-y-2">
             <Row label="Net Disbursable" value={fmtKES(calc.netDisbursed)} bold />
+            <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
             <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
             <Row label="Daily Repayment" value={fmtKES(calc.dailyPay)} />
             <Row label="Repayment Period" value={`${calc.termDays} days`} />
@@ -688,7 +718,13 @@ export function FirstTimeApplication({
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
                   <span>Total upfront now</span>
-                  <span>{fmtKES(calc.upfrontTotals.totalUpfrontNow)}</span>
+                  <span>
+                    {fmtKES(calc.upfrontTotals.totalUpfrontNow + calc.ded.totalUpfrontCharges)}
+                  </span>
+                </div>
+                <div className="mt-1 text-muted-foreground">
+                  Processing upfront {fmtKES(calc.ded.processingUpfront)} · Insurance upfront{" "}
+                  {fmtKES(calc.ded.insuranceUpfront)}
                 </div>
                 <div className="mt-2 text-muted-foreground">
                   Sticker fee is only added when the business setup is marked permanent.

@@ -28,13 +28,26 @@ export type WaterfallRule = {
   steps: WaterfallDestination[];
 };
 
+export type TransactionFeeBand = {
+  id: string;
+  minAmount: number;
+  maxAmount?: number;
+  feeAmount: number;
+  label?: string;
+};
+
 export type PolicySettings = {
   percentages: PolicyPercentages;
   interestRates: Record<PolicyLoanTerm, number>;
   waterfallRules: WaterfallRule[];
+  transactionFeeBands: TransactionFeeBand[];
 };
 
-export type PolicySettingKey = "percentages" | "interest_rates" | "waterfall_rules";
+export type PolicySettingKey =
+  | "percentages"
+  | "interest_rates"
+  | "waterfall_rules"
+  | "transaction_fee_bands";
 
 export type PolicySettingRow = {
   key: string;
@@ -48,6 +61,7 @@ export const POLICY_SETTING_LABELS: Record<PolicySettingKey, string> = {
   percentages: "Percentages and fixed values",
   interest_rates: "Interest rates by term",
   waterfall_rules: "Payment waterfall rules",
+  transaction_fee_bands: "Transaction fee bands",
 };
 
 export const WATERFALL_SCENARIO_LABELS: Record<WaterfallScenario, string> = {
@@ -99,6 +113,106 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
       steps: ["investment"],
     },
   ],
+  transactionFeeBands: [
+    {
+      id: "tx-001",
+      minAmount: 0,
+      maxAmount: 100,
+      feeAmount: 0,
+      label: "0 - 100",
+    },
+    {
+      id: "tx-002",
+      minAmount: 101,
+      maxAmount: 500,
+      feeAmount: 7,
+      label: "101 - 500",
+    },
+    {
+      id: "tx-003",
+      minAmount: 501,
+      maxAmount: 1000,
+      feeAmount: 13,
+      label: "501 - 1,000",
+    },
+    {
+      id: "tx-004",
+      minAmount: 1001,
+      maxAmount: 1500,
+      feeAmount: 23,
+      label: "1,001 - 1,500",
+    },
+    {
+      id: "tx-005",
+      minAmount: 1501,
+      maxAmount: 2500,
+      feeAmount: 33,
+      label: "1,501 - 2,500",
+    },
+    {
+      id: "tx-006",
+      minAmount: 2501,
+      maxAmount: 3500,
+      feeAmount: 53,
+      label: "2,501 - 3,500",
+    },
+    {
+      id: "tx-007",
+      minAmount: 3501,
+      maxAmount: 5000,
+      feeAmount: 57,
+      label: "3,501 - 5,000",
+    },
+    {
+      id: "tx-008",
+      minAmount: 5001,
+      maxAmount: 7500,
+      feeAmount: 78,
+      label: "5,001 - 7,500",
+    },
+    {
+      id: "tx-009",
+      minAmount: 7501,
+      maxAmount: 10000,
+      feeAmount: 90,
+      label: "7,501 - 10,000",
+    },
+    {
+      id: "tx-010",
+      minAmount: 10001,
+      maxAmount: 15000,
+      feeAmount: 100,
+      label: "10,001 - 15,000",
+    },
+    {
+      id: "tx-011",
+      minAmount: 15001,
+      maxAmount: 20000,
+      feeAmount: 105,
+      label: "15,001 - 20,000",
+    },
+    {
+      id: "tx-012",
+      minAmount: 20001,
+      maxAmount: 35000,
+      feeAmount: 108,
+      label: "20,001 - 35,000",
+    },
+    {
+      id: "tx-013",
+      minAmount: 35001,
+      maxAmount: 50000,
+      feeAmount: 108,
+      label: "35,001 - 50,000",
+    },
+    {
+      id: "tx-014",
+      minAmount: 50001,
+      maxAmount: 250000,
+      feeAmount: 108,
+      label: "50,001 - 250,000",
+    },
+  ],
 };
 
 let activePolicySettings: PolicySettings = clonePolicySettings(DEFAULT_POLICY_SETTINGS);
@@ -110,6 +224,9 @@ export function clonePolicySettings(settings: PolicySettings): PolicySettings {
     waterfallRules: settings.waterfallRules.map((rule) => ({
       scenario: rule.scenario,
       steps: [...rule.steps],
+    })),
+    transactionFeeBands: settings.transactionFeeBands.map((band) => ({
+      ...band,
     })),
   };
 }
@@ -124,7 +241,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isWaterfallScenario(value: unknown): value is WaterfallScenario {
-  return value === "member_with_loan" || value === "member_without_loan" || value === "investor_only";
+  return (
+    value === "member_with_loan" || value === "member_without_loan" || value === "investor_only"
+  );
 }
 
 function isWaterfallDestination(value: unknown): value is WaterfallDestination {
@@ -137,6 +256,34 @@ function isWaterfallDestination(value: unknown): value is WaterfallDestination {
     value === "savings" ||
     value === "investment"
   );
+}
+
+function normalizeTransactionFeeBandId(value: unknown, index: number) {
+  const raw = String(value ?? "").trim();
+  return raw || `tx-band-${index + 1}`;
+}
+
+function sanitizeTransactionFeeBands(value: unknown): TransactionFeeBand[] {
+  const bands = Array.isArray(value) ? value : [];
+  return bands
+    .map((candidate, index) => {
+      if (!isPlainObject(candidate)) return null;
+      const minAmount = Math.max(0, Math.floor(toFiniteNumber(candidate.minAmount, 0)));
+      const rawMax = candidate.maxAmount;
+      const maxAmount =
+        rawMax == null || rawMax === ""
+          ? undefined
+          : Math.max(minAmount, Math.floor(toFiniteNumber(rawMax, minAmount)));
+      return {
+        id: normalizeTransactionFeeBandId(candidate.id, index),
+        minAmount,
+        maxAmount,
+        feeAmount: Math.max(0, toFiniteNumber(candidate.feeAmount, 0)),
+        label: String(candidate.label ?? "").trim() || undefined,
+      } satisfies TransactionFeeBand;
+    })
+    .filter((band): band is TransactionFeeBand => band !== null)
+    .sort((a, b) => a.minAmount - b.minAmount);
 }
 
 function sanitizeSteps(
@@ -155,9 +302,7 @@ function sanitizeSteps(
   return next.length > 0 ? next : [...fallback];
 }
 
-export function waterfallOptionsForScenario(
-  scenario: WaterfallScenario,
-): WaterfallDestination[] {
+export function waterfallOptionsForScenario(scenario: WaterfallScenario): WaterfallDestination[] {
   if (scenario === "member_with_loan") {
     return ["membership_fee", "card_fee", "sticker_fee", "penalties"];
   }
@@ -251,6 +396,14 @@ export function mergePolicySettings(rows?: PolicySettingRow[] | null): PolicySet
     );
   }
 
+  const transactionFeeBandsRow = byKey.get("transaction_fee_bands");
+  if (transactionFeeBandsRow && Array.isArray(transactionFeeBandsRow.value)) {
+    const nextBands = sanitizeTransactionFeeBands(transactionFeeBandsRow.value);
+    if (nextBands.length > 0) {
+      next.transactionFeeBands = nextBands;
+    }
+  }
+
   return next;
 }
 
@@ -280,6 +433,17 @@ export function policySettingsRowsFromConfig(settings: PolicySettings): PolicySe
         steps: [...rule.steps],
       })),
     },
+    {
+      key: "transaction_fee_bands",
+      label: POLICY_SETTING_LABELS.transaction_fee_bands,
+      value: settings.transactionFeeBands.map((band) => ({
+        id: band.id,
+        minAmount: band.minAmount,
+        maxAmount: band.maxAmount ?? null,
+        feeAmount: band.feeAmount,
+        label: band.label ?? "",
+      })),
+    },
   ];
 }
 
@@ -302,4 +466,33 @@ export function waterfallRuleForScenario(
       steps: waterfallOptionsForScenario(scenario),
     }
   );
+}
+
+export function transactionFeeForAmount(
+  amount: number,
+  settings: PolicySettings = activePolicySettings,
+) {
+  const normalizedAmount = Math.max(0, Number(amount ?? 0));
+  const bands = settings.transactionFeeBands
+    .map((band) => ({
+      ...band,
+      minAmount: Math.max(0, Math.floor(Number(band.minAmount ?? 0))),
+      maxAmount:
+        band.maxAmount == null ? undefined : Math.max(0, Math.floor(Number(band.maxAmount ?? 0))),
+      feeAmount: Math.max(0, Number(band.feeAmount ?? 0)),
+    }))
+    .sort((a, b) => a.minAmount - b.minAmount);
+
+  for (const band of bands) {
+    if (normalizedAmount < band.minAmount) continue;
+    if (band.maxAmount != null && normalizedAmount > band.maxAmount) continue;
+    return band.feeAmount;
+  }
+
+  const openEndedBand = [...bands].reverse().find((band) => band.maxAmount == null);
+  if (openEndedBand && normalizedAmount >= openEndedBand.minAmount) {
+    return openEndedBand.feeAmount;
+  }
+
+  return 0;
 }

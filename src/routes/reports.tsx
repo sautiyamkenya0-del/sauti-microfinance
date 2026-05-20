@@ -3,7 +3,14 @@ import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
-import { fmtKES, isMemberCategory, loanSummary, sbcDeductions, useStore } from "@/lib/store";
+import {
+  fmtKES,
+  isMemberCategory,
+  loanSummary,
+  sbcDeductions,
+  transactionFeeAmountForLoan,
+  useStore,
+} from "@/lib/store";
 import { createReportSnapshotRecord } from "@/lib/app-data.functions";
 import { type ReportSnapshot } from "@/lib/legacy-finance";
 import { listReportSnapshots } from "@/lib/runtime-data.functions";
@@ -70,6 +77,17 @@ function ReportsPage() {
   );
   const activeLoans = loans.filter((loan) => loan.status === "active");
   const feeTransactions = transactions.filter((transaction) => transaction.type === "fee_payment");
+  const purposePoolTransactions = feeTransactions.filter((transaction) =>
+    String(transaction.note ?? "")
+      .toLowerCase()
+      .includes("purpose pool"),
+  );
+  const mandatoryFeeTransactions = feeTransactions.filter(
+    (transaction) =>
+      !String(transaction.note ?? "")
+        .toLowerCase()
+        .includes("purpose pool"),
+  );
   const paidPenalties = penalties.filter((penalty) => penalty.status === "paid");
   const outstandingPenalties = penalties.filter((penalty) => penalty.status === "outstanding");
 
@@ -94,10 +112,17 @@ function ReportsPage() {
   }, 0);
   const transactionCostFees = disbursedLoans.reduce((sum, loan) => {
     const principal = loan.approvedAmount ?? loan.principal;
-    return sum + sbcDeductions(principal).transactionCost;
+    return sum + (loan.transactionFeeAmount ?? transactionFeeAmountForLoan(principal));
   }, 0);
   const transactionFees = processingFees + insuranceFees + transactionCostFees;
-  const mandatoryFees = feeTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
+  const mandatoryFees = mandatoryFeeTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
+  const purposePoolRevenue = purposePoolTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
   const roundOffRevenue = roundOff.reduce((sum, entry) => sum + entry.amount, 0);
   const dailyPenaltyRevenue = paidPenalties
     .filter((penalty) => classifyPenalty(penalty.reason) === "daily")
@@ -112,7 +137,12 @@ function ReportsPage() {
   );
 
   const totalRevenue =
-    interestEarned + transactionFees + mandatoryFees + penaltiesCollected + roundOffRevenue;
+    interestEarned +
+    transactionFees +
+    mandatoryFees +
+    purposePoolRevenue +
+    penaltiesCollected +
+    roundOffRevenue;
   const netOperating = totalRevenue - expenses;
   const liabilities = memberSavings + shareCap + investorCap;
 
@@ -134,9 +164,16 @@ function ReportsPage() {
     {
       key: "mandatory_fees",
       label: "Mandatory fees",
-      count: feeTransactions.length,
+      count: mandatoryFeeTransactions.length,
       amount: mandatoryFees,
       note: "Membership, card, sticker, and related fee payments.",
+    },
+    {
+      key: "purpose_pool",
+      label: "Purpose pool",
+      count: purposePoolTransactions.length,
+      amount: purposePoolRevenue,
+      note: "Internal purpose-pool contributions separated from direct fee income.",
     },
     {
       key: "daily_penalties",
@@ -187,9 +224,16 @@ function ReportsPage() {
     {
       key: "mandatory_fee_payments",
       label: "Membership and sticker fees",
-      count: feeTransactions.length,
+      count: mandatoryFeeTransactions.length,
       amount: mandatoryFees,
       note: "Collected through fee-payment transactions.",
+    },
+    {
+      key: "purpose_pool_income",
+      label: "Purpose pool contributions",
+      count: purposePoolTransactions.length,
+      amount: purposePoolRevenue,
+      note: "Amounts routed above the mandatory savings and shares thresholds.",
     },
     {
       key: "round_off_income",

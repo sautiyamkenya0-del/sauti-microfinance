@@ -2,8 +2,10 @@ import "@tanstack/react-start/server-only";
 
 import {
   applyMpesaPaymentToDatabase,
+  applyMpesaWithdrawalResultToDatabase,
   findMemberByMembershipInput,
   findMpesaStkPushRequestContext,
+  markMpesaWithdrawalTimeout,
   recordMpesaConfirmationEvent,
   recordMpesaValidationEvent,
 } from "@/lib/app-data.functions";
@@ -90,6 +92,21 @@ function readStkMetadataValue(items: unknown[], name: string) {
   return isRecord(match) ? match.Value : undefined;
 }
 
+function readB2cResultParameter(result: Record<string, unknown>, name: string) {
+  const resultParameters = asRecord(result.ResultParameters);
+  const items = Array.isArray(resultParameters.ResultParameter)
+    ? (resultParameters.ResultParameter as unknown[])
+    : [];
+  const match = items.find(
+    (item) =>
+      isRecord(item) &&
+      String(item.Key ?? "")
+        .trim()
+        .toLowerCase() === name.toLowerCase(),
+  );
+  return isRecord(match) ? match.Value : undefined;
+}
+
 async function normalizeConfirmationBody(body: Record<string, unknown>) {
   const root = asRecord(body);
   const stkCallback = asRecord(asRecord(root.Body).stkCallback);
@@ -169,6 +186,31 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
     success: true,
     resultCode: 0,
     resultDesc: "Accepted",
+  };
+}
+
+function normalizeB2cResultBody(body: Record<string, unknown>) {
+  const result = asRecord(body.Result);
+  return {
+    raw: body,
+    resultCode: numberValue(result.ResultCode),
+    resultDesc: textValue(result.ResultDesc),
+    conversationId: textValue(result.ConversationID),
+    originatorConversationId: textValue(result.OriginatorConversationID),
+    payoutRef:
+      textValue(readB2cResultParameter(result, "TransactionReceipt")) ??
+      textValue(readB2cResultParameter(result, "TransactionID")),
+  };
+}
+
+function normalizeB2cTimeoutBody(body: Record<string, unknown>) {
+  const result = asRecord(body.Result);
+  return {
+    raw: body,
+    conversationId: textValue(result.ConversationID ?? body.ConversationID),
+    originatorConversationId: textValue(
+      result.OriginatorConversationID ?? body.OriginatorConversationID,
+    ),
   };
 }
 
@@ -288,6 +330,75 @@ export async function handleMpesaConfirmationRequest(request: Request) {
         level: "error",
         category: "mpesa.confirmation",
         message: "Error handling mpesa confirmation",
+        context: { error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
+    return retryAck();
+  }
+}
+
+export async function handleMpesaB2cResultRequest(request: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBodyObject(request);
+  } catch (error) {
+    console.error("mpesa b2c result parse error", error);
+    return successAck("Accepted");
+  }
+
+  try {
+    const normalized = normalizeB2cResultBody(body);
+    await applyMpesaWithdrawalResultToDatabase({
+      raw: normalized.raw,
+      conversationId: normalized.conversationId,
+      originatorConversationId: normalized.originatorConversationId,
+      payoutRef: normalized.payoutRef,
+      resultCode: normalized.resultCode,
+      resultDesc: normalized.resultDesc,
+    });
+    return successAck();
+  } catch (error) {
+    console.error("mpesa b2c result handling error", error);
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.b2c_result",
+        message: "Error handling B2C payout result",
+        context: { error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
+    return retryAck();
+  }
+}
+
+export async function handleMpesaB2cTimeoutRequest(request: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBodyObject(request);
+  } catch (error) {
+    console.error("mpesa b2c timeout parse error", error);
+    return successAck("Accepted");
+  }
+
+  try {
+    const normalized = normalizeB2cTimeoutBody(body);
+    await markMpesaWithdrawalTimeout({
+      raw: normalized.raw,
+      conversationId: normalized.conversationId,
+      originatorConversationId: normalized.originatorConversationId,
+    });
+    return successAck();
+  } catch (error) {
+    console.error("mpesa b2c timeout handling error", error);
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.b2c_timeout",
+        message: "Error handling B2C payout timeout",
         context: { error: String(error ?? "") },
       });
     } catch (_) {

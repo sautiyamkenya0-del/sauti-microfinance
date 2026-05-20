@@ -1,5 +1,5 @@
 import { Section, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, loanScheduleTotal, loanTermDaysOf } from "@/lib/store";
+import { useStore, fmtKES, loanPricingPreview, loanTermDaysOf } from "@/lib/store";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -96,11 +96,13 @@ export function PendingReview() {
           const l = loans.find((x) => x.id === reviewing)!;
           const m = members.find((x) => x.id === l.memberId);
           const termDays = loanTermDaysOf(l);
-          const { total } = loanScheduleTotal(
-            adjAmount,
-            l.rate,
-            Math.max(1, Math.ceil(termDays / 30)),
-          );
+          const pricing = loanPricingPreview({
+            netAmount: adjAmount,
+            termDays,
+            ratePct: l.rate,
+            processingFeeMode: l.processingFeeMode,
+            insuranceFeeMode: l.insuranceFeeMode,
+          });
           return (
             <div
               className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4"
@@ -129,7 +131,12 @@ export function PendingReview() {
                 <div className="text-xs text-muted-foreground mb-3">Term: {termDays} days.</div>
                 <div className="bg-muted/50 rounded-md px-3 py-2 text-sm flex justify-between mb-3">
                   <span className="text-muted-foreground">New total repayable</span>
-                  <span className="font-semibold">{fmtKES(total)}</span>
+                  <span className="font-semibold">{fmtKES(pricing.totalRepayment)}</span>
+                </div>
+                <div className="mb-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  Net to member {fmtKES(pricing.netDisbursedAmount)} · financed principal{" "}
+                  {fmtKES(pricing.financedPrincipal)} · fixed transaction fee{" "}
+                  {fmtKES(pricing.deductions.transactionCost)}
                 </div>
                 <label className="block mb-4">
                   <span className="text-xs text-muted-foreground">Review note (optional)</span>

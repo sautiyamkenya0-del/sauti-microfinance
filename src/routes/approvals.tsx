@@ -85,7 +85,7 @@ function ApprovalsPage() {
                                 currentUser.id,
                                 "Approved from queue",
                               );
-                              toast.success("Loan approved & disbursed");
+                              toast.success("Loan approved and payout requested");
                             }}
                             className="text-xs px-2 py-1 rounded-md bg-success/15 text-success hover:bg-success/25"
                           >

@@ -84,7 +84,7 @@ function Policies() {
               </li>
               <li>
                 Processing fee {SBC_FEES.processingPct}%, insurance {SBC_FEES.insurancePct}%, and
-                transaction cost {SBC_FEES.transactionCostPct}%.
+                fixed transaction fees from the Policy Center band table.
               </li>
               <li>
                 {SBC_FEES.penaltyDailyPct}% penalty on daily arrears if not cleared by the second

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, Scale } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, ListOrdered, Scale } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
@@ -23,6 +23,7 @@ const TYPES = [
   "investor_contribution",
   "fee_payment",
   "mpesa_unallocated",
+  "staff_payroll",
 ] as const;
 
 const INFLOWS: ReadonlyArray<string> = [
@@ -32,8 +33,14 @@ const INFLOWS: ReadonlyArray<string> = [
   "investor_contribution",
   "fee_payment",
   "mpesa_unallocated",
+  "staff_payroll",
 ];
-const OUTFLOWS: ReadonlyArray<string> = ["withdrawal", "loan_disbursement", "petty_cash"];
+const OUTFLOWS: ReadonlyArray<string> = [
+  "withdrawal",
+  "loan_disbursement",
+  "petty_cash",
+  "staff_payroll",
+];
 
 function TxPage() {
   const { transactions, members, staff } = useStore();
@@ -61,7 +68,8 @@ function TxPage() {
     const outflow = list
       .filter((transaction) => OUTFLOWS.includes(transaction.type))
       .reduce((sum, transaction) => sum + transaction.amount, 0);
-    return { inflow, outflow, net: inflow - outflow };
+    const gross = list.reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
+    return { inflow, outflow, net: inflow - outflow, gross };
   }, [list]);
 
   const displayDateTime = (transaction: (typeof transactions)[number]) =>
@@ -73,11 +81,17 @@ function TxPage() {
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <SectionTabs section="capital" />
         <DirectorOnly>
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <StatCard
+              label="Filtered Records"
+              value={list.length}
+              hint={`Of ${transactions.length} total`}
+              icon={<ListOrdered className="h-5 w-5" />}
+            />
             <StatCard
               label="Inflow"
               value={fmtKES(totals.inflow)}
-              hint="Filtered period"
+              hint={`Gross moved ${fmtKES(totals.gross)}`}
               icon={<ArrowDownCircle className="h-5 w-5" />}
               tone="success"
             />
@@ -149,7 +163,7 @@ function TxPage() {
           ))}
         </div>
 
-        <Section title={`Ledger (${list.length})`}>
+        <Section title={`Filtered Ledger (${list.length} of ${transactions.length})`}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
@@ -177,7 +191,9 @@ function TxPage() {
                   const tone =
                     transaction.type === "mpesa_unallocated"
                       ? "warning"
-                      : transaction.type.includes("withdrawal") || transaction.type === "petty_cash"
+                      : transaction.type.includes("withdrawal") ||
+                          transaction.type === "petty_cash" ||
+                          transaction.type === "staff_payroll"
                         ? "warning"
                         : transaction.type.includes("repayment")
                           ? "success"

@@ -41,6 +41,7 @@ import {
   DEFAULT_POLICY_SETTINGS,
   getActivePolicySettings,
   setActivePolicySettings,
+  transactionFeeForAmount,
   type PolicySettings,
 } from "@/lib/policy-settings";
 import { listStaffMessages } from "@/lib/runtime-data.functions";
@@ -94,12 +95,14 @@ export type Member = {
 
 /** SBC policy: loan terms are fixed-day buckets, not months. */
 export type LoanTermDays = 7 | 14 | 30 | 60 | 90;
+export type LoanChargeMode = "upfront" | "financed";
 
 export type Loan = {
   id: string;
   memberId: string;
-  principal: number; // amount applied for / disbursed
-  approvedAmount?: number; // amount approved by manager/director (may be lower)
+  principal: number; // requested / planned NET disbursement
+  approvedAmount?: number; // approved NET disbursement
+  financedPrincipalAmount?: number; // financed balance used for pricing and repayment
   rate: number; // % per month (legacy field — kept for old seed loans)
   termMonths: number; // legacy field, kept for back-compat
   termDays?: LoanTermDays; // new: SBC fixed term (7/14/30/60/90)
@@ -107,6 +110,13 @@ export type Loan = {
   status: "pending" | "active" | "closed" | "defaulted" | "rejected";
   officerId: string;
   paid: number;
+  netDisbursedAmount?: number;
+  processingFeeAmount?: number;
+  insuranceFeeAmount?: number;
+  transactionFeeAmount?: number;
+  processingFeeMode?: LoanChargeMode;
+  insuranceFeeMode?: LoanChargeMode;
+  disbursementStatus?: "not_requested" | "requested" | "paid" | "failed" | "timeout";
   purpose?: string;
   reviewedBy?: string;
   reviewNote?: string;
@@ -125,7 +135,8 @@ export type Transaction = {
     | "petty_cash"
     | "investor_contribution"
     | "fee_payment"
-    | "mpesa_unallocated";
+    | "mpesa_unallocated"
+    | "staff_payroll";
   account?: string; // M-Pesa Paybill account = membership number
   payerName?: string; // payer name as read from Daraja
   amount: number;
@@ -436,6 +447,7 @@ type Store = {
   ) => Promise<string>;
   updateMember: (m: {
     memberId: string;
+    nextMemberId?: string;
     name: string;
     phone: string;
     status: "active" | "dormant";
@@ -703,6 +715,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const result = await updateMemberRecord({
           data: {
             memberId: m.memberId,
+            nextMemberId: m.nextMemberId,
             name: m.name,
             phone: m.phone,
             status: m.status,
@@ -740,6 +753,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             memberId: l.memberId,
             principal: l.principal,
             approvedAmount: l.approvedAmount,
+            financedPrincipalAmount: l.financedPrincipalAmount,
+            netDisbursedAmount: l.netDisbursedAmount,
+            processingFeeAmount: l.processingFeeAmount,
+            insuranceFeeAmount: l.insuranceFeeAmount,
+            transactionFeeAmount: l.transactionFeeAmount,
+            processingFeeMode: l.processingFeeMode,
+            insuranceFeeMode: l.insuranceFeeMode,
+            disbursementStatus: l.disbursementStatus,
             rate,
             termDays,
             termMonths,
@@ -1131,11 +1152,61 @@ export function loanDailySavingsAmount(approvedAmount: number) {
   return Number(approvedAmount ?? 0) <= 5000 ? 50 : 100;
 }
 
+export function transactionFeeAmountForLoan(amount: number) {
+  const fixedFee = transactionFeeForAmount(amount, getActivePolicySettings());
+  if (fixedFee > 0) return fixedFee;
+  return amount * (SBC_FEES.transactionCostPct / 100);
+}
+
+export function loanPricingPreview(args: {
+  netAmount: number;
+  termDays?: number;
+  ratePct?: number;
+  processingFeeMode?: LoanChargeMode;
+  insuranceFeeMode?: LoanChargeMode;
+  dailySavingsAmount?: number;
+}) {
+  const netAmount = Math.max(0, Number(args.netAmount ?? 0));
+  const termDays = normalizeLoanTermDays(args.termDays);
+  const ratePct = Number(args.ratePct ?? loanRateForTerm(termDays));
+  const deductions = sbcDeductions(netAmount, {
+    processingMode: args.processingFeeMode,
+    insuranceMode: args.insuranceFeeMode,
+  });
+  const periods = termPeriodsFromDays(termDays);
+  const schedule = loanScheduleTotal(deductions.financedPrincipal, ratePct, periods);
+  const dailySavingsAmount = Math.max(
+    0,
+    Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
+  );
+  const rawDailyInclusive = (schedule.total + dailySavingsAmount * termDays) / Math.max(1, termDays);
+  const dailyInclusive = roundUpKES(rawDailyInclusive, 5);
+
+  return {
+    ratePct,
+    termDays,
+    periods,
+    deductions,
+    netAmount,
+    netDisbursedAmount: netAmount,
+    financedPrincipal: deductions.financedPrincipal,
+    interest: schedule.interest,
+    totalRepayment: schedule.total,
+    dailySavingsAmount,
+    dailyLoanInstallment: schedule.total / Math.max(1, termDays),
+    dailyInclusive,
+    roundOff: Math.max(0, dailyInclusive - rawDailyInclusive),
+    totalSavingsAccrued: dailySavingsAmount * termDays,
+    grandTotalCollected: dailyInclusive * termDays,
+  };
+}
+
 export function loanSummary(
   loan: Pick<
     Loan,
     | "principal"
     | "approvedAmount"
+    | "financedPrincipalAmount"
     | "rate"
     | "termDays"
     | "termMonths"
@@ -1147,13 +1218,15 @@ export function loanSummary(
   const approved = loan.approvedAmount ?? loan.principal;
   const termDays = loanTermDaysOf(loan);
   const periods = loan.termMonths > 0 ? loan.termMonths : termPeriodsFromDays(termDays);
-  const schedule = loanScheduleTotal(approved, loan.rate, periods);
+  const financedPrincipal = loan.financedPrincipalAmount ?? approved;
+  const schedule = loanScheduleTotal(financedPrincipal, loan.rate, periods);
   const balance = Math.max(0, schedule.total - loan.paid);
   const dailySavingsAmount = loanDailySavingsAmount(approved);
   const dueDate = new Date(loan.startDate);
   dueDate.setDate(dueDate.getDate() + termDays);
   return {
     approved,
+    financedPrincipal,
     termDays,
     periods,
     interest: schedule.interest,
@@ -1192,14 +1265,42 @@ export const SBC_FEES = {
   },
 };
 
-export function sbcDeductions(principal: number) {
-  const processing = principal * (SBC_FEES.processingPct / 100);
-  const insurance = principal * (SBC_FEES.insurancePct / 100);
-  const transactionCost = principal * (SBC_FEES.transactionCostPct / 100);
+export function sbcDeductions(
+  netDisbursedAmount: number,
+  options?: {
+    processingMode?: LoanChargeMode;
+    insuranceMode?: LoanChargeMode;
+    transactionFeeAmount?: number;
+  },
+) {
+  const processing = netDisbursedAmount * (SBC_FEES.processingPct / 100);
+  const insurance = netDisbursedAmount * (SBC_FEES.insurancePct / 100);
+  const transactionCost = Math.max(
+    0,
+    Number(options?.transactionFeeAmount ?? transactionFeeAmountForLoan(netDisbursedAmount)),
+  );
+  const processingMode = options?.processingMode ?? "financed";
+  const insuranceMode = options?.insuranceMode ?? "financed";
+  const processingUpfront = processingMode === "upfront" ? processing : 0;
+  const insuranceUpfront = insuranceMode === "upfront" ? insurance : 0;
+  const financedProcessing = processing - processingUpfront;
+  const financedInsurance = insurance - insuranceUpfront;
   return {
     processing,
     insurance,
     transactionCost,
+    processingUpfront,
+    insuranceUpfront,
+    financedProcessing,
+    financedInsurance,
+    totalUpfrontCharges: processingUpfront + insuranceUpfront,
+    totalFinancedCharges: financedProcessing + financedInsurance + transactionCost,
+    financedPrincipal:
+      Math.max(0, Number(netDisbursedAmount ?? 0)) +
+      financedProcessing +
+      financedInsurance +
+      transactionCost,
+    netDisbursedAmount: Math.max(0, Number(netDisbursedAmount ?? 0)),
     total: processing + insurance + transactionCost,
   };
 }
@@ -1334,6 +1435,7 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "attendance",
     "reports",
     "policies",
+    "payroll",
     "fees",
     "staffmgmt",
     "staff",

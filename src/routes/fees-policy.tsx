@@ -85,6 +85,21 @@ type TargetDraft = {
   notes: string;
 };
 
+type CarryoverFeeBuckets = {
+  membership: number;
+  card: number;
+  sticker: number;
+  processing: number;
+  insurance: number;
+  transaction: number;
+};
+
+type CarryoverCollectionBreakdown = {
+  totalDepositsRecorded: number;
+  purposePoolBalance: number;
+  feeBuckets: CarryoverFeeBuckets;
+};
+
 const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
 const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
@@ -108,6 +123,7 @@ function PolicyCenterPage() {
     members,
     loans,
     penalties,
+    sharePrice,
     transactions,
     reloadAppData,
   } = useStore();
@@ -128,6 +144,9 @@ function PolicyCenterPage() {
   const [percentagesDraft, setPercentagesDraft] = useState(policySettings.percentages);
   const [interestDraft, setInterestDraft] = useState(policySettings.interestRates);
   const [waterfallDraft, setWaterfallDraft] = useState(policySettings.waterfallRules);
+  const [transactionFeeBandsDraft, setTransactionFeeBandsDraft] = useState(
+    policySettings.transactionFeeBands,
+  );
   const [waterfallScenario, setWaterfallScenario] = useState<WaterfallScenario>("member_with_loan");
   const [clientQuery, setClientQuery] = useState("");
   const [feeMemberQuery, setFeeMemberQuery] = useState("");
@@ -172,6 +191,7 @@ function PolicyCenterPage() {
   const [carryoverLoanDraft, setCarryoverLoanDraft] = useState<LegacyCarryoverLoan>(() =>
     blankCarryoverLoan("", 1),
   );
+  const [guidedClosedLoans, setGuidedClosedLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [waiverNote, setWaiverNote] = useState("");
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
 
@@ -179,6 +199,7 @@ function PolicyCenterPage() {
     setPercentagesDraft(policySettings.percentages);
     setInterestDraft(policySettings.interestRates);
     setWaterfallDraft(policySettings.waterfallRules);
+    setTransactionFeeBandsDraft(policySettings.transactionFeeBands);
   }, [policySettings]);
 
   useEffect(() => {
@@ -204,6 +225,7 @@ function PolicyCenterPage() {
       setCarryoverProfile(blankCarryoverProfile(""));
       setCarryoverLoans([]);
       setCarryoverLoanDraft(blankCarryoverLoan("", 1));
+      setGuidedClosedLoans([]);
       return;
     }
 
@@ -216,10 +238,15 @@ function PolicyCenterPage() {
           profile: LegacyCarryoverProfile | null;
           loans: LegacyCarryoverLoan[];
         };
-        const profile = typedResult.profile ?? blankCarryoverProfile(clientId);
+        const profile = hydrateCarryoverProfile(
+          typedResult.profile ?? blankCarryoverProfile(clientId),
+        );
         setCarryoverProfile(profile);
         setCarryoverLoans(typedResult.loans);
         setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
+        setGuidedClosedLoans(
+          typedResult.loans.filter((loan) => loan.status === "closed" || loan.finished),
+        );
       })
       .catch((error: any) => {
         if (!active) return;
@@ -267,11 +294,47 @@ function PolicyCenterPage() {
     carryoverLoanDraft,
     policySettings,
   );
-  const derivedCarryoverTotalCollected =
-    carryoverProfile.feesPaidTotal +
-    carryoverProfile.loanRepaymentsTotal +
+  const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
+  const carryoverFeeBuckets = carryoverBreakdown.feeBuckets;
+  const carryoverFeeTotal = Object.values(carryoverFeeBuckets).reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+  const guidedClosedLoanSummaries = guidedClosedLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
+  const hasClosedCarryoverLoanRecords = carryoverLoans.some(
+    (loan) => loan.status === "closed" || loan.finished,
+  );
+  const openCarryoverLoanSummaries = carryoverLoanSummaries.filter(
+    ({ loan }) => loan.status !== "closed" && !loan.finished,
+  );
+  const carryoverLoanRepaymentsRecorded =
+    hasClosedCarryoverLoanRecords || openCarryoverLoanSummaries.length > 0
+      ? guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalRepayment, 0) +
+        openCarryoverLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
+      : carryoverProfile.loanRepaymentsTotal;
+  const carryoverShareValue = carryoverProfile.shareUnits * sharePrice;
+  const derivedCarryoverAllocatedTotal =
+    carryoverProfile.savingsBalance +
+    carryoverShareValue +
+    carryoverFeeTotal +
+    carryoverLoanRepaymentsRecorded +
     carryoverProfile.investmentBalance +
+    carryoverBreakdown.purposePoolBalance +
     carryoverProfile.otherCollectedTotal;
+  const derivedCarryoverTotalCollected = resolveRecordedCarryoverTotal(
+    carryoverProfile,
+    carryoverBreakdown,
+    derivedCarryoverAllocatedTotal,
+  );
+  const carryoverUndistributedBalance =
+    derivedCarryoverTotalCollected - derivedCarryoverAllocatedTotal;
+  const carryoverCompletedCycles =
+    hasClosedCarryoverLoanRecords || guidedClosedLoans.length > 0
+      ? guidedClosedLoans.length
+      : carryoverProfile.completedLoanCycles;
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
     0,
@@ -470,7 +533,7 @@ function PolicyCenterPage() {
   }
 
   async function persistPolicySettings(
-    key: "percentages" | "interest_rates" | "waterfall_rules",
+    key: "percentages" | "interest_rates" | "waterfall_rules" | "transaction_fee_bands",
     value: unknown,
     message: string,
   ) {
@@ -484,24 +547,71 @@ function PolicyCenterPage() {
       profile: LegacyCarryoverProfile | null;
       loans: LegacyCarryoverLoan[];
     };
-    setCarryoverProfile(result.profile ?? blankCarryoverProfile(nextMemberId));
+    setCarryoverProfile(
+      hydrateCarryoverProfile(result.profile ?? blankCarryoverProfile(nextMemberId)),
+    );
     setCarryoverLoans(result.loans);
     setCarryoverLoanDraft(blankCarryoverLoan(nextMemberId, result.loans.length + 1));
+    setGuidedClosedLoans(result.loans.filter((loan) => loan.status === "closed" || loan.finished));
   }
 
   async function saveCarryoverProfileDraft() {
     if (!selectedClient) return;
+    const nextGuidedLoans = guidedClosedLoans.map((loan, index) => {
+      const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+      return {
+        ...loan,
+        memberId: selectedClient.id,
+        label: loan.label || `Completed loan ${index + 1}`,
+        loanCycleNumber: Math.max(1, loan.loanCycleNumber || index + 1),
+        paidToDate: summary.totalRepayment,
+        dueDate: loan.dueDate ?? summary.dueDate,
+        closedOn: loan.closedOn ?? summary.dueDate,
+        status: "closed" as const,
+        finished: true,
+      };
+    });
+
+    for (const loan of nextGuidedLoans) {
+      await saveCarryoverLoan({ data: loan });
+    }
+
+    const keptClosedLoanIds = new Set(
+      nextGuidedLoans.map((loan) => loan.id).filter((loanId): loanId is string => Boolean(loanId)),
+    );
+    const removedClosedLoanIds = carryoverLoans
+      .filter((loan) => loan.status === "closed" || loan.finished)
+      .map((loan) => loan.id)
+      .filter((loanId) => loanId && !keptClosedLoanIds.has(loanId));
+    for (const loanId of removedClosedLoanIds) {
+      await deleteCarryoverLoan({ data: { id: loanId } });
+    }
+
+    const recordedTotalDeposits = resolveRecordedCarryoverTotal(
+      carryoverProfile,
+      carryoverBreakdown,
+      derivedCarryoverAllocatedTotal,
+    );
+
+    const nextBreakdown = {
+      ...readCarryoverBreakdown(carryoverProfile.collectionBreakdown),
+      totalDepositsRecorded: recordedTotalDeposits,
+      purposePoolBalance: carryoverBreakdown.purposePoolBalance,
+      feeBuckets: carryoverFeeBuckets,
+    };
+
     await saveCarryoverProfile({
       data: {
         ...carryoverProfile,
-        totalCollected: derivedCarryoverTotalCollected,
+        feesPaidTotal: carryoverFeeTotal,
+        loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
+        totalCollected: recordedTotalDeposits,
         pendingBalance: carryoverLoanSummaries.reduce(
           (sum, row) => sum + row.summary.totalOwedNow,
           0,
         ),
-        completedLoanCycles: carryoverLoanSummaries.filter(
-          ({ loan, summary }) => loan.status === "closed" || summary.isFinished,
-        ).length,
+        completedLoanCycles: nextGuidedLoans.length,
+        collectionBreakdown: nextBreakdown,
       },
     });
     await reloadAppData();
@@ -1035,6 +1145,122 @@ function PolicyCenterPage() {
               />
             </div>
             <div className="border-t border-border px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Fixed transaction fee bands</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    These brackets replace one global transaction percentage. The app now prices
+                    each loan using the matching amount band.
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() =>
+                      setTransactionFeeBandsDraft((current) => [
+                        ...current,
+                        {
+                          id: `tx-band-${current.length + 1}`,
+                          minAmount:
+                            current.length > 0
+                              ? (current[current.length - 1].maxAmount ??
+                                  current[current.length - 1].minAmount) + 1
+                              : 0,
+                          maxAmount: undefined,
+                          feeAmount: 0,
+                          label: "",
+                        },
+                      ])
+                    }
+                    className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                  >
+                    Add band
+                  </button>
+                  <button
+                    onClick={() =>
+                      void persistPolicySettings(
+                        "transaction_fee_bands",
+                        transactionFeeBandsDraft,
+                        "Transaction fee bands updated",
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Save bands
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 space-y-3">
+                {transactionFeeBandsDraft.map((band, index) => (
+                  <div
+                    key={band.id}
+                    className="grid gap-3 rounded-lg border border-border bg-muted/15 p-3 md:grid-cols-[1.2fr_1fr_1fr_1fr_auto]"
+                  >
+                    <Field label="Label">
+                      <input
+                        value={band.label ?? ""}
+                        onChange={(event) =>
+                          setTransactionFeeBandsDraft((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, label: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        className="input"
+                      />
+                    </Field>
+                    <NumberField
+                      label="Min amount"
+                      value={band.minAmount}
+                      onChange={(value) =>
+                        setTransactionFeeBandsDraft((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, minAmount: Math.max(0, value) } : item,
+                          ),
+                        )
+                      }
+                    />
+                    <NumberField
+                      label="Max amount"
+                      value={band.maxAmount ?? 0}
+                      onChange={(value) =>
+                        setTransactionFeeBandsDraft((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, maxAmount: value > 0 ? value : undefined }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                    <NumberField
+                      label="Fixed fee"
+                      value={band.feeAmount}
+                      onChange={(value) =>
+                        setTransactionFeeBandsDraft((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, feeAmount: Math.max(0, value) } : item,
+                          ),
+                        )
+                      }
+                    />
+                    <div className="flex items-end">
+                      <button
+                        onClick={() =>
+                          setTransactionFeeBandsDraft((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                        className="rounded-md border border-destructive/30 px-3 py-2 text-xs text-destructive hover:bg-destructive/10"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-border px-5 py-4">
               <div className="text-sm font-medium">Tiered upfront reference</div>
               <div className="mt-1 text-xs text-muted-foreground">
                 Premium upfront is no longer treated as one fixed figure here. It follows the shared
@@ -1424,6 +1650,19 @@ function PolicyCenterPage() {
                 >
                   <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
                     <NumberField
+                      label="Total deposits ever recorded"
+                      value={derivedCarryoverTotalCollected}
+                      onChange={(value) =>
+                        setCarryoverProfile((current) => ({
+                          ...current,
+                          collectionBreakdown: {
+                            ...readCarryoverBreakdown(current.collectionBreakdown),
+                            totalDepositsRecorded: value,
+                          },
+                        }))
+                      }
+                    />
+                    <NumberField
                       label="Savings balance"
                       value={carryoverProfile.savingsBalance}
                       onChange={(value) =>
@@ -1441,19 +1680,15 @@ function PolicyCenterPage() {
                       }
                     />
                     <NumberField
-                      label="Fees paid total"
-                      value={carryoverProfile.feesPaidTotal}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({ ...current, feesPaidTotal: value }))
-                      }
-                    />
-                    <NumberField
-                      label="Loan repayments total"
-                      value={carryoverProfile.loanRepaymentsTotal}
+                      label="Purpose pool balance"
+                      value={carryoverBreakdown.purposePoolBalance}
                       onChange={(value) =>
                         setCarryoverProfile((current) => ({
                           ...current,
-                          loanRepaymentsTotal: value,
+                          collectionBreakdown: {
+                            ...readCarryoverBreakdown(current.collectionBreakdown),
+                            purposePoolBalance: value,
+                          },
                         }))
                       }
                     />
@@ -1477,6 +1712,139 @@ function PolicyCenterPage() {
                         }))
                       }
                     />
+                    <div className="rounded-xl border border-border bg-muted/20 p-4 md:col-span-2 xl:col-span-2">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Waterfall fee buckets
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={carryoverProfile.membershipFeePaid}
+                            onChange={(event) =>
+                              setCarryoverProfile((current) => ({
+                                ...current,
+                                membershipFeePaid: event.target.checked,
+                                collectionBreakdown: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown),
+                                  feeBuckets: {
+                                    ...readCarryoverBreakdown(current.collectionBreakdown)
+                                      .feeBuckets,
+                                    membership: event.target.checked ? membershipAmount : 0,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          Membership fee ({fmtKES(membershipAmount)})
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={carryoverProfile.cardFeePaid}
+                            onChange={(event) =>
+                              setCarryoverProfile((current) => ({
+                                ...current,
+                                cardFeePaid: event.target.checked,
+                                collectionBreakdown: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown),
+                                  feeBuckets: {
+                                    ...readCarryoverBreakdown(current.collectionBreakdown)
+                                      .feeBuckets,
+                                    card: event.target.checked ? cardAmount : 0,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          Card fee ({fmtKES(cardAmount)})
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={carryoverProfile.stickerFeePaid}
+                            onChange={(event) =>
+                              setCarryoverProfile((current) => ({
+                                ...current,
+                                stickerFeePaid: event.target.checked,
+                                collectionBreakdown: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown),
+                                  feeBuckets: {
+                                    ...readCarryoverBreakdown(current.collectionBreakdown)
+                                      .feeBuckets,
+                                    sticker: event.target.checked ? stickerAmount : 0,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          Sticker fee ({fmtKES(stickerAmount)})
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={carryoverProfile.firstUpfrontPaid}
+                            onChange={(event) =>
+                              setCarryoverProfile((current) => ({
+                                ...current,
+                                firstUpfrontPaid: event.target.checked,
+                              }))
+                            }
+                          />
+                          First upfront already covered
+                        </label>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <NumberField
+                          label="Processing fees"
+                          value={carryoverFeeBuckets.processing}
+                          onChange={(value) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              collectionBreakdown: {
+                                ...readCarryoverBreakdown(current.collectionBreakdown),
+                                feeBuckets: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown).feeBuckets,
+                                  processing: value,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                        <NumberField
+                          label="Insurance fees"
+                          value={carryoverFeeBuckets.insurance}
+                          onChange={(value) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              collectionBreakdown: {
+                                ...readCarryoverBreakdown(current.collectionBreakdown),
+                                feeBuckets: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown).feeBuckets,
+                                  insurance: value,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                        <NumberField
+                          label="Transaction fees"
+                          value={carryoverFeeBuckets.transaction}
+                          onChange={(value) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              collectionBreakdown: {
+                                ...readCarryoverBreakdown(current.collectionBreakdown),
+                                feeBuckets: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown).feeBuckets,
+                                  transaction: value,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
                     <NumberField
                       label="Penalties outstanding"
                       value={carryoverProfile.penaltiesOutstanding}
@@ -1498,58 +1866,86 @@ function PolicyCenterPage() {
                       }
                     />
                     <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={carryoverProfile.membershipFeePaid}
-                          onChange={(event) =>
-                            setCarryoverProfile((current) => ({
-                              ...current,
-                              membershipFeePaid: event.target.checked,
-                            }))
-                          }
-                        />
-                        Membership fee already paid
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={carryoverProfile.cardFeePaid}
-                          onChange={(event) =>
-                            setCarryoverProfile((current) => ({
-                              ...current,
-                              cardFeePaid: event.target.checked,
-                            }))
-                          }
-                        />
-                        Card fee already paid
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={carryoverProfile.stickerFeePaid}
-                          onChange={(event) =>
-                            setCarryoverProfile((current) => ({
-                              ...current,
-                              stickerFeePaid: event.target.checked,
-                            }))
-                          }
-                        />
-                        Sticker fee already paid
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={carryoverProfile.firstUpfrontPaid}
-                          onChange={(event) =>
-                            setCarryoverProfile((current) => ({
-                              ...current,
-                              firstUpfrontPaid: event.target.checked,
-                            }))
-                          }
-                        />
-                        First upfront already covered
-                      </label>
+                      <MetricRow label="Share value" value={fmtKES(carryoverShareValue)} />
+                      <MetricRow label="Fee buckets total" value={fmtKES(carryoverFeeTotal)} />
+                      <MetricRow
+                        label="Loan repayments derived"
+                        value={fmtKES(carryoverLoanRepaymentsRecorded)}
+                      />
+                      <MetricRow
+                        label="Purpose pool"
+                        value={fmtKES(carryoverBreakdown.purposePoolBalance)}
+                      />
+                    </div>
+                    <div className="rounded-xl border border-border bg-card p-4 md:col-span-2 xl:col-span-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">
+                            Completed loans in redistribution flow
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Choose how many finished loan cycles to account for, then fill each tile
+                            independently.
+                          </div>
+                        </div>
+                        <select
+                          value={guidedClosedLoans.length}
+                          onChange={(event) => {
+                            const count = Number(event.target.value);
+                            setGuidedClosedLoans((current) =>
+                              Array.from({ length: count }, (_, index) => {
+                                const existingLoan = current[index];
+                                return existingLoan
+                                  ? {
+                                      ...existingLoan,
+                                      memberId: selectedClient.id,
+                                      loanCycleNumber: index + 1,
+                                      status: "closed",
+                                      finished: true,
+                                    }
+                                  : {
+                                      ...blankCarryoverLoan(selectedClient.id, index + 1),
+                                      label: `Completed loan ${index + 1}`,
+                                      status: "closed",
+                                      finished: true,
+                                    };
+                              }),
+                            );
+                          }}
+                          className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                        >
+                          {Array.from({ length: 11 }, (_, index) => index).map((count) => (
+                            <option key={count} value={count}>
+                              {count} loan{count === 1 ? "" : "s"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        {guidedClosedLoans.map((loan, index) => (
+                          <GuidedCompletedLoanCard
+                            key={loan.id || `${selectedClient.id}-guided-${index}`}
+                            index={index}
+                            loan={loan}
+                            summary={
+                              guidedClosedLoanSummaries[index]?.summary ??
+                              summarizeLegacyCarryoverLoan(loan, policySettings)
+                            }
+                            onChange={(nextLoan) =>
+                              setGuidedClosedLoans((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? nextLoan : item,
+                                ),
+                              )
+                            }
+                          />
+                        ))}
+                        {guidedClosedLoans.length === 0 && (
+                          <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                            Set the completed-loan count above to expand the loan tiles.
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <Field label="First loan start date">
                       <input
@@ -1583,6 +1979,11 @@ function PolicyCenterPage() {
                         value={fmtKES(derivedCarryoverTotalCollected)}
                       />
                       <MetricCard
+                        label="Undistributed balance"
+                        value={fmtKES(carryoverUndistributedBalance)}
+                        tone={Math.abs(carryoverUndistributedBalance) <= 1 ? "success" : "warning"}
+                      />
+                      <MetricCard
                         label="Derived pending balance"
                         value={fmtKES(
                           carryoverLoanSummaries.reduce(
@@ -1593,11 +1994,7 @@ function PolicyCenterPage() {
                       />
                       <MetricCard
                         label="Completed carryover cycles"
-                        value={carryoverLoanSummaries
-                          .filter(
-                            ({ loan, summary }) => loan.status === "closed" || summary.isFinished,
-                          )
-                          .length.toFixed(0)}
+                        value={carryoverCompletedCycles.toFixed(0)}
                       />
                     </div>
                     <Field label="Notes" className="md:col-span-2 xl:col-span-4">
@@ -1616,8 +2013,9 @@ function PolicyCenterPage() {
                   </div>
                   <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
                     Saving carryover balances updates the member's live savings, share units, and
-                    fee-status flags. Carryover totals, balances, and completed cycles are derived
-                    from the figures above plus the saved carryover loans so the page stays in sync.
+                    fee-status flags. The total deposit figure now includes savings, share value,
+                    completed-loan collections, fee buckets, investments, purpose pool, and other
+                    collected money so every client coin stays visible in one guided view.
                   </div>
                 </Section>
 
@@ -2323,7 +2721,7 @@ function blankCarryoverProfile(memberId: string): LegacyCarryoverProfile {
     stickerFeePaid: false,
     firstUpfrontPaid: false,
     completedLoanCycles: 0,
-    collectionBreakdown: {},
+    collectionBreakdown: defaultCarryoverBreakdown(),
   };
 }
 
@@ -2343,6 +2741,64 @@ function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryo
     finished: false,
     penaltyWaivedAmount: 0,
   };
+}
+
+function defaultCarryoverFeeBuckets(): CarryoverFeeBuckets {
+  return {
+    membership: 0,
+    card: 0,
+    sticker: 0,
+    processing: 0,
+    insurance: 0,
+    transaction: 0,
+  };
+}
+
+function defaultCarryoverBreakdown(): CarryoverCollectionBreakdown {
+  return {
+    totalDepositsRecorded: 0,
+    purposePoolBalance: 0,
+    feeBuckets: defaultCarryoverFeeBuckets(),
+  };
+}
+
+function readCarryoverBreakdown(
+  value: Record<string, unknown> | undefined,
+): CarryoverCollectionBreakdown {
+  const next = value && typeof value === "object" ? value : {};
+  const feeBuckets =
+    next.feeBuckets && typeof next.feeBuckets === "object"
+      ? (next.feeBuckets as Record<string, unknown>)
+      : {};
+  return {
+    totalDepositsRecorded: Number(next.totalDepositsRecorded ?? 0) || 0,
+    purposePoolBalance: Number(next.purposePoolBalance ?? 0) || 0,
+    feeBuckets: {
+      membership: Number(feeBuckets.membership ?? 0) || 0,
+      card: Number(feeBuckets.card ?? 0) || 0,
+      sticker: Number(feeBuckets.sticker ?? 0) || 0,
+      processing: Number(feeBuckets.processing ?? 0) || 0,
+      insurance: Number(feeBuckets.insurance ?? 0) || 0,
+      transaction: Number(feeBuckets.transaction ?? 0) || 0,
+    },
+  };
+}
+
+function hydrateCarryoverProfile(profile: LegacyCarryoverProfile): LegacyCarryoverProfile {
+  return {
+    ...profile,
+    collectionBreakdown: readCarryoverBreakdown(profile.collectionBreakdown),
+  };
+}
+
+function resolveRecordedCarryoverTotal(
+  profile: Pick<LegacyCarryoverProfile, "totalCollected">,
+  breakdown: CarryoverCollectionBreakdown,
+  allocatedTotal: number,
+) {
+  if (breakdown.totalDepositsRecorded > 0) return breakdown.totalDepositsRecorded;
+  if (profile.totalCollected > 0) return Math.max(profile.totalCollected, allocatedTotal);
+  return allocatedTotal;
 }
 
 function addWaterfallStep(
@@ -2588,6 +3044,83 @@ function buildClientRating(
     return { label: "B - Stable", detail: "Mostly healthy, keep watching collections." };
   if (score >= 55) return { label: "C - Watch", detail: "Emerging repayment or penalty pressure." };
   return { label: "D - High Risk", detail: "Frequent arrears, penalties, or unresolved balances." };
+}
+
+function GuidedCompletedLoanCard({
+  index,
+  loan,
+  summary,
+  onChange,
+}: {
+  index: number;
+  loan: LegacyCarryoverLoan;
+  summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+  onChange: (loan: LegacyCarryoverLoan) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/10 p-4">
+      <div className="mb-3 text-sm font-medium">Completed loan {index + 1}</div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Label">
+          <input
+            value={loan.label}
+            onChange={(event) => onChange({ ...loan, label: event.target.value })}
+            className="input"
+          />
+        </Field>
+        <NumberField
+          label="Net disbursed"
+          value={loan.principal}
+          onChange={(value) => onChange({ ...loan, principal: value })}
+        />
+        <Field label="Term days">
+          <select
+            value={loan.termDays}
+            onChange={(event) =>
+              onChange({
+                ...loan,
+                termDays: Number(event.target.value) as 7 | 14 | 30 | 60 | 90,
+              })
+            }
+            className="input"
+          >
+            {[7, 14, 30, 60, 90].map((days) => (
+              <option key={days} value={days}>
+                {days} days
+              </option>
+            ))}
+          </select>
+        </Field>
+        <NumberField
+          label="Interest override %"
+          value={loan.interestRatePct}
+          onChange={(value) => onChange({ ...loan, interestRatePct: value })}
+        />
+        <NumberField
+          label="Daily savings"
+          value={loan.dailySavingsAmount}
+          onChange={(value) => onChange({ ...loan, dailySavingsAmount: value })}
+        />
+        <Field label="Start date">
+          <input
+            type="date"
+            value={loan.startDate}
+            onChange={(event) => onChange({ ...loan, startDate: event.target.value })}
+            className="input"
+          />
+        </Field>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Loan repayment total" value={fmtKES(summary.totalRepayment)} />
+        <MetricCard label="Daily savings accrued" value={fmtKES(summary.totalSavingsAccrued)} />
+        <MetricCard label="Cash through cycle" value={fmtKES(summary.totalExpectedCollected)} />
+      </div>
+      <div className="mt-3 text-xs text-muted-foreground">
+        The redistribution deducts the closed loan repayment total from the client record. The daily
+        savings leg should still be reflected in savings, shares, or purpose pool above.
+      </div>
+    </div>
+  );
 }
 
 function Field({

@@ -2,14 +2,14 @@ import { Section } from "@/components/ui-bits";
 import {
   useStore,
   fmtKES,
+  loanPricingPreview,
   loanRateForTerm,
-  loanScheduleTotal,
   normalizeLoanTermDays,
-  sbcDeductions,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
+  type LoanChargeMode,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
 import { useEffect, useMemo, useState } from "react";
@@ -42,6 +42,8 @@ export function RepeatApplication({
   const [repaymentPlan, setRepaymentPlan] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
   const [repaymentDays, setRepaymentDays] = useState(30);
   const [savingsPlan, setSavingsPlan] = useState<"50" | "100">("100");
+  const [processingFeeMode, setProcessingFeeMode] = useState<LoanChargeMode>("financed");
+  const [insuranceFeeMode, setInsuranceFeeMode] = useState<LoanChargeMode>("financed");
   const [confirmKYC, setConfirmKYC] = useState(false);
   const [confirmKin, setConfirmKin] = useState(false);
   const [confirmGuar, setConfirmGuar] = useState(false);
@@ -57,22 +59,26 @@ export function RepeatApplication({
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDays(repaymentDays);
     const ratePct = loanRateForTerm(termDays);
-    const { interest, total } = loanScheduleTotal(
-      loanAmount,
+    const pricing = loanPricingPreview({
+      netAmount: loanAmount,
+      termDays,
       ratePct,
-      termPeriodsFromDays(termDays),
-    );
-    const ded = sbcDeductions(loanAmount);
+      processingFeeMode,
+      insuranceFeeMode,
+      dailySavingsAmount: Number(savingsPlan),
+    });
+    const ded = pricing.deductions;
     return {
       ratePct,
       termDays,
-      interest,
-      total,
+      interest: pricing.interest,
+      total: pricing.totalRepayment,
       ded,
-      net: loanAmount - ded.total,
-      daily: total / termDays,
+      net: pricing.netDisbursedAmount,
+      financedPrincipal: pricing.financedPrincipal,
+      daily: pricing.dailyLoanInstallment,
     };
-  }, [loanAmount, repaymentDays]);
+  }, [insuranceFeeMode, loanAmount, processingFeeMode, repaymentDays, savingsPlan]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
@@ -88,6 +94,14 @@ export function RepeatApplication({
       startDate: new Date().toISOString().slice(0, 10),
       officerId: currentUser.id,
       status: "pending",
+      financedPrincipalAmount: calc.financedPrincipal,
+      netDisbursedAmount: calc.net,
+      processingFeeAmount: calc.ded.processing,
+      insuranceFeeAmount: calc.ded.insurance,
+      transactionFeeAmount: calc.ded.transactionCost,
+      processingFeeMode,
+      insuranceFeeMode,
+      disbursementStatus: "not_requested",
       purpose,
     });
     toast.success("Repeat application submitted for review.");
@@ -187,6 +201,18 @@ export function RepeatApplication({
             onChange={(v) => setSavingsPlan(v as "50" | "100")}
             options={["50", "100"]}
           />
+          <Select
+            label="Processing Fee"
+            value={processingFeeMode}
+            onChange={(v) => setProcessingFeeMode(v as LoanChargeMode)}
+            options={["financed", "upfront"]}
+          />
+          <Select
+            label="Insurance Fee"
+            value={insuranceFeeMode}
+            onChange={(v) => setInsuranceFeeMode(v as LoanChargeMode)}
+            options={["financed", "upfront"]}
+          />
         </div>
       </Section>
 
@@ -204,13 +230,14 @@ export function RepeatApplication({
               value={fmtKES(calc.ded.insurance)}
             />
             <Row
-              label={`Transaction Cost (${SBC_FEES.transactionCostPct}%)`}
+              label="Fixed Transaction Fee"
               value={fmtKES(calc.ded.transactionCost)}
             />
             <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
           </div>
           <div className="space-y-2">
             <Row label="Net Disbursable" value={fmtKES(calc.net)} bold />
+            <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
             <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
             <Row label="Daily Repayment" value={fmtKES(calc.daily)} />
             <Row label="Period" value={`${calc.termDays} days`} />

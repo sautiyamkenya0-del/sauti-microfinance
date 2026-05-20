@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Section } from "@/components/ui-bits";
 import {
   fmtKES,
+  loanPricingPreview,
   loanRateForTerm,
   roundUpKES,
-  sbcDeductions,
   upfrontTotalsForAmount,
   useStore,
+  type LoanChargeMode,
 } from "@/lib/store";
 
 type LoanType = "standard" | "premium";
@@ -53,6 +54,8 @@ export function Simulator() {
   const [dailySavings, setDailySavings] = useState(100);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [stickerOn, setStickerOn] = useState(false);
+  const [processingMode, setProcessingMode] = useState<LoanChargeMode>("financed");
+  const [insuranceMode, setInsuranceMode] = useState<LoanChargeMode>("financed");
 
   const dayOptions = useMemo(() => DAY_OPTIONS[loanType], [loanType]);
 
@@ -62,21 +65,19 @@ export function Simulator() {
 
   const calc = useMemo(() => {
     const ratePct = loanRateForTerm(days);
-    const interest = amount * (ratePct / 100);
-    const deductions = sbcDeductions(amount);
+    const pricing = loanPricingPreview({
+      netAmount: amount,
+      termDays: days,
+      ratePct,
+      processingFeeMode: processingMode,
+      insuranceFeeMode: insuranceMode,
+      dailySavingsAmount: dailySavings,
+    });
+    const deductions = pricing.deductions;
     const transaction = deductions.transactionCost;
     const registration = feePolicies.find((fee) => fee.key === "membership")?.amount ?? 500;
     const membership = feePolicies.find((fee) => fee.key === "card")?.amount ?? 500;
     const sticker = stickerOn ? (feePolicies.find((fee) => fee.key === "sticker")?.amount ?? 500) : 0;
-
-    const totalRepayment = amount + interest + transaction;
-    const rawDaily = totalRepayment / days;
-    const dailyBeforeRound = rawDaily + dailySavings;
-    const dailyInclusive = roundUpKES(dailyBeforeRound, 5);
-    const roundOff = Math.max(0, dailyInclusive - dailyBeforeRound);
-    const dailyLoan = dailyInclusive - dailySavings;
-    const totalSavingsAccrued = dailySavings * days;
-    const grandTotalCollected = dailyInclusive * days;
 
     const upfrontTotals = upfrontTotalsForAmount(amount, {
       membershipFeeAmount: registration,
@@ -84,7 +85,7 @@ export function Simulator() {
       stickerFeeAmount: sticker,
       includeSticker: stickerOn,
     });
-    const netDisbursed = amount - deductions.total;
+    const totalUpfrontNow = upfrontTotals.totalUpfrontNow + deductions.totalUpfrontCharges;
 
     const dueDates = Array.from({ length: days }, (_, i) => {
       const d = new Date(startDate);
@@ -93,28 +94,31 @@ export function Simulator() {
     });
 
     return {
-      interest,
+      interest: pricing.interest,
       processing: deductions.processing,
       insurance: deductions.insurance,
       transaction,
       registration,
       membership,
       sticker,
-      totalRepayment,
-      rawDaily,
-      dailyBeforeRound,
-      dailyLoan,
-      roundOff,
-      dailyInclusive,
-      totalSavingsAccrued,
-      grandTotalCollected,
+      totalRepayment: pricing.totalRepayment,
+      rawDaily: pricing.totalRepayment / Math.max(1, days),
+      dailyBeforeRound: pricing.totalRepayment / Math.max(1, days) + dailySavings,
+      dailyLoan: pricing.dailyLoanInstallment,
+      roundOff: pricing.roundOff,
+      dailyInclusive: pricing.dailyInclusive,
+      totalSavingsAccrued: pricing.totalSavingsAccrued,
+      grandTotalCollected: pricing.grandTotalCollected,
       upfront: upfrontTotals.total,
-      totalUpfrontNow: upfrontTotals.totalUpfrontNow,
-      netDisbursed,
+      totalUpfrontNow,
+      netDisbursed: pricing.netDisbursedAmount,
+      financedPrincipal: pricing.financedPrincipal,
+      upfrontCharges: deductions.totalUpfrontCharges,
+      financedCharges: deductions.totalFinancedCharges,
       dueDates,
       tier: upfrontTotals.tier,
     };
-  }, [amount, dailySavings, days, feePolicies, startDate, stickerOn]);
+  }, [amount, dailySavings, days, feePolicies, insuranceMode, processingMode, startDate, stickerOn]);
 
   const lt = LOAN_TYPES.find((t) => t.v === loanType)!;
 
@@ -224,6 +228,28 @@ export function Simulator() {
               />
             </Field>
 
+            <Field label="Processing Fee">
+              <select
+                value={processingMode}
+                onChange={(e) => setProcessingMode(e.target.value as LoanChargeMode)}
+                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              >
+                <option value="financed">Add to loan</option>
+                <option value="upfront">Pay upfront</option>
+              </select>
+            </Field>
+
+            <Field label="Insurance Fee">
+              <select
+                value={insuranceMode}
+                onChange={(e) => setInsuranceMode(e.target.value as LoanChargeMode)}
+                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              >
+                <option value="financed">Add to loan</option>
+                <option value="upfront">Pay upfront</option>
+              </select>
+            </Field>
+
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -246,7 +272,7 @@ export function Simulator() {
               <Tile
                 label="Total Repayment"
                 value={fmtKES(calc.totalRepayment)}
-                sub="Principal + interest + transaction"
+                sub="Financed principal + interest"
               />
               <Tile
                 label="Daily Repayment Inclusive"
@@ -272,11 +298,11 @@ export function Simulator() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Mini label="Processing Fee" value={fmtKES(calc.processing)} />
               <Mini label="Insurance Fee" value={fmtKES(calc.insurance)} />
-              <Mini
-                label={`Transaction Cost (${policySettings.percentages.transactionCostPct}%)`}
-                value={fmtKES(calc.transaction)}
-              />
+              <Mini label="Fixed Transaction Fee" value={fmtKES(calc.transaction)} />
+              <Mini label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
               <Mini label="Net Disbursed" value={fmtKES(calc.netDisbursed)} />
+              <Mini label="Financed Charges" value={fmtKES(calc.financedCharges)} />
+              <Mini label="Upfront Charges" value={fmtKES(calc.upfrontCharges)} />
               <Mini label="Membership Fee" value={fmtKES(calc.registration)} />
               <Mini label="Membership Card" value={fmtKES(calc.membership)} />
               <Mini label="Sticker Fee" value={fmtKES(calc.sticker)} />
