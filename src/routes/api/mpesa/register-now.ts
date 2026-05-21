@@ -66,8 +66,9 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
             return Response.json({ ok: false, error: msg, tokenData }, { status: 502, headers: NO_STORE_HEADERS });
           }
 
-          const confirmationUrl = `https://${domain}/api/public/mpesa/confirmation`;
-          const validationUrl = `https://${domain}/api/public/mpesa/validation`;
+          // Use URLs that do not contain the word "mpesa" (Safaricom rejects URLs containing that word)
+          const confirmationUrl = `https://${domain}/api/public/payments/confirmation`;
+          const validationUrl = `https://${domain}/api/public/payments/validation`;
 
           const registerUrl =
             env === "sandbox"
