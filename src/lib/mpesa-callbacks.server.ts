@@ -272,8 +272,26 @@ export async function handleMpesaConfirmationRequest(request: Request) {
   }
 
   try {
+    console.info("mpesa confirmation request body", body);
+    await logErrorToServer({
+      level: "info",
+      category: "mpesa.confirmation.payload",
+      message: "M-Pesa confirmation callback received",
+      context: {
+        body,
+      },
+    });
+
     const normalized = await normalizeConfirmationBody(body);
     const expectedShortcodes = await listConfiguredMpesaShortcodes();
+    console.info("mpesa confirmation normalized", {
+      account: normalized.account,
+      amount: normalized.amount,
+      mpesaRef: normalized.eventRef,
+      success: normalized.success,
+      businessShortCode: normalized.businessShortCode,
+      payerPhone: normalized.payerPhone,
+    });
     if (
       expectedShortcodes.length > 0 &&
       normalized.businessShortCode &&
