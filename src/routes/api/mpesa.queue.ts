@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
-import { requireStaffActor } from "@/lib/auth.server";
+import { requireManagerOrDirectorActor, requireStaffActor } from "@/lib/auth.server";
 import {
   applyMpesaPaymentToDatabase,
   cleanupDuplicateTransactionRefs,
