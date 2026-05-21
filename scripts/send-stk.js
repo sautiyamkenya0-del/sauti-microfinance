@@ -67,7 +67,7 @@ function formatPhone(value) {
       PartyA: msisdn,
       PartyB: shortcode,
       PhoneNumber: msisdn,
-      CallBackURL: process.env.CALLBACK_URL || 'https://example.com/api/public/mpesa/confirmation',
+      CallBackURL: process.env.CALLBACK_URL || 'https://business.sautiyamkenya.co.ke/api/confirmation',
       AccountReference: process.env.ACCOUNT_REF || 'SBC',
       TransactionDesc: process.env.DESCRIPTION || 'Sauti test',
     };
