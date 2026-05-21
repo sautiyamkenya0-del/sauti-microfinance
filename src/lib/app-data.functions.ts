@@ -446,12 +446,13 @@ async function insertTransactionRow(row: {
   ref?: string | null;
   account?: string | null;
   payer_name?: string | null;
+  dedupeByRef?: boolean;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   await ensureSystemStaffActor(supabaseAdmin, row.by_staff);
 
   const ref = row.ref?.trim();
-  if (ref) {
+  if (ref && row.dedupeByRef) {
     const existingTransactionId = await resolveExistingTransactionRef(supabaseAdmin, ref);
     if (existingTransactionId) return existingTransactionId;
   }
@@ -506,7 +507,7 @@ export async function cleanupDuplicateTransactionRefs() {
   const supabaseAdmin = await requireSupabaseAdmin();
   const { data, error } = await supabaseAdmin
     .from("transactions")
-    .select("id, ref, type, member_id, created_at")
+    .select("id, ref, type, member_id, loan_id, amount, note, account, payer_name, created_at")
     .not("ref", "is", null)
     .order("ref", { ascending: true })
     .order("created_at", { ascending: true });
@@ -525,16 +526,32 @@ export async function cleanupDuplicateTransactionRefs() {
   let removed = 0;
   for (const [, refRows] of grouped.entries()) {
     if (refRows.length <= 1) continue;
-    const preferred =
-      refRows.find((row) => row.type !== "mpesa_unallocated" && row.member_id) ?? refRows[0];
-    const duplicateIds = refRows.filter((row) => row.id !== preferred.id).map((row) => row.id);
-    if (duplicateIds.length === 0) continue;
-    const { error: deleteError } = await supabaseAdmin
-      .from("transactions")
-      .delete()
-      .in("id", duplicateIds);
-    if (deleteError) throw new Error(deleteError.message);
-    removed += duplicateIds.length;
+    const seen = new Map<string, any>();
+    const duplicateIds: string[] = [];
+    for (const row of refRows) {
+      const fingerprint = JSON.stringify({
+        type: row.type ?? "",
+        amount: Number(row.amount ?? 0),
+        member_id: row.member_id ?? "",
+        loan_id: row.loan_id ?? "",
+        note: String(row.note ?? "").trim(),
+        account: String(row.account ?? "").trim(),
+        payer_name: String(row.payer_name ?? "").trim(),
+      });
+      if (!seen.has(fingerprint)) {
+        seen.set(fingerprint, row);
+        continue;
+      }
+      duplicateIds.push(row.id);
+    }
+    if (duplicateIds.length > 0) {
+      const { error: deleteError } = await supabaseAdmin
+        .from("transactions")
+        .delete()
+        .in("id", duplicateIds);
+      if (deleteError) throw new Error(deleteError.message);
+      removed += duplicateIds.length;
+    }
   }
 
   return removed;
@@ -609,7 +626,52 @@ async function createUnallocatedMpesaTransaction(args: {
     ref: args.mpesaRef ?? null,
     account: args.account,
     payer_name: args.payerName ?? null,
+    dedupeByRef: true,
   });
+}
+
+async function insertMpesaReceiptAllocationRow(args: {
+  eventId?: string | null;
+  mpesaRef?: string | null;
+  memberId?: string | null;
+  loanId?: string | null;
+  transactionId?: string | null;
+  allocationType: string;
+  amount: number;
+  note?: string | null;
+  createdAt?: string | null;
+}) {
+  const supabaseAdmin = await requireSupabaseAdmin();
+  const id = `MRA${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  const { error } = await (supabaseAdmin as any).from("mpesa_receipt_allocations").insert({
+    id,
+    event_id: args.eventId ?? null,
+    mpesa_ref: args.mpesaRef?.trim() || null,
+    member_id: args.memberId ?? null,
+    loan_id: args.loanId ?? null,
+    transaction_id: args.transactionId ?? null,
+    allocation_type: args.allocationType,
+    amount: args.amount,
+    note: args.note ?? null,
+    created_at: args.createdAt ?? undefined,
+  });
+  if (error) throw new Error(error.message);
+  return id;
+}
+
+function isInternalRedistributionTransactionRow(row: {
+  by_staff?: string | null;
+  note?: string | null;
+}) {
+  const note = String(row.note ?? "")
+    .trim()
+    .toLowerCase();
+  if (!note) return false;
+  return (
+    note.startsWith("policy redistribution:") ||
+    note.startsWith("purpose pool reallocation ->") ||
+    note.startsWith("round-off captured from m-pesa receipt")
+  );
 }
 
 async function findExistingMpesaTransaction(args: {
@@ -1128,6 +1190,11 @@ export async function applyMpesaPaymentToDatabase(args: {
     account?: string | null;
     payer_name?: string | null;
   }> = [];
+  const allocationBatch: Array<{
+    allocationType: string;
+    note?: string | null;
+    loanId?: string | null;
+  }> = [];
   const penaltiesCleared: { id: string; amount: number }[] = [];
   let primary:
     | {
@@ -1167,6 +1234,16 @@ export async function applyMpesaPaymentToDatabase(args: {
       account: norm,
       payer_name: args.payerName,
       note: `Investment top-up via Paybill ${norm}`,
+    });
+    await insertMpesaReceiptAllocationRow({
+      eventId: args.eventId,
+      mpesaRef: args.mpesaRef,
+      memberId,
+      transactionId: primaryTransactionId,
+      allocationType: "investor_contribution",
+      amount: investorAmount,
+      note: `Investment top-up via Paybill ${norm}`,
+      createdAt: paymentCreatedAt ?? null,
     });
 
     const { error: updateInvestorError } = await supabaseAdmin
@@ -1293,6 +1370,30 @@ export async function applyMpesaPaymentToDatabase(args: {
     return currentShareUnits() * SHARE_PRICE;
   }
 
+  function queueTransaction(
+    row: {
+      date?: string;
+      created_at?: string | null;
+      type: string;
+      amount: number;
+      member_id?: string | null;
+      loan_id?: string | null;
+      by_staff?: string | null;
+      note?: string | null;
+      ref?: string | null;
+      account?: string | null;
+      payer_name?: string | null;
+    },
+    allocationType: string,
+  ) {
+    txBatch.push(row);
+    allocationBatch.push({
+      allocationType,
+      note: row.note ?? null,
+      loanId: row.loan_id ?? null,
+    });
+  }
+
   function queueSavingsDeposit(applied: number, notePrefix: string) {
     if (applied <= 0) return;
     const rounded = roundUpKES(applied, roundOffStep);
@@ -1302,7 +1403,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       applied,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
-    txBatch.push({
+    queueTransaction({
       date: paymentDate,
       created_at: paymentCreatedAt ?? null,
       type: "deposit",
@@ -1313,7 +1414,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       account: norm,
       payer_name: args.payerName,
       note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    });
+    }, "deposit");
     memberPatch.savings_balance = currentSavingsBalance() + applied;
     if (surplus > 0) toRoundOff += surplus;
     if (currentSavingsBalance() < mandatorySavingsThreshold) {
@@ -1336,7 +1437,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       actualApplied,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
-    txBatch.push({
+    queueTransaction({
       date: paymentDate,
       created_at: paymentCreatedAt ?? null,
       type: "share_purchase",
@@ -1347,7 +1448,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       account: norm,
       payer_name: args.payerName,
       note: `Mandatory shares via Paybill ${norm}`,
-    });
+    }, "share_purchase");
     memberPatch.shares = currentShareUnits() + wholeUnits;
     notes.push(
       `${notePrefix} Converted ${actualApplied}/= into ${wholeUnits} mandatory share unit(s).`,
@@ -1357,7 +1458,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   function queuePurposePoolContribution(applied: number, reason: string) {
     if (applied <= 0) return;
     setPrimaryIfMissing("fee_payment", applied, `Purpose pool via Paybill ${norm}`);
-    txBatch.push({
+    queueTransaction({
       date: paymentDate,
       created_at: paymentCreatedAt ?? null,
       type: "fee_payment",
@@ -1368,7 +1469,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       account: norm,
       payer_name: args.payerName,
       note: `Purpose pool contribution (auto) - ${reason}`,
-    });
+    }, "purpose_pool");
     notes.push(`Routed ${applied}/= into the internal purpose pool (${reason}).`);
   }
 
@@ -1388,7 +1489,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
       activeLoan.id,
     );
-    txBatch.push({
+    queueTransaction({
       date: paymentDate,
       created_at: paymentCreatedAt ?? null,
       type: "loan_repayment",
@@ -1400,7 +1501,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       account: norm,
       payer_name: args.payerName,
       note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    });
+    }, "loan_repayment");
 
     const nextPaid = Number(activeLoan.paid ?? 0) + safeApplied;
     const nextBalance = Math.max(0, summary.total - nextPaid);
@@ -1495,7 +1596,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       remaining -= fee.amount;
       memberPatch[fee.key] = true;
       setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
-      txBatch.push({
+      queueTransaction({
         date: paymentDate,
         created_at: paymentCreatedAt ?? null,
         type: "fee_payment",
@@ -1506,7 +1607,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         account: norm,
         payer_name: args.payerName,
         note: `${fee.label} (auto)`,
-      });
+      }, "fee_payment");
       notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
       continue;
     }
@@ -1533,8 +1634,22 @@ export async function applyMpesaPaymentToDatabase(args: {
     remaining = 0;
   }
 
-  for (const tx of txBatch) {
+  for (const [index, tx] of txBatch.entries()) {
     const txId = await insertTransactionRow(tx);
+    const allocation = allocationBatch[index];
+    if (allocation) {
+      await insertMpesaReceiptAllocationRow({
+        eventId: args.eventId,
+        mpesaRef: args.mpesaRef,
+        memberId,
+        loanId: allocation.loanId ?? tx.loan_id ?? null,
+        transactionId: txId,
+        allocationType: allocation.allocationType,
+        amount: Number(tx.amount ?? 0),
+        note: allocation.note ?? tx.note ?? null,
+        createdAt: paymentCreatedAt ?? null,
+      });
+    }
     if (
       !primaryTransactionId &&
       primary &&
@@ -1548,12 +1663,22 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   if (toRoundOff > 0) {
-    await insertRoundOffRow({
+    const roundOffId = await insertRoundOffRow({
       memberId,
       amount: toRoundOff,
       source: primary?.type === "deposit" ? "savings_deposit" : "loan_repayment",
       date: paymentDate,
       ref: args.mpesaRef,
+    });
+    await insertMpesaReceiptAllocationRow({
+      eventId: args.eventId,
+      mpesaRef: args.mpesaRef,
+      memberId,
+      transactionId: null,
+      allocationType: "round_off",
+      amount: toRoundOff,
+      note: `Round-off captured from M-Pesa receipt (${roundOffId})`,
+      createdAt: paymentCreatedAt ?? null,
     });
   }
 
@@ -2181,6 +2306,56 @@ function mapTransactionRow(row: any) {
     by: row.by_staff ?? "",
     note: row.note ?? undefined,
   };
+}
+
+function mpesaRawTimestampValue(raw: Record<string, unknown> | null | undefined) {
+  const transTime = String(raw?.TransTime ?? raw?.TransactionDate ?? "").trim();
+  if (!/^\d{14}$/.test(transTime)) return undefined;
+  const year = transTime.slice(0, 4);
+  const month = transTime.slice(4, 6);
+  const day = transTime.slice(6, 8);
+  const hour = transTime.slice(8, 10);
+  const minute = transTime.slice(10, 12);
+  const second = transTime.slice(12, 14);
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`;
+}
+
+function mpesaDisplayTypeLabel(value?: string | null) {
+  switch (String(value ?? "").trim()) {
+    case "deposit":
+      return "deposit";
+    case "share_purchase":
+      return "share purchase";
+    case "loan_repayment":
+      return "loan repayment";
+    case "fee_payment":
+      return "fee payment";
+    case "investor_contribution":
+      return "investor contribution";
+    case "purpose_pool":
+      return "purpose pool";
+    case "mpesa_unallocated":
+      return "mpesa unallocated";
+    case "withdrawal":
+      return "withdrawal";
+    case "loan_disbursement":
+      return "loan disbursement";
+    case "staff_payroll":
+      return "staff payroll";
+    default:
+      return String(value ?? "mpesa");
+  }
+}
+
+function payoutPurposeToTransactionType(value?: string | null) {
+  switch (String(value ?? "").trim()) {
+    case "loan_disbursement":
+      return "loan_disbursement";
+    case "staff_payroll":
+      return "staff_payroll";
+    default:
+      return "withdrawal";
+  }
 }
 
 function mapPettyCashRow(row: any) {
@@ -2947,6 +3122,225 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     policySettings: mergePolicySettings((policySettingsResult.data ?? []).map(mapPolicySettingRow)),
   };
 });
+
+export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
+  .inputValidator((data: { memberId?: string; account?: string; query?: string } | undefined) => ({
+    memberId: String(data?.memberId ?? "").trim() || undefined,
+    account: String(data?.account ?? "").trim().toUpperCase() || undefined,
+    query: String(data?.query ?? "").trim().toLowerCase() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    await requireStaffActor();
+    const supabaseAdmin = await requireSupabaseAdmin();
+
+    const [events, allocations, members, payoutRequests] = await Promise.all([
+      fetchAllRows(() =>
+        supabaseAdmin
+          .from("mpesa_events")
+          .select("*")
+          .in("kind", ["confirmation", "b2c_request", "b2c_result", "b2c_timeout"])
+          .order("created_at", { ascending: false }),
+      ),
+      fetchAllRows(() =>
+        (supabaseAdmin as any)
+          .from("mpesa_receipt_allocations")
+          .select("*")
+          .order("created_at", { ascending: true }),
+      ),
+      fetchAllRows(() => supabaseAdmin.from("members").select("id, name")),
+      fetchAllRows(() =>
+        supabaseAdmin.from("system_payout_requests").select("*").order("created_at", {
+          ascending: false,
+        }),
+      ),
+    ]);
+
+    const memberNames = new Map(
+      members.map((row: any) => [String(row.id ?? "").trim(), String(row.name ?? "").trim()]),
+    );
+    const allocationsByEvent = new Map<string, any[]>();
+    for (const row of allocations) {
+      const eventId = String(row.event_id ?? "").trim();
+      if (!eventId) continue;
+      const bucket = allocationsByEvent.get(eventId) ?? [];
+      bucket.push(row);
+      allocationsByEvent.set(eventId, bucket);
+    }
+
+    const b2cResultsByRef = new Map<string, any>();
+    for (const event of events) {
+      if (String(event.kind ?? "") !== "b2c_result") continue;
+      const ref = String(event.mpesa_ref ?? "").trim();
+      if (ref && !b2cResultsByRef.has(ref)) b2cResultsByRef.set(ref, event);
+    }
+
+    const rows: any[] = [];
+
+    for (const event of events) {
+      const kind = String(event.kind ?? "").trim();
+      if (kind !== "confirmation") continue;
+
+      const raw = asJsonObject(event.raw);
+      const eventAllocations = (allocationsByEvent.get(String(event.id ?? "").trim()) ?? []).sort(
+        (a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+      );
+      const primaryAllocation = eventAllocations[0] ?? null;
+      const memberId =
+        String(primaryAllocation?.member_id ?? event.account ?? "").trim() || undefined;
+      const account = String(event.account ?? raw.BillRefNumber ?? "").trim().toUpperCase();
+      const receiptRef =
+        String(event.mpesa_ref ?? raw.TransID ?? raw.MpesaReceiptNumber ?? "").trim() || undefined;
+      const exactAt =
+        mpesaRawTimestampValue(raw) ?? String(event.created_at ?? "").trim() || undefined;
+      const primaryType =
+        String(primaryAllocation?.allocation_type ?? "").trim() || "mpesa_unallocated";
+      const receiptRow = {
+        id: String(event.id),
+        source: "mpesa_receipt",
+        direction: "in",
+        status: memberId ? "matched" : "unallocated",
+        type: primaryType,
+        typeLabel: mpesaDisplayTypeLabel(primaryType),
+        amount: toNumber(event.amount),
+        originalAmount: toNumber(event.amount),
+        account,
+        memberId,
+        memberName:
+          memberNames.get(memberId ?? "") ||
+          String(event.payer_name ?? "").trim() ||
+          String(raw.FirstName ?? "").trim() ||
+          undefined,
+        payerName: String(event.payer_name ?? "").trim() || undefined,
+        phone: String(event.phone ?? "").trim() || undefined,
+        mpesaRef: receiptRef,
+        businessShortCode:
+          String(raw.BusinessShortCode ?? raw.ShortCode ?? "").trim() || undefined,
+        exactReceivedAt: exactAt,
+        createdAt: String(event.created_at ?? "").trim() || exactAt,
+        note:
+          String(primaryAllocation?.note ?? "").trim() ||
+          String(raw.TransactionType ?? "Pay Bill").trim(),
+        allocationCount: eventAllocations.length,
+        allocations: eventAllocations.map((allocation) => ({
+          id: String(allocation.id),
+          transactionId: allocation.transaction_id ? String(allocation.transaction_id) : undefined,
+          type: String(allocation.allocation_type ?? "").trim(),
+          typeLabel: mpesaDisplayTypeLabel(allocation.allocation_type),
+          amount: toNumber(allocation.amount),
+          note: String(allocation.note ?? "").trim() || undefined,
+          memberId: allocation.member_id ? String(allocation.member_id) : undefined,
+          loanId: allocation.loan_id ? String(allocation.loan_id) : undefined,
+        })),
+        transactionIds: eventAllocations
+          .map((allocation) => String(allocation.transaction_id ?? "").trim())
+          .filter(Boolean),
+      };
+
+      if (data.memberId && receiptRow.memberId !== data.memberId) continue;
+      if (data.account && receiptRow.account !== data.account) continue;
+      if (data.query) {
+        const haystack = [
+          receiptRow.memberName,
+          receiptRow.account,
+          receiptRow.mpesaRef,
+          receiptRow.payerName,
+          receiptRow.typeLabel,
+          receiptRow.note,
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(data.query)) continue;
+      }
+
+      rows.push(receiptRow);
+    }
+
+    for (const request of payoutRequests) {
+      const account = String(request.account_reference ?? request.member_id ?? "").trim();
+      const memberId = String(request.member_id ?? "").trim() || undefined;
+      const purposeType = payoutPurposeToTransactionType(request.purpose);
+      const resultEvent =
+        b2cResultsByRef.get(String(request.conversation_id ?? "").trim()) ??
+        b2cResultsByRef.get(String(request.originator_conversation_id ?? "").trim()) ??
+        null;
+      const receiptRef =
+        String(request.mpesa_ref ?? "").trim() ||
+        String(resultEvent?.mpesa_ref ?? "").trim() ||
+        String(request.conversation_id ?? "").trim() ||
+        String(request.originator_conversation_id ?? "").trim() ||
+        undefined;
+      const exactAt =
+        mpesaRawTimestampValue(asJsonObject(resultEvent?.raw)) ??
+        String(resultEvent?.created_at ?? request.created_at ?? "").trim() ||
+        undefined;
+      const payoutRow = {
+        id: `payout-${request.id}`,
+        source: "mpesa_payout",
+        direction: "out",
+        status: String(request.status ?? "").trim() || "requested",
+        type: purposeType,
+        typeLabel: mpesaDisplayTypeLabel(purposeType),
+        amount: toNumber(request.amount),
+        originalAmount: toNumber(request.amount),
+        account,
+        memberId,
+        memberName:
+          memberNames.get(memberId ?? "") || String(request.receiver_staff_id ?? "").trim() || undefined,
+        payerName: undefined,
+        phone: String(request.phone ?? "").trim() || undefined,
+        mpesaRef: receiptRef,
+        businessShortCode: undefined,
+        exactReceivedAt: exactAt,
+        createdAt: String(request.created_at ?? "").trim() || exactAt,
+        note:
+          String(request.remarks ?? "").trim() ||
+          String(request.purpose ?? "").replace(/_/g, " ").trim() ||
+          undefined,
+        allocationCount: 0,
+        allocations: [],
+        transactionIds: request.transaction_id ? [String(request.transaction_id)] : [],
+      };
+
+      if (data.memberId && payoutRow.memberId !== data.memberId) continue;
+      if (data.account && payoutRow.account !== data.account) continue;
+      if (data.query) {
+        const haystack = [
+          payoutRow.memberName,
+          payoutRow.account,
+          payoutRow.mpesaRef,
+          payoutRow.typeLabel,
+          payoutRow.note,
+          payoutRow.status,
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(data.query)) continue;
+      }
+
+      rows.push(payoutRow);
+    }
+
+    rows.sort((a, b) =>
+      String(b.exactReceivedAt ?? b.createdAt ?? "").localeCompare(String(a.exactReceivedAt ?? a.createdAt ?? "")),
+    );
+
+    return rows;
+  });
+
+export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const actor = await requireDirectorActor();
+    const runtimeDb = await requireSupabaseAdmin();
+    const redistribution = await redistributePurposePoolBalances(runtimeDb, actor);
+    await auditAction({
+      actor,
+      action: "policy.redistribution.triggered",
+      targetType: "policy_settings",
+      summary: `${actor.name} triggered manual purpose-pool redistribution`,
+      details: redistribution,
+    });
+    return { ok: true, redistribution };
+  });
 
 export const createMemberRecord = createServerFn({ method: "POST" })
   .inputValidator(

@@ -1,11 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowDownCircle, ArrowUpCircle, ListOrdered, Scale } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, DirectorOnly, Section, StatCard } from "@/components/ui-bits";
+import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import { fmtKES, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/transactions")({
@@ -43,8 +46,24 @@ const OUTFLOWS: ReadonlyArray<string> = [
   "staff_payroll",
 ];
 
+function isInternalSyntheticTransaction(transaction: {
+  by?: string;
+  note?: string;
+}) {
+  const note = String(transaction.note ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    transaction.by === "MPESA" ||
+    note.startsWith("policy redistribution:") ||
+    note.startsWith("purpose pool reallocation ->") ||
+    note.startsWith("round-off captured from m-pesa receipt")
+  );
+}
+
 function TxPage() {
   const { transactions, members, staff, reloadAppData } = useStore();
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -52,11 +71,80 @@ function TxPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
+  const { data: mpesaAuditRows = [], refetch: refetchMpesaAudit } = useQuery({
+    queryKey: ["mpesa-receipt-audit"],
+    queryFn: () => fetchMpesaAudit({ data: {} }),
+  });
+
+  const hiddenTransactionIds = useMemo(
+    () => new Set(mpesaAuditRows.flatMap((row: any) => row.transactionIds ?? [])),
+    [mpesaAuditRows],
+  );
+
+  const ledgerRows = useMemo(
+    () =>
+      transactions
+        .filter(
+          (transaction) =>
+            !hiddenTransactionIds.has(transaction.id) && !isInternalSyntheticTransaction(transaction),
+        )
+        .map((transaction) => ({
+          id: transaction.id,
+          date: transaction.date,
+          createdAt: transaction.createdAt,
+          type: transaction.type,
+          amount: transaction.amount,
+          memberId: transaction.memberId,
+          loanId: transaction.loanId,
+          ref: transaction.ref,
+          by: transaction.by,
+          note: transaction.note,
+          account: transaction.account ?? transaction.memberId ?? "-",
+          displayName:
+            transaction.payerName ??
+            members.find((member) => member.id === transaction.memberId)?.name ??
+            transaction.note ??
+            "-",
+          status: undefined as string | undefined,
+          isMpesaAudit: false,
+        })),
+    [hiddenTransactionIds, members, transactions],
+  );
+
+  const mpesaRows = useMemo(
+    () =>
+      mpesaAuditRows.map((row: any) => ({
+        id: row.id,
+        date: String(row.exactReceivedAt ?? row.createdAt ?? "").slice(0, 10),
+        createdAt: row.exactReceivedAt ?? row.createdAt ?? undefined,
+        type: row.type,
+        amount: Number(row.originalAmount ?? row.amount ?? 0),
+        memberId: row.memberId ?? undefined,
+        loanId: undefined,
+        ref: row.mpesaRef ?? undefined,
+        by: row.direction === "out" ? "M-Pesa Payout" : "MPESA",
+        note: row.note ?? undefined,
+        account: row.account ?? row.memberId ?? "-",
+        displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
+        status: row.status ?? undefined,
+        isMpesaAudit: true,
+      })),
+    [mpesaAuditRows],
+  );
+
+  const rows = useMemo(
+    () =>
+      [...ledgerRows, ...mpesaRows].sort((a, b) =>
+        String(b.createdAt ?? b.date).localeCompare(String(a.createdAt ?? a.date)),
+      ),
+    [ledgerRows, mpesaRows],
+  );
+
   const list = useMemo(
     () =>
-      transactions.filter((transaction) => {
+      rows.filter((transaction) => {
         if (filter === "mpesa") {
-          if (transaction.by !== "MPESA") return false;
+          if (!transaction.isMpesaAudit) return false;
         } else if (filter !== "all" && transaction.type !== filter) {
           return false;
         }
@@ -65,7 +153,7 @@ function TxPage() {
         if (memberFilter && transaction.memberId !== memberFilter) return false;
         return true;
       }),
-    [transactions, filter, from, to, memberFilter],
+    [rows, filter, from, to, memberFilter],
   );
 
   const totals = useMemo(() => {
@@ -97,6 +185,7 @@ function TxPage() {
       }
       const result = await response.json();
       await reloadAppData();
+      await refetchMpesaAudit();
       toast.success(
         `Transactions refreshed. Processed ${result.processed} M-Pesa confirmation(s) and cleaned ${
           result.duplicatesRemoved ?? 0
@@ -110,20 +199,23 @@ function TxPage() {
     }
   }
 
-  const displayDateTime = (transaction: (typeof transactions)[number]) =>
+  const displayDateTime = (transaction: (typeof rows)[number]) =>
     transaction.createdAt ? new Date(transaction.createdAt).toLocaleString() : transaction.date;
 
   return (
     <>
-      <AppHeader title="Transactions" subtitle="Unified ledger across all financial activity." />
-      <main className="flex-1 p-6 lg:p-8 space-y-6">
+      <AppHeader
+        title="Transactions"
+        subtitle="Original receipts stay intact while allocations live in a separate audit trail."
+      />
+      <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="capital" />
         <DirectorOnly>
-          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Filtered Records"
               value={list.length}
-              hint={`Of ${transactions.length} total`}
+              hint={`Of ${rows.length} visible total`}
               icon={<ListOrdered className="h-5 w-5" />}
             />
             <StatCard
@@ -150,14 +242,14 @@ function TxPage() {
           </div>
         </DirectorOnly>
 
-        <div className="bg-card border border-border rounded-xl p-4 grid md:grid-cols-4 gap-3 items-end">
+        <div className="grid items-end gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-4">
           <label className="block">
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">From</span>
             <input
               type="date"
               value={from}
               onChange={(event) => setFrom(event.target.value)}
-              className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
@@ -166,7 +258,7 @@ function TxPage() {
               type="date"
               value={to}
               onChange={(event) => setTo(event.target.value)}
-              className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
@@ -176,7 +268,7 @@ function TxPage() {
             <select
               value={memberFilter}
               onChange={(event) => setMemberFilter(event.target.value)}
-              className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
             >
               <option value="">All members</option>
               {members.map((member) => (
@@ -189,12 +281,12 @@ function TxPage() {
           <div />
         </div>
 
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex flex-wrap items-center gap-2">
           {TYPES.map((type) => (
             <button
               key={type}
               onClick={() => setFilter(type)}
-              className={`px-3 py-1.5 rounded-full text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-muted"}`}
+              className={`rounded-full px-3 py-1.5 text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "border border-border bg-card hover:bg-muted"}`}
             >
               {type === "mpesa" ? "M-Pesa" : type.replace(/_/g, " ")}
             </button>
@@ -205,17 +297,17 @@ function TxPage() {
             disabled={isSyncing}
             className="ml-auto rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isSyncing ? "Refreshing…" : "Refresh transactions"}
+            {isSyncing ? "Refreshing..." : "Refresh transactions"}
           </button>
         </div>
         {lastRefreshedAt ? (
           <p className="text-xs text-muted-foreground">Last refreshed: {lastRefreshedAt}</p>
         ) : null}
 
-        <Section title={`Filtered Ledger (${list.length} of ${transactions.length})`}>
+        <Section title={`Filtered Ledger (${list.length} of ${rows.length})`}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="px-5 py-3 text-left">Name</th>
                   <th className="px-5 py-3 text-right">Amount</th>
@@ -235,7 +327,6 @@ function TxPage() {
                   </tr>
                 ) : null}
                 {list.map((transaction) => {
-                  const member = members.find((item) => item.id === transaction.memberId);
                   const staffMember = staff.find((item) => item.id === transaction.by);
                   const tone =
                     transaction.type === "mpesa_unallocated"
@@ -249,35 +340,28 @@ function TxPage() {
                           : transaction.type.includes("disbursement")
                             ? "destructive"
                             : "default";
-                  const account = transaction.account ?? transaction.memberId ?? "-";
-                  const displayName =
-                    transaction.payerName ?? member?.name ?? transaction.note ?? "-";
                   return (
                     <tr key={transaction.id} className="hover:bg-muted/30">
-                      <td className="px-5 py-3 font-medium">
-                        {displayName}
-                        {transaction.loanId ? (
-                          <span className="text-xs text-muted-foreground">
-                            {" "}
-                            - {transaction.loanId}
-                          </span>
-                        ) : null}
-                      </td>
+                      <td className="px-5 py-3 font-medium">{transaction.displayName}</td>
                       <td className="px-5 py-3 text-right font-semibold">
                         {fmtKES(transaction.amount)}
                       </td>
                       <td className="px-5 py-3">
                         <Badge tone={tone}>{transaction.type.replace(/_/g, " ")}</Badge>
                       </td>
-                      <td className="px-5 py-3 font-mono text-xs">{account}</td>
+                      <td className="px-5 py-3 font-mono text-xs">{transaction.account}</td>
                       <td className="px-5 py-3 font-mono text-xs">
                         {transaction.ref ?? transaction.id}
                       </td>
-                      <td className="px-5 py-3 text-muted-foreground text-xs">
+                      <td className="px-5 py-3 text-xs text-muted-foreground">
                         {displayDateTime(transaction)}
                       </td>
                       <td className="px-5 py-3 text-xs text-muted-foreground">
-                        {staffMember?.name ?? transaction.by}
+                        {transaction.isMpesaAudit
+                          ? transaction.status
+                            ? `${transaction.by} - ${transaction.status}`
+                            : transaction.by
+                          : staffMember?.name ?? transaction.by}
                       </td>
                     </tr>
                   );
