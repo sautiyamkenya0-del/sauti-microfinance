@@ -142,6 +142,7 @@ function AppLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
   const isMpesaPublicApi = pathname.startsWith("/api/public/mpesa");
+  const isMpesaRegisterNow = pathname === "/api/mpesa/register-now";
   const canDrainMpesaQueue =
     authMode === "staff" && (currentUser?.role === "director" || currentUser?.role === "manager");
 
@@ -153,7 +154,7 @@ function AppLayout() {
     );
   }
 
-  if (!isAuthenticated && !isLoginRoute && !isMpesaPublicApi) {
+  if (!isAuthenticated && !isLoginRoute && !isMpesaPublicApi && !isMpesaRegisterNow) {
     return (
       <>
         <SplashScreen />
