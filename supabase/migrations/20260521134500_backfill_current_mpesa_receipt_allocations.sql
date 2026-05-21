@@ -1,35 +1,3 @@
-create table if not exists public.mpesa_receipt_allocations (
-  id text primary key,
-  event_id uuid references public.mpesa_events(id) on delete cascade,
-  mpesa_ref text,
-  member_id text references public.members(id) on delete set null,
-  loan_id text references public.loans(id) on delete set null,
-  transaction_id text references public.transactions(id) on delete set null,
-  allocation_type text not null,
-  amount numeric(14,2) not null default 0,
-  note text,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists idx_mpesa_receipt_allocations_event
-  on public.mpesa_receipt_allocations(event_id, created_at desc);
-
-create index if not exists idx_mpesa_receipt_allocations_ref
-  on public.mpesa_receipt_allocations(mpesa_ref, created_at desc);
-
-create index if not exists idx_mpesa_receipt_allocations_member
-  on public.mpesa_receipt_allocations(member_id, created_at desc);
-
-drop index if exists public.idx_mpesa_receipt_allocations_unique_tx;
-
-create unique index if not exists idx_mpesa_receipt_allocations_unique_tx
-  on public.mpesa_receipt_allocations (
-    coalesce(event_id::text, ''),
-    transaction_id,
-    allocation_type
-  )
-  where transaction_id is not null;
-
 with mpesa_transaction_rows as (
   select
     coalesce(nullif(trim(tx.ref), ''), tx.id) as receipt_ref,
@@ -155,16 +123,6 @@ where tx.by_staff = 'MPESA'
       and existing.allocation_type = tx.type::text
   );
 
-update public.mpesa_receipt_allocations allocation
-set
-  event_id = event.id,
-  mpesa_ref = event.mpesa_ref
-from public.mpesa_events event
-where allocation.event_id is null
-  and event.kind = 'confirmation'
-  and coalesce(trim(allocation.mpesa_ref), '') <> ''
-  and event.mpesa_ref = allocation.mpesa_ref;
-
 insert into public.mpesa_receipt_allocations (
   id,
   event_id,
@@ -177,7 +135,7 @@ insert into public.mpesa_receipt_allocations (
   created_at
 )
 select
-  'MRA' || substr(md5(ro.id || ':' || coalesce(e.id::text, ro.ref, ro.id)), 1, 24),
+  'MRA' || substr(md5('round_off:' || ro.id || ':' || coalesce(e.id::text, ro.ref, ro.id)), 1, 24),
   e.id,
   coalesce(e.mpesa_ref, ro.ref),
   ro.member_id,
@@ -200,3 +158,13 @@ where ro.ref is not null
       and coalesce(existing.member_id, '') = coalesce(ro.member_id, '')
       and coalesce(existing.note, '') = 'Round-off captured from M-Pesa receipt'
   );
+
+update public.mpesa_receipt_allocations allocation
+set
+  event_id = event.id,
+  mpesa_ref = event.mpesa_ref
+from public.mpesa_events event
+where allocation.event_id is null
+  and event.kind = 'confirmation'
+  and coalesce(trim(allocation.mpesa_ref), '') <> ''
+  and event.mpesa_ref = allocation.mpesa_ref;

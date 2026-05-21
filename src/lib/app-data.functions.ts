@@ -3187,13 +3187,32 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
     const memberNames = new Map(
       members.map((row: any) => [String(row.id ?? "").trim(), String(row.name ?? "").trim()]),
     );
+    const confirmationRefs = new Set<string>();
+    for (const event of events) {
+      if (String(event.kind ?? "").trim() !== "confirmation") continue;
+      const raw = asJsonObject(event.raw);
+      const receiptRef = String(event.mpesa_ref ?? raw.TransID ?? raw.MpesaReceiptNumber ?? "")
+        .trim()
+        .toUpperCase();
+      if (receiptRef) confirmationRefs.add(receiptRef);
+    }
+
     const allocationsByEvent = new Map<string, any[]>();
+    const allocationsByReceiptRef = new Map<string, any[]>();
     for (const row of allocations) {
       const eventId = String(row.event_id ?? "").trim();
-      if (!eventId) continue;
-      const bucket = allocationsByEvent.get(eventId) ?? [];
+      if (eventId) {
+        const bucket = allocationsByEvent.get(eventId) ?? [];
+        bucket.push(row);
+        allocationsByEvent.set(eventId, bucket);
+        continue;
+      }
+
+      const receiptRef = String(row.mpesa_ref ?? "").trim();
+      if (!receiptRef) continue;
+      const bucket = allocationsByReceiptRef.get(receiptRef) ?? [];
       bucket.push(row);
-      allocationsByEvent.set(eventId, bucket);
+      allocationsByReceiptRef.set(receiptRef, bucket);
     }
 
     const b2cResultsByRef = new Map<string, any>();
@@ -3225,6 +3244,11 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       const exactAt = mpesaRawTimestampValue(raw) ?? (eventCreatedAt || undefined);
       const primaryType =
         String(primaryAllocation?.allocation_type ?? "").trim() || "mpesa_unallocated";
+      const allocatedAmount = eventAllocations.reduce(
+        (sum, allocation) => sum + toNumber(allocation.amount),
+        0,
+      );
+      const originalAmount = toNumber(event.amount) || allocatedAmount;
       const receiptRow = {
         id: String(event.id),
         source: "mpesa_receipt",
@@ -3232,8 +3256,8 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         status: memberId ? "matched" : "unallocated",
         type: primaryType,
         typeLabel: mpesaDisplayTypeLabel(primaryType),
-        amount: toNumber(event.amount),
-        originalAmount: toNumber(event.amount),
+        amount: originalAmount,
+        originalAmount,
         account,
         memberId,
         memberName:
@@ -3274,6 +3298,76 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
           receiptRow.account,
           receiptRow.mpesaRef,
           receiptRow.payerName,
+          receiptRow.typeLabel,
+          receiptRow.note,
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(data.query)) continue;
+      }
+
+      rows.push(receiptRow);
+    }
+
+    for (const [receiptRef, receiptAllocations] of allocationsByReceiptRef.entries()) {
+      if (confirmationRefs.has(receiptRef.toUpperCase())) continue;
+
+      const eventAllocations = receiptAllocations.sort((a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+      );
+      const primaryAllocation = eventAllocations[0] ?? null;
+      const memberId = String(primaryAllocation?.member_id ?? "").trim() || undefined;
+      const primaryType =
+        String(primaryAllocation?.allocation_type ?? "").trim() || "mpesa_unallocated";
+      const originalAmount = eventAllocations.reduce(
+        (sum, allocation) => sum + toNumber(allocation.amount),
+        0,
+      );
+      const createdAt = String(primaryAllocation?.created_at ?? "").trim() || undefined;
+      const receiptRow = {
+        id: `allocation-receipt-${receiptRef}`,
+        source: "mpesa_receipt",
+        direction: "in",
+        status: memberId ? "matched" : "unallocated",
+        type: primaryType,
+        typeLabel: mpesaDisplayTypeLabel(primaryType),
+        amount: originalAmount,
+        originalAmount,
+        account: memberId ?? "-",
+        memberId,
+        memberName: memberNames.get(memberId ?? "") || undefined,
+        payerName: undefined,
+        phone: undefined,
+        mpesaRef: receiptRef,
+        businessShortCode: undefined,
+        exactReceivedAt: createdAt,
+        createdAt,
+        note:
+          String(primaryAllocation?.note ?? "").trim() ||
+          "Backfilled from current M-Pesa ledger rows",
+        allocationCount: eventAllocations.length,
+        allocations: eventAllocations.map((allocation) => ({
+          id: String(allocation.id),
+          transactionId: allocation.transaction_id ? String(allocation.transaction_id) : undefined,
+          type: String(allocation.allocation_type ?? "").trim(),
+          typeLabel: mpesaDisplayTypeLabel(allocation.allocation_type),
+          amount: toNumber(allocation.amount),
+          note: String(allocation.note ?? "").trim() || undefined,
+          memberId: allocation.member_id ? String(allocation.member_id) : undefined,
+          loanId: allocation.loan_id ? String(allocation.loan_id) : undefined,
+        })),
+        transactionIds: eventAllocations
+          .map((allocation) => String(allocation.transaction_id ?? "").trim())
+          .filter(Boolean),
+      };
+
+      if (data.memberId && receiptRow.memberId !== data.memberId) continue;
+      if (data.account && receiptRow.account !== data.account) continue;
+      if (data.query) {
+        const haystack = [
+          receiptRow.memberName,
+          receiptRow.account,
+          receiptRow.mpesaRef,
           receiptRow.typeLabel,
           receiptRow.note,
         ]
