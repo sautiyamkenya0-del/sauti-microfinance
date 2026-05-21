@@ -222,6 +222,21 @@ export async function handleMpesaValidationRequest(request: Request) {
       .toUpperCase();
     const amount = numberValue(body.TransAmount ?? body.Amount);
     const payerName = buildC2bPayerName(body);
+    const phone = textValue(body.MSISDN ?? body.PhoneNumber);
+
+    console.info("mpesa validation request body", body);
+    await logErrorToServer({
+      level: "info",
+      category: "mpesa.validation.payload",
+      message: "M-Pesa validation callback received",
+      context: {
+        account,
+        amount,
+        payerName,
+        phone,
+        body,
+      },
+    });
 
     try {
       await recordMpesaValidationEvent({
@@ -229,7 +244,7 @@ export async function handleMpesaValidationRequest(request: Request) {
         account,
         amount,
         payerName,
-        phone: textValue(body.MSISDN ?? body.PhoneNumber),
+        phone,
       });
     } catch (error) {
       console.error("mpesa validation audit error", error);
@@ -248,6 +263,16 @@ export async function handleMpesaValidationRequest(request: Request) {
     return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error("mpesa validation parse error", error);
+    try {
+      await logErrorToServer({
+        level: "error",
+        category: "mpesa.validation.parse",
+        message: "Failed to parse validation callback body",
+        context: { error: String(error ?? "") },
+      });
+    } catch (_) {
+      /* ignore logging failure */
+    }
     return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
   }
 }
