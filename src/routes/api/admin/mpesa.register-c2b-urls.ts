@@ -14,7 +14,7 @@ const NO_STORE_HEADERS = {
 /**
  * Admin-only endpoint to register/update Safaricom C2B callback URLs.
  * This tells Safaricom where to send unprompted PayBill transactions (manual payments).
- * 
+ *
  * Call this once after deploying a new site to update Safaricom's routing.
  */
 export const Route = createFileRoute("/api/admin/mpesa/register-c2b-urls")({

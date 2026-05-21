@@ -1191,14 +1191,8 @@ export function summarizeLoanFixedFees(options?: LoanFixedFeeModes) {
     membershipFee: rows[0],
     cardFee: rows[1],
     stickerFee: rows[2],
-    totalUpfront: rows.reduce(
-      (sum, row) => sum + (row.mode === "upfront" ? row.amount : 0),
-      0,
-    ),
-    totalFinanced: rows.reduce(
-      (sum, row) => sum + (row.mode === "financed" ? row.amount : 0),
-      0,
-    ),
+    totalUpfront: rows.reduce((sum, row) => sum + (row.mode === "upfront" ? row.amount : 0), 0),
+    totalFinanced: rows.reduce((sum, row) => sum + (row.mode === "financed" ? row.amount : 0), 0),
   };
 }
 
@@ -1238,7 +1232,8 @@ export function loanPricingPreview(args: {
     0,
     Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
   );
-  const rawDailyInclusive = (schedule.total + dailySavingsAmount * termDays) / Math.max(1, termDays);
+  const rawDailyInclusive =
+    (schedule.total + dailySavingsAmount * termDays) / Math.max(1, termDays);
   const dailyInclusive = roundUpKES(rawDailyInclusive, 5);
 
   return {

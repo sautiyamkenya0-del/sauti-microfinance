@@ -14,7 +14,13 @@ import {
   type LoanProductType,
 } from "@/lib/store";
 
-const LOAN_TYPES: { value: LoanProductType; label: string; min: number; max: number; hint: string }[] = [
+const LOAN_TYPES: {
+  value: LoanProductType;
+  label: string;
+  min: number;
+  max: number;
+  hint: string;
+}[] = [
   {
     value: "standard",
     label: "Standard",
@@ -101,7 +107,7 @@ export function Simulator() {
       ? membershipPolicy.amount
       : selectedMember
         ? 0
-        : membershipPolicy?.amount ?? 500;
+        : (membershipPolicy?.amount ?? 500);
   const cardFeeAmount =
     cardPolicy &&
     feePolicyAppliesToMember(cardPolicy, previewMember, { hasActiveLoan: false }) &&
@@ -109,7 +115,7 @@ export function Simulator() {
       ? cardPolicy.amount
       : selectedMember
         ? 0
-        : cardPolicy?.amount ?? 500;
+        : (cardPolicy?.amount ?? 500);
   const stickerFeeAmount =
     stickerApplicable &&
     stickerPolicy &&
@@ -233,7 +239,9 @@ export function Simulator() {
               <p className="mt-1 text-xs text-muted-foreground">{currentLoanType.hint}</p>
             </Field>
 
-            <Field label={`Loan Amount (${fmtKES(currentLoanType.min)} - ${fmtKES(currentLoanType.max)})`}>
+            <Field
+              label={`Loan Amount (${fmtKES(currentLoanType.min)} - ${fmtKES(currentLoanType.max)})`}
+            >
               <input
                 type="number"
                 min={currentLoanType.min}
@@ -262,7 +270,9 @@ export function Simulator() {
                   type="number"
                   min={1}
                   value={requestedDays}
-                  onChange={(event) => setRequestedDays(Math.max(1, Number(event.target.value) || 0))}
+                  onChange={(event) =>
+                    setRequestedDays(Math.max(1, Number(event.target.value) || 0))
+                  }
                   className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
                 />
               </Field>
@@ -341,7 +351,12 @@ export function Simulator() {
                 value={registrationMode}
                 onChange={setRegistrationMode}
               />
-              <FeeModeField amount={cardFeeAmount} label="Membership Card" value={cardMode} onChange={setCardMode} />
+              <FeeModeField
+                amount={cardFeeAmount}
+                label="Membership Card"
+                value={cardMode}
+                onChange={setCardMode}
+              />
               <FeeModeField
                 amount={stickerFeeAmount}
                 label="Sticker"

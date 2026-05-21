@@ -46,10 +46,7 @@ const OUTFLOWS: ReadonlyArray<string> = [
   "staff_payroll",
 ];
 
-function isInternalSyntheticTransaction(transaction: {
-  by?: string;
-  note?: string;
-}) {
+function isInternalSyntheticTransaction(transaction: { by?: string; note?: string }) {
   const note = String(transaction.note ?? "")
     .trim()
     .toLowerCase();
@@ -86,7 +83,8 @@ function TxPage() {
       transactions
         .filter(
           (transaction) =>
-            !hiddenTransactionIds.has(transaction.id) && !isInternalSyntheticTransaction(transaction),
+            !hiddenTransactionIds.has(transaction.id) &&
+            !isInternalSyntheticTransaction(transaction),
         )
         .map((transaction) => ({
           id: transaction.id,
@@ -105,6 +103,7 @@ function TxPage() {
             members.find((member) => member.id === transaction.memberId)?.name ??
             transaction.note ??
             "-",
+          direction: OUTFLOWS.includes(transaction.type) ? "out" : "in",
           status: undefined as string | undefined,
           isMpesaAudit: false,
         })),
@@ -126,6 +125,7 @@ function TxPage() {
         note: row.note ?? undefined,
         account: row.account ?? row.memberId ?? "-",
         displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
+        direction: row.direction === "out" ? "out" : "in",
         status: row.status ?? undefined,
         isMpesaAudit: true,
       })),
@@ -158,10 +158,18 @@ function TxPage() {
 
   const totals = useMemo(() => {
     const inflow = list
-      .filter((transaction) => INFLOWS.includes(transaction.type))
+      .filter(
+        (transaction) =>
+          transaction.direction === "in" ||
+          (!transaction.isMpesaAudit && INFLOWS.includes(transaction.type)),
+      )
       .reduce((sum, transaction) => sum + transaction.amount, 0);
     const outflow = list
-      .filter((transaction) => OUTFLOWS.includes(transaction.type))
+      .filter(
+        (transaction) =>
+          transaction.direction === "out" ||
+          (!transaction.isMpesaAudit && OUTFLOWS.includes(transaction.type)),
+      )
       .reduce((sum, transaction) => sum + transaction.amount, 0);
     const gross = list.reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
     return { inflow, outflow, net: inflow - outflow, gross };
@@ -361,7 +369,7 @@ function TxPage() {
                           ? transaction.status
                             ? `${transaction.by} - ${transaction.status}`
                             : transaction.by
-                          : staffMember?.name ?? transaction.by}
+                          : (staffMember?.name ?? transaction.by)}
                       </td>
                     </tr>
                   );

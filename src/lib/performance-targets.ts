@@ -44,7 +44,8 @@ export const TARGET_METRIC_META: Record<
   collections_total: {
     label: "Collections",
     unit: "amount",
-    description: "All member money collected across repayments, savings, shares, fees, and investment.",
+    description:
+      "All member money collected across repayments, savings, shares, fees, and investment.",
   },
   loan_repayments: {
     label: "Loan repayments",
@@ -104,9 +105,7 @@ export function usePerformanceTargetActions() {
   const { rows, refresh } = usePerformanceTargets();
 
   const upsertTarget = useCallback(
-    async (
-      target: Omit<PerformanceTarget, "id" | "createdAt" | "updatedAt"> & { id?: string },
-    ) => {
+    async (target: Omit<PerformanceTarget, "id" | "createdAt" | "updatedAt"> & { id?: string }) => {
       await saveTarget({ data: target });
       await refresh();
     },

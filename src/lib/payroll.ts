@@ -1,9 +1,4 @@
-export type PayrollAttendanceStatus =
-  | "present"
-  | "late"
-  | "signed_out"
-  | "permission"
-  | "absent";
+export type PayrollAttendanceStatus = "present" | "late" | "signed_out" | "permission" | "absent";
 
 export type PayrollAttendanceRow = {
   staffId: string;
@@ -45,9 +40,7 @@ export function attendedWorkingDays(
     if (isSunday(date)) return false;
     return rows.some(
       (row) =>
-        row.staffId === staffId &&
-        toDateOnly(row.date) === date &&
-        validStatuses.has(row.status),
+        row.staffId === staffId && toDateOnly(row.date) === date && validStatuses.has(row.status),
     );
   }).length;
 }
@@ -63,8 +56,7 @@ export function payableSalaryFromAttendance(args: {
   const baseSalary = Math.max(0, Number(args.baseSalary ?? 0));
   const workDays = workingDaysExcludingSundays(args.start, args.end);
   const presentDays = attendedWorkingDays(args.rows, args.staffId, args.start, args.end);
-  const grossPayable =
-    workDays > 0 ? Math.round((baseSalary * presentDays) / workDays) : 0;
+  const grossPayable = workDays > 0 ? Math.round((baseSalary * presentDays) / workDays) : 0;
   const alreadyPaid = Math.max(0, Number(args.alreadyPaid ?? 0));
   return {
     workDays,
@@ -79,7 +71,12 @@ export function payrollMonthWindow(month: string) {
   const [yearText, monthText] = String(month ?? "").split("-");
   const year = Number(yearText);
   const monthIndex = Number(monthText) - 1;
-  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 0 || monthIndex > 11) {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(monthIndex) ||
+    monthIndex < 0 ||
+    monthIndex > 11
+  ) {
     const today = new Date();
     const fallbackMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
     return payrollMonthWindow(fallbackMonth);

@@ -16,6 +16,7 @@ import {
   Percent,
   Pencil,
   Plus,
+  RefreshCw,
   Save,
   Target,
   Trash2,
@@ -30,6 +31,7 @@ import { Badge, Section, StatCard } from "@/components/ui-bits";
 import {
   deleteFeePolicyRecord,
   deleteMemberCarryoverLoanRecord,
+  triggerPurposePoolRedistributionRecord,
   upsertMemberCarryoverLoanRecord,
   upsertMemberCarryoverProfileRecord,
   upsertFeePolicyRecord,
@@ -137,6 +139,7 @@ function PolicyCenterPage() {
   const saveCarryoverProfile = useServerFn(upsertMemberCarryoverProfileRecord);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const deleteCarryoverLoan = useServerFn(deleteMemberCarryoverLoanRecord);
+  const triggerRedistribution = useServerFn(triggerPurposePoolRedistributionRecord);
   const waivePenalty = useServerFn(waivePenaltyRecord);
   const { rows: targetRows, upsertTarget, removeTarget } = usePerformanceTargetActions();
 
@@ -196,6 +199,7 @@ function PolicyCenterPage() {
   const [guidedClosedLoans, setGuidedClosedLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [waiverNote, setWaiverNote] = useState("");
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
+  const [isRedistributing, setIsRedistributing] = useState(false);
 
   useEffect(() => {
     setPercentagesDraft(policySettings.percentages);
@@ -544,6 +548,24 @@ function PolicyCenterPage() {
     toast.success(message);
   }
 
+  async function runManualRedistribution() {
+    setIsRedistributing(true);
+    try {
+      const result = await triggerRedistribution();
+      await reloadAppData();
+      const redistribution = result.redistribution ?? {};
+      toast.success(
+        `Redistribution complete: ${redistribution.redistributedMembers ?? 0} member(s), ${
+          redistribution.createdTransactions ?? 0
+        } ledger movement(s).`,
+      );
+    } catch (error: any) {
+      toast.error(error?.message ?? "Redistribution failed.");
+    } finally {
+      setIsRedistributing(false);
+    }
+  }
+
   async function refreshCarryoverDetails(nextMemberId: string) {
     const result = (await loadCarryover({ data: { memberId: nextMemberId } })) as {
       profile: LegacyCarryoverProfile | null;
@@ -663,6 +685,25 @@ function PolicyCenterPage() {
       />
       <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="admin" />
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <div>
+            <div className="text-sm font-medium">Purpose pool redistribution</div>
+            <div className="text-xs text-muted-foreground">
+              Re-apply current fee, waterfall, savings, shares, and penalty policies to existing
+              purpose-pool balances.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={runManualRedistribution}
+            disabled={isRedistributing}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRedistributing ? "animate-spin" : ""}`} />
+            {isRedistributing ? "Redistributing..." : "Redistribute now"}
+          </button>
+        </div>
 
         <div className="grid gap-4 lg:grid-cols-4">
           <StatCard

@@ -1,11 +1,6 @@
 import { isInvestorCategory, resolveMemberCategory } from "@/lib/membership";
 
-export type FeeScope =
-  | "all"
-  | "new_only"
-  | "selected_members"
-  | "loan_holders"
-  | "investors";
+export type FeeScope = "all" | "new_only" | "selected_members" | "loan_holders" | "investors";
 export type FeePermanence = "permanent" | "semi";
 
 export type FeePolicy = {
@@ -80,7 +75,9 @@ export function scopeLabel(s: FeeScope): string {
 
 function normalizeSelectedMemberIds(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((memberId) => String(memberId ?? "").trim()).filter(Boolean))].sort();
+  return [
+    ...new Set(value.map((memberId) => String(memberId ?? "").trim()).filter(Boolean)),
+  ].sort();
 }
 
 export function normalizeFeePolicies(rows?: FeePolicy[] | null) {

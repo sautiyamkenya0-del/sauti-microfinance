@@ -22,7 +22,11 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
 
           if (!consumerKey || !consumerSecret || !shortcode) {
             return Response.json(
-              { ok: false, error: "Missing MPESA env vars (MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE)" },
+              {
+                ok: false,
+                error:
+                  "Missing MPESA env vars (MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE)",
+              },
               { status: 400, headers: NO_STORE_HEADERS },
             );
           }
@@ -49,7 +53,10 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
               message: msg,
               context: { status: tokenRes.status, body },
             });
-            return Response.json({ ok: false, error: msg, body }, { status: 502, headers: NO_STORE_HEADERS });
+            return Response.json(
+              { ok: false, error: msg, body },
+              { status: 502, headers: NO_STORE_HEADERS },
+            );
           }
 
           const tokenData = (await tokenRes.json()) as { access_token?: string };
@@ -63,7 +70,10 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
               message: msg,
               context: { tokenData },
             });
-            return Response.json({ ok: false, error: msg, tokenData }, { status: 502, headers: NO_STORE_HEADERS });
+            return Response.json(
+              { ok: false, error: msg, tokenData },
+              { status: 502, headers: NO_STORE_HEADERS },
+            );
           }
 
           // Use URLs that do not contain the word "mpesa" (Safaricom rejects URLs containing that word)
@@ -100,7 +110,10 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
               message: msg,
               context: { status: registerRes.status, response: registerData },
             });
-            return Response.json({ ok: false, error: msg, response: registerData }, { status: 502, headers: NO_STORE_HEADERS });
+            return Response.json(
+              { ok: false, error: msg, response: registerData },
+              { status: 502, headers: NO_STORE_HEADERS },
+            );
           }
 
           await logErrorToServer({
@@ -123,7 +136,10 @@ export const Route = createFileRoute("/api/mpesa/register-now")({
           } catch (_) {
             /* ignore logging failure */
           }
-          return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500, headers: NO_STORE_HEADERS });
+          return Response.json(
+            { ok: false, error: error instanceof Error ? error.message : String(error) },
+            { status: 500, headers: NO_STORE_HEADERS },
+          );
         }
       },
     },

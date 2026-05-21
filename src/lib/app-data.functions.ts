@@ -489,8 +489,11 @@ async function resolveExistingTransactionRef(supabaseAdmin: any, ref: string) {
   if (!existingRows || existingRows.length === 0) return null;
 
   const preferred =
-    existingRows.find((row: any) => row.type !== "mpesa_unallocated" && row.member_id) ?? existingRows[0];
-  const duplicateIds = existingRows.filter((row: any) => row.id !== preferred.id).map((row: any) => row.id);
+    existingRows.find((row: any) => row.type !== "mpesa_unallocated" && row.member_id) ??
+    existingRows[0];
+  const duplicateIds = existingRows
+    .filter((row: any) => row.id !== preferred.id)
+    .map((row: any) => row.id);
 
   if (duplicateIds.length > 0) {
     const { error: deleteError } = await supabaseAdmin
@@ -696,7 +699,12 @@ async function findExistingMpesaTransaction(args: {
 
   const { data, error } = await query.limit(1);
   if (error) throw new Error(error.message);
-  return (data?.[0] ?? null) as { id: string; type: string; member_id?: string | null; amount?: number } | null;
+  return (data?.[0] ?? null) as {
+    id: string;
+    type: string;
+    member_id?: string | null;
+    amount?: number;
+  } | null;
 }
 
 async function createProcessedMpesaLedgerLink(args: {
@@ -1403,18 +1411,21 @@ export async function applyMpesaPaymentToDatabase(args: {
       applied,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
-    queueTransaction({
-      date: paymentDate,
-      created_at: paymentCreatedAt ?? null,
-      type: "deposit",
-      amount: applied,
-      member_id: memberId,
-      by_staff: MPESA_SYSTEM_STAFF_ID,
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    }, "deposit");
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "deposit",
+        amount: applied,
+        member_id: memberId,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+      },
+      "deposit",
+    );
     memberPatch.savings_balance = currentSavingsBalance() + applied;
     if (surplus > 0) toRoundOff += surplus;
     if (currentSavingsBalance() < mandatorySavingsThreshold) {
@@ -1437,18 +1448,21 @@ export async function applyMpesaPaymentToDatabase(args: {
       actualApplied,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
-    queueTransaction({
-      date: paymentDate,
-      created_at: paymentCreatedAt ?? null,
-      type: "share_purchase",
-      amount: actualApplied,
-      member_id: memberId,
-      by_staff: MPESA_SYSTEM_STAFF_ID,
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Mandatory shares via Paybill ${norm}`,
-    }, "share_purchase");
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "share_purchase",
+        amount: actualApplied,
+        member_id: memberId,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Mandatory shares via Paybill ${norm}`,
+      },
+      "share_purchase",
+    );
     memberPatch.shares = currentShareUnits() + wholeUnits;
     notes.push(
       `${notePrefix} Converted ${actualApplied}/= into ${wholeUnits} mandatory share unit(s).`,
@@ -1458,18 +1472,21 @@ export async function applyMpesaPaymentToDatabase(args: {
   function queuePurposePoolContribution(applied: number, reason: string) {
     if (applied <= 0) return;
     setPrimaryIfMissing("fee_payment", applied, `Purpose pool via Paybill ${norm}`);
-    queueTransaction({
-      date: paymentDate,
-      created_at: paymentCreatedAt ?? null,
-      type: "fee_payment",
-      amount: applied,
-      member_id: memberId,
-      by_staff: MPESA_SYSTEM_STAFF_ID,
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Purpose pool contribution (auto) - ${reason}`,
-    }, "purpose_pool");
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "fee_payment",
+        amount: applied,
+        member_id: memberId,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Purpose pool contribution (auto) - ${reason}`,
+      },
+      "purpose_pool",
+    );
     notes.push(`Routed ${applied}/= into the internal purpose pool (${reason}).`);
   }
 
@@ -1489,19 +1506,22 @@ export async function applyMpesaPaymentToDatabase(args: {
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
       activeLoan.id,
     );
-    queueTransaction({
-      date: paymentDate,
-      created_at: paymentCreatedAt ?? null,
-      type: "loan_repayment",
-      amount: safeApplied,
-      member_id: memberId,
-      loan_id: activeLoan.id,
-      by_staff: MPESA_SYSTEM_STAFF_ID,
-      ref: args.mpesaRef,
-      account: norm,
-      payer_name: args.payerName,
-      note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-    }, "loan_repayment");
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "loan_repayment",
+        amount: safeApplied,
+        member_id: memberId,
+        loan_id: activeLoan.id,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+      },
+      "loan_repayment",
+    );
 
     const nextPaid = Number(activeLoan.paid ?? 0) + safeApplied;
     const nextBalance = Math.max(0, summary.total - nextPaid);
@@ -1596,18 +1616,21 @@ export async function applyMpesaPaymentToDatabase(args: {
       remaining -= fee.amount;
       memberPatch[fee.key] = true;
       setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
-      queueTransaction({
-        date: paymentDate,
-        created_at: paymentCreatedAt ?? null,
-        type: "fee_payment",
-        amount: fee.amount,
-        member_id: memberId,
-        by_staff: MPESA_SYSTEM_STAFF_ID,
-        ref: args.mpesaRef,
-        account: norm,
-        payer_name: args.payerName,
-        note: `${fee.label} (auto)`,
-      }, "fee_payment");
+      queueTransaction(
+        {
+          date: paymentDate,
+          created_at: paymentCreatedAt ?? null,
+          type: "fee_payment",
+          amount: fee.amount,
+          member_id: memberId,
+          by_staff: MPESA_SYSTEM_STAFF_ID,
+          ref: args.mpesaRef,
+          account: norm,
+          payer_name: args.payerName,
+          note: `${fee.label} (auto)`,
+        },
+        "fee_payment",
+      );
       notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
       continue;
     }
@@ -3126,8 +3149,14 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
 export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
   .inputValidator((data: { memberId?: string; account?: string; query?: string } | undefined) => ({
     memberId: String(data?.memberId ?? "").trim() || undefined,
-    account: String(data?.account ?? "").trim().toUpperCase() || undefined,
-    query: String(data?.query ?? "").trim().toLowerCase() || undefined,
+    account:
+      String(data?.account ?? "")
+        .trim()
+        .toUpperCase() || undefined,
+    query:
+      String(data?.query ?? "")
+        .trim()
+        .toLowerCase() || undefined,
   }))
   .handler(async ({ data }) => {
     await requireStaffActor();
@@ -3187,11 +3216,13 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       const primaryAllocation = eventAllocations[0] ?? null;
       const memberId =
         String(primaryAllocation?.member_id ?? event.account ?? "").trim() || undefined;
-      const account = String(event.account ?? raw.BillRefNumber ?? "").trim().toUpperCase();
+      const account = String(event.account ?? raw.BillRefNumber ?? "")
+        .trim()
+        .toUpperCase();
       const receiptRef =
         String(event.mpesa_ref ?? raw.TransID ?? raw.MpesaReceiptNumber ?? "").trim() || undefined;
-      const exactAt =
-        mpesaRawTimestampValue(raw) ?? String(event.created_at ?? "").trim() || undefined;
+      const eventCreatedAt = String(event.created_at ?? "").trim();
+      const exactAt = mpesaRawTimestampValue(raw) ?? (eventCreatedAt || undefined);
       const primaryType =
         String(primaryAllocation?.allocation_type ?? "").trim() || "mpesa_unallocated";
       const receiptRow = {
@@ -3213,8 +3244,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         payerName: String(event.payer_name ?? "").trim() || undefined,
         phone: String(event.phone ?? "").trim() || undefined,
         mpesaRef: receiptRef,
-        businessShortCode:
-          String(raw.BusinessShortCode ?? raw.ShortCode ?? "").trim() || undefined,
+        businessShortCode: String(raw.BusinessShortCode ?? raw.ShortCode ?? "").trim() || undefined,
         exactReceivedAt: exactAt,
         createdAt: String(event.created_at ?? "").trim() || exactAt,
         note:
@@ -3269,10 +3299,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         String(request.conversation_id ?? "").trim() ||
         String(request.originator_conversation_id ?? "").trim() ||
         undefined;
+      const payoutCreatedAt = String(resultEvent?.created_at ?? request.created_at ?? "").trim();
       const exactAt =
-        mpesaRawTimestampValue(asJsonObject(resultEvent?.raw)) ??
-        String(resultEvent?.created_at ?? request.created_at ?? "").trim() ||
-        undefined;
+        mpesaRawTimestampValue(asJsonObject(resultEvent?.raw)) ?? (payoutCreatedAt || undefined);
       const payoutRow = {
         id: `payout-${request.id}`,
         source: "mpesa_payout",
@@ -3285,7 +3314,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         account,
         memberId,
         memberName:
-          memberNames.get(memberId ?? "") || String(request.receiver_staff_id ?? "").trim() || undefined,
+          memberNames.get(memberId ?? "") ||
+          String(request.receiver_staff_id ?? "").trim() ||
+          undefined,
         payerName: undefined,
         phone: String(request.phone ?? "").trim() || undefined,
         mpesaRef: receiptRef,
@@ -3294,7 +3325,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         createdAt: String(request.created_at ?? "").trim() || exactAt,
         note:
           String(request.remarks ?? "").trim() ||
-          String(request.purpose ?? "").replace(/_/g, " ").trim() ||
+          String(request.purpose ?? "")
+            .replace(/_/g, " ")
+            .trim() ||
           undefined,
         allocationCount: 0,
         allocations: [],
@@ -3321,14 +3354,16 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
     }
 
     rows.sort((a, b) =>
-      String(b.exactReceivedAt ?? b.createdAt ?? "").localeCompare(String(a.exactReceivedAt ?? a.createdAt ?? "")),
+      String(b.exactReceivedAt ?? b.createdAt ?? "").localeCompare(
+        String(a.exactReceivedAt ?? a.createdAt ?? ""),
+      ),
     );
 
     return rows;
   });
 
-export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "POST" })
-  .handler(async () => {
+export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "POST" }).handler(
+  async () => {
     const actor = await requireDirectorActor();
     const runtimeDb = await requireSupabaseAdmin();
     const redistribution = await redistributePurposePoolBalances(runtimeDb, actor);
@@ -3340,7 +3375,8 @@ export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "
       details: redistribution,
     });
     return { ok: true, redistribution };
-  });
+  },
+);
 
 export const createMemberRecord = createServerFn({ method: "POST" })
   .inputValidator(
@@ -4767,7 +4803,8 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         | "petty_cash"
         | "investor_contribution"
         | "fee_payment"
-        | "mpesa_unallocated";
+        | "mpesa_unallocated"
+        | "staff_payroll";
       account?: string;
       payerName?: string;
       amount: number;

@@ -123,15 +123,7 @@ function Connector({ compact = false }: { compact?: boolean }) {
   return <div className={`ml-5 w-px bg-border ${compact ? "h-3" : "h-4"}`} />;
 }
 
-function StepCard({
-  eyebrow,
-  title,
-  detail,
-}: {
-  eyebrow?: string;
-  title: string;
-  detail: string;
-}) {
+function StepCard({ eyebrow, title, detail }: { eyebrow?: string; title: string; detail: string }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       {eyebrow ? (
@@ -168,7 +160,10 @@ function FeeGate({
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <TinyNode title="Registration fee" detail={fmtKES(membershipFeeAmount)} />
         <TinyNode title="Membership card" detail={fmtKES(cardFeeAmount)} />
-        <TinyNode title="Sticker fee" detail={`${fmtKES(stickerFeeAmount)} if business is permanent`} />
+        <TinyNode
+          title="Sticker fee"
+          detail={`${fmtKES(stickerFeeAmount)} if business is permanent`}
+        />
       </div>
     </div>
   );

@@ -264,7 +264,12 @@ export async function handleMpesaValidationRequest(request: Request) {
     });
     console.info("mpesa validation request body", body);
     // Also emit an error-level log so platforms that filter info logs still show the payload
-    console.error("mpesa validation payload (for visibility)", { account, amount, payerName, phone });
+    console.error("mpesa validation payload (for visibility)", {
+      account,
+      amount,
+      payerName,
+      phone,
+    });
     await logErrorToServer({
       level: "info",
       category: "mpesa.validation.payload",

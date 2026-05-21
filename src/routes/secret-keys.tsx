@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
-import { useStore } from "@/lib/store";
+import { fmtKES, useStore } from "@/lib/store";
+import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   listRuntimeSecrets,
   setRuntimeSecret,
@@ -26,6 +27,7 @@ import {
   Send,
   RefreshCw,
   AlertCircle,
+  ReceiptText,
 } from "lucide-react";
 
 export const Route = createFileRoute("/secret-keys")({
@@ -175,11 +177,12 @@ function SecretKeysPage() {
   const remove = useServerFn(deleteRuntimeSecret);
   const fetchAudit = useServerFn(listAudit);
   const fetchActors = useServerFn(listAuditActors);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const ask = useServerFn(askWatchdog);
   const errorLogsList = useServerFn(listErrorLogs);
   const errorLogsClear = useServerFn(deleteOldErrorLogs);
 
-  const [tab, setTab] = useState<"keys" | "audit" | "ai" | "errors">("keys");
+  const [tab, setTab] = useState<"keys" | "audit" | "mpesa" | "ai" | "errors">("keys");
 
   const [items, setItems] = useState<
     Array<{ key: string; preview: string; length: number; updated_at: string }>
@@ -278,6 +281,7 @@ function SecretKeysPage() {
             [
               { id: "keys", label: "Keys", Icon: KeyRound },
               { id: "audit", label: "Audit log", Icon: ScrollText },
+              { id: "mpesa", label: "Paybill audit", Icon: ReceiptText },
               { id: "errors", label: "Error logs", Icon: AlertCircle },
               { id: "ai", label: "Watchdog AI", Icon: Bot },
             ] as const
@@ -449,12 +453,212 @@ function SecretKeysPage() {
         )}
 
         {tab === "audit" && <AuditTab fetchAudit={fetchAudit} fetchActors={fetchActors} />}
+        {tab === "mpesa" && <MpesaAuditTab fetchMpesaAudit={fetchMpesaAudit} />}
         {tab === "errors" && (
           <ErrorLogsTab errorLogsList={errorLogsList} errorLogsClear={errorLogsClear} />
         )}
         {tab === "ai" && <WatchdogTab ask={ask} />}
       </main>
     </>
+  );
+}
+
+/* ---------------- M-Pesa audit tab ---------------- */
+function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
+  const { members } = useStore();
+  const [query, setQuery] = useState("");
+  const [memberId, setMemberId] = useState("");
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["secret-mpesa-audit", query, memberId],
+    queryFn: () =>
+      fetchMpesaAudit({
+        data: {
+          query: query.trim() || undefined,
+          memberId: memberId || undefined,
+        },
+      }),
+  });
+  const rows = useMemo(() => (data ?? []) as any[], [data]);
+
+  const totals = useMemo(() => {
+    return rows.reduce(
+      (summary, row) => {
+        const amount = Number(row.originalAmount ?? row.amount ?? 0);
+        if (row.direction === "out") summary.outflow += amount;
+        else summary.inflow += amount;
+        return summary;
+      },
+      { inflow: 0, outflow: 0 },
+    );
+  }, [rows]);
+
+  function downloadCsv() {
+    const head = [
+      "direction",
+      "status",
+      "ref",
+      "amount",
+      "account",
+      "name",
+      "phone",
+      "received_at",
+      "allocations",
+    ];
+    const esc = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const csv = [
+      head.join(","),
+      ...rows.map((row) =>
+        [
+          row.direction,
+          row.status,
+          row.mpesaRef,
+          row.originalAmount ?? row.amount,
+          row.account,
+          row.memberName ?? row.payerName,
+          row.phone,
+          row.exactReceivedAt ?? row.createdAt,
+          (row.allocations ?? [])
+            .map((allocation: any) => `${allocation.type}:${allocation.amount}`)
+            .join("; "),
+        ]
+          .map(esc)
+          .join(","),
+      ),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mpesa-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <section className="bg-card border border-border rounded-xl">
+      <div className="px-5 py-3 border-b border-border space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-sm mr-2">Paybill and payout audit</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search ref, account, name..."
+            className="text-xs bg-muted border border-border rounded-md px-2 py-1.5 flex-1 min-w-[180px]"
+          />
+          <select
+            value={memberId}
+            onChange={(event) => setMemberId(event.target.value)}
+            className="text-xs bg-muted border border-border rounded-md px-2 py-1.5"
+          >
+            <option value="">All members</option>
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.id} - {member.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => refetch()}
+            className="text-xs inline-flex items-center gap-1 bg-muted hover:bg-accent border border-border rounded-md px-2 py-1.5"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button
+            onClick={downloadCsv}
+            disabled={!rows.length}
+            className="text-xs inline-flex items-center gap-1 bg-primary text-primary-foreground rounded-md px-2 py-1.5 disabled:opacity-50"
+          >
+            <Download className="h-3.5 w-3.5" /> CSV
+          </button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-md bg-muted/40 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Receipts
+            </div>
+            <div className="text-sm font-semibold">{rows.length}</div>
+          </div>
+          <div className="rounded-md bg-muted/40 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Paybill in
+            </div>
+            <div className="text-sm font-semibold">{fmtKES(totals.inflow)}</div>
+          </div>
+          <div className="rounded-md bg-muted/40 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Payouts out
+            </div>
+            <div className="text-sm font-semibold">{fmtKES(totals.outflow)}</div>
+          </div>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="p-5 text-sm text-muted-foreground">Loading...</div>
+      ) : rows.length === 0 ? (
+        <div className="p-5 text-sm text-muted-foreground">No M-Pesa audit rows found.</div>
+      ) : (
+        <div className="overflow-auto max-h-[65vh]">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 sticky top-0">
+              <tr className="text-left">
+                <th className="px-3 py-2 font-medium">When</th>
+                <th className="px-3 py-2 font-medium">Ref</th>
+                <th className="px-3 py-2 font-medium">Account</th>
+                <th className="px-3 py-2 font-medium">Name</th>
+                <th className="px-3 py-2 font-medium text-right">Amount</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Allocations</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-t border-border align-top">
+                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                    {row.exactReceivedAt || row.createdAt
+                      ? new Date(row.exactReceivedAt ?? row.createdAt).toLocaleString()
+                      : "-"}
+                  </td>
+                  <td className="px-3 py-2 font-mono">{row.mpesaRef ?? row.id}</td>
+                  <td className="px-3 py-2 font-mono">{row.account ?? "-"}</td>
+                  <td className="px-3 py-2">
+                    <div>{row.memberName ?? row.payerName ?? "-"}</div>
+                    <div className="text-muted-foreground">{row.phone ?? ""}</div>
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold">
+                    {row.direction === "out" ? "-" : ""}
+                    {fmtKES(Number(row.originalAmount ?? row.amount ?? 0))}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="rounded-md bg-muted px-2 py-0.5 capitalize">
+                      {String(row.status ?? "").replace(/_/g, " ")}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {(row.allocations ?? []).length ? (
+                      <div className="space-y-1">
+                        {(row.allocations ?? []).map((allocation: any) => (
+                          <div key={allocation.id} className="text-muted-foreground">
+                            <span className="font-medium text-foreground">
+                              {String(allocation.typeLabel ?? allocation.type).replace(/_/g, " ")}
+                            </span>{" "}
+                            {fmtKES(Number(allocation.amount ?? 0))}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {row.direction === "out" ? "Payout request/result" : "Unallocated"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

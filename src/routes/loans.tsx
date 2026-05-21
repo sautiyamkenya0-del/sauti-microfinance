@@ -103,8 +103,8 @@ function LoansHub() {
                     <option value="">- New / Walk-in (capture full details) -</option>
                     {filteredMemberAccounts.map((member) => (
                       <option key={member.id} value={member.id}>
-                        {member.id} - {member.name} - {member.phone} - (
-                        {memberLoanCount(member.id)} loans)
+                        {member.id} - {member.name} - {member.phone} - ({memberLoanCount(member.id)}{" "}
+                        loans)
                       </option>
                     ))}
                   </select>

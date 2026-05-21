@@ -173,7 +173,9 @@ export function RepeatApplication({
             onChange={(v) => {
               const nextAmount = Number(v);
               setLoanAmount(nextAmount);
-              setLoanCategory(loanProductTypeForAmount(nextAmount) === "premium" ? "Premium" : "Normal");
+              setLoanCategory(
+                loanProductTypeForAmount(nextAmount) === "premium" ? "Premium" : "Normal",
+              );
             }}
           />
           <Select
@@ -238,10 +240,7 @@ export function RepeatApplication({
               label={`Insurance (${SBC_FEES.insurancePct}%)`}
               value={fmtKES(calc.ded.insurance)}
             />
-            <Row
-              label="Fixed Transaction Fee"
-              value={fmtKES(calc.ded.transactionCost)}
-            />
+            <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
             <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
           </div>
           <div className="space-y-2">

@@ -433,8 +433,8 @@ export function FirstTimeApplication({
             options={repaymentOptions.map((d) => String(d))}
           />
           <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
-            Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest
-            band at {calc.ratePct}%.
+            Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
+            at {calc.ratePct}%.
           </div>
           <Select
             label="Daily Savings Plan"
@@ -722,10 +722,7 @@ export function FirstTimeApplication({
               label={`Insurance (${SBC_FEES.insurancePct}%)`}
               value={fmtKES(calc.ded.insurance)}
             />
-            <Row
-              label="Fixed Transaction Fee"
-              value={fmtKES(calc.ded.transactionCost)}
-            />
+            <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
             <Row label="Fixed Fees Financed" value={fmtKES(calc.fixedFeesFinanced)} />
             <Row label="Total Financed Charges" value={fmtKES(calc.totalFinancedCharges)} bold />
           </div>
@@ -744,8 +741,8 @@ export function FirstTimeApplication({
                 </div>
                 {calc.upfrontBase.tier ? (
                   <div>
-                  Min Shares: {fmtKES(calc.upfront.minShares)} · Min Savings:{" "}
-                  {fmtKES(calc.upfront.minSavings)}
+                    Min Shares: {fmtKES(calc.upfront.minShares)} · Min Savings:{" "}
+                    {fmtKES(calc.upfront.minSavings)}
                   </div>
                 ) : null}
                 <div className="mt-2 flex items-center justify-between gap-3">
@@ -758,9 +755,7 @@ export function FirstTimeApplication({
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
                   <span>Total upfront now</span>
-                  <span>
-                    {fmtKES(calc.totalUpfrontNow)}
-                  </span>
+                  <span>{fmtKES(calc.totalUpfrontNow)}</span>
                 </div>
                 <div className="mt-1 text-muted-foreground">
                   Processing upfront {fmtKES(calc.ded.processingUpfront)} · Insurance upfront{" "}

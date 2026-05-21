@@ -289,19 +289,19 @@ function sanitizeTransactionFeeBands(value: unknown): TransactionFeeBand[] {
   const sanitized: TransactionFeeBand[] = [];
   bands.forEach((candidate, index) => {
     if (!isPlainObject(candidate)) return;
-      const minAmount = Math.max(0, Math.floor(toFiniteNumber(candidate.minAmount, 0)));
-      const rawMax = candidate.maxAmount;
-      const maxAmount =
-        rawMax == null || rawMax === ""
-          ? undefined
-          : Math.max(minAmount, Math.floor(toFiniteNumber(rawMax, minAmount)));
-      sanitized.push({
-        id: normalizeTransactionFeeBandId(candidate.id, index),
-        minAmount,
-        maxAmount,
-        feeAmount: Math.max(0, toFiniteNumber(candidate.feeAmount, 0)),
-        label: String(candidate.label ?? "").trim() || undefined,
-      });
+    const minAmount = Math.max(0, Math.floor(toFiniteNumber(candidate.minAmount, 0)));
+    const rawMax = candidate.maxAmount;
+    const maxAmount =
+      rawMax == null || rawMax === ""
+        ? undefined
+        : Math.max(minAmount, Math.floor(toFiniteNumber(rawMax, minAmount)));
+    sanitized.push({
+      id: normalizeTransactionFeeBandId(candidate.id, index),
+      minAmount,
+      maxAmount,
+      feeAmount: Math.max(0, toFiniteNumber(candidate.feeAmount, 0)),
+      label: String(candidate.label ?? "").trim() || undefined,
+    });
   });
   return sanitized.sort((a, b) => a.minAmount - b.minAmount);
 }
@@ -345,10 +345,7 @@ function sanitizeInterestRates(value: unknown): PolicyInterestRates {
 
   return {
     standard: {
-      7: toFiniteNumber(
-        standardCandidate["7"],
-        DEFAULT_POLICY_SETTINGS.interestRates.standard[7],
-      ),
+      7: toFiniteNumber(standardCandidate["7"], DEFAULT_POLICY_SETTINGS.interestRates.standard[7]),
       14: toFiniteNumber(
         standardCandidate["14"],
         DEFAULT_POLICY_SETTINGS.interestRates.standard[14],
@@ -359,22 +356,10 @@ function sanitizeInterestRates(value: unknown): PolicyInterestRates {
       ),
     },
     premium: {
-      14: toFiniteNumber(
-        premiumCandidate["14"],
-        DEFAULT_POLICY_SETTINGS.interestRates.premium[14],
-      ),
-      30: toFiniteNumber(
-        premiumCandidate["30"],
-        DEFAULT_POLICY_SETTINGS.interestRates.premium[30],
-      ),
-      60: toFiniteNumber(
-        premiumCandidate["60"],
-        DEFAULT_POLICY_SETTINGS.interestRates.premium[60],
-      ),
-      90: toFiniteNumber(
-        premiumCandidate["90"],
-        DEFAULT_POLICY_SETTINGS.interestRates.premium[90],
-      ),
+      14: toFiniteNumber(premiumCandidate["14"], DEFAULT_POLICY_SETTINGS.interestRates.premium[14]),
+      30: toFiniteNumber(premiumCandidate["30"], DEFAULT_POLICY_SETTINGS.interestRates.premium[30]),
+      60: toFiniteNumber(premiumCandidate["60"], DEFAULT_POLICY_SETTINGS.interestRates.premium[60]),
+      90: toFiniteNumber(premiumCandidate["90"], DEFAULT_POLICY_SETTINGS.interestRates.premium[90]),
     },
   };
 }
@@ -564,13 +549,17 @@ export function transactionFeeForAmount(
   return 0;
 }
 
-export function normalizePolicyTermDays(termDays?: number, loanType?: PolicyLoanType): PolicyLoanTerm {
+export function normalizePolicyTermDays(
+  termDays?: number,
+  loanType?: PolicyLoanType,
+): PolicyLoanTerm {
   const normalized = Math.max(0, Math.floor(Number(termDays ?? 0)));
-  const terms = loanType === "standard"
-    ? STANDARD_POLICY_TERMS
-    : loanType === "premium"
-      ? PREMIUM_POLICY_TERMS
-      : ALL_POLICY_TERMS;
+  const terms =
+    loanType === "standard"
+      ? STANDARD_POLICY_TERMS
+      : loanType === "premium"
+        ? PREMIUM_POLICY_TERMS
+        : ALL_POLICY_TERMS;
 
   for (const term of terms) {
     if (normalized <= term) return term;
@@ -587,7 +576,9 @@ export function policyInterestRateForTerm(
   const bucket = normalizePolicyTermDays(termDays, loanType);
   if (loanType === "standard") {
     const standardBucket =
-      bucket === 7 || bucket === 14 || bucket === 30 ? bucket : STANDARD_POLICY_TERMS[STANDARD_POLICY_TERMS.length - 1];
+      bucket === 7 || bucket === 14 || bucket === 30
+        ? bucket
+        : STANDARD_POLICY_TERMS[STANDARD_POLICY_TERMS.length - 1];
     return settings.interestRates.standard[standardBucket];
   }
   const premiumBucket =

@@ -159,8 +159,11 @@ function buildVariantFromSecrets(args: {
 
   const normalizedEnv = normalizeMpesaEnv(envDetails.value);
   const pubBase = String(readServerEnv("PUBLIC_BASE_URL") ?? "").trim();
-  const callbackFallback = pubBase ? `${pubBase.replace(/\/+$/, "")}/api/public/mpesa/confirmation` : "";
-  const callbackUrlValue = (String(callbackUrlDetails.value ?? "").trim() || callbackFallback) || undefined;
+  const callbackFallback = pubBase
+    ? `${pubBase.replace(/\/+$/, "")}/api/public/mpesa/confirmation`
+    : "";
+  const callbackUrlValue =
+    String(callbackUrlDetails.value ?? "").trim() || callbackFallback || undefined;
 
   const variant: MpesaConfigVariant = {
     label: args.label,

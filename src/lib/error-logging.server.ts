@@ -81,13 +81,15 @@ export async function logErrorToServer(args: {
 }
 
 /** Retrieve paginated error logs */
-export async function getErrorLogs(args: {
-  limit?: number;
-  offset?: number;
-  level?: "error" | "warning" | "info";
-  category?: string;
-  days?: number;
-} = {}) {
+export async function getErrorLogs(
+  args: {
+    limit?: number;
+    offset?: number;
+    level?: "error" | "warning" | "info";
+    category?: string;
+    days?: number;
+  } = {},
+) {
   const supabaseAdmin = getSupabaseAdminOrNull();
   if (!supabaseAdmin) {
     return {
@@ -106,10 +108,7 @@ export async function getErrorLogs(args: {
     let query = supabaseAdmin
       .from("error_logs")
       .select("*", { count: "exact" })
-      .gte(
-        "created_at",
-        new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString()
-      )
+      .gte("created_at", new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString())
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -147,13 +146,8 @@ export async function clearOldErrorLogs(daysOld: number = 30) {
   if (!supabaseAdmin) return false;
 
   try {
-    const cutoffDate = new Date(
-      Date.now() - daysOld * 24 * 60 * 60 * 1000
-    ).toISOString();
-    const { error } = await supabaseAdmin
-      .from("error_logs")
-      .delete()
-      .lt("created_at", cutoffDate);
+    const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await supabaseAdmin.from("error_logs").delete().lt("created_at", cutoffDate);
 
     if (error) throw error;
     return true;

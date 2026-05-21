@@ -28,9 +28,7 @@ export async function captureError(args: {
   line?: number;
 }) {
   const error =
-    args.error instanceof Error
-      ? args.error
-      : new Error(String(args.error ?? "Unknown error"));
+    args.error instanceof Error ? args.error : new Error(String(args.error ?? "Unknown error"));
 
   const stack = error.stack ?? "";
   const fileMatch = stack.match(/at\s+(?:\w+\s+)*\(([^)]+):(\d+):\d+\)/);
@@ -53,12 +51,7 @@ export async function captureError(args: {
 
   // Also log to console for development
   if (process.env.NODE_ENV === "development") {
-    console.error(
-      `[${args.category}]`,
-      error.message,
-      args.context ?? {},
-      error
-    );
+    console.error(`[${args.category}]`, error.message, args.context ?? {}, error);
   }
 }
 

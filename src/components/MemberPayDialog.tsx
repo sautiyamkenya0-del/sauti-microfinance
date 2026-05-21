@@ -76,9 +76,19 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
       ? stickerPolicy.amount
       : 0;
   const feeQueue = [
-    { key: "membership", label: "Membership fee", amount: membershipAmount, owed: !fees.membership },
+    {
+      key: "membership",
+      label: "Membership fee",
+      amount: membershipAmount,
+      owed: !fees.membership,
+    },
     { key: "card", label: "Membership card", amount: cardAmount, owed: !fees.card },
-    { key: "sticker", label: "Sticker (shop)", amount: stickerAmount, owed: stickerOn && !fees.sticker },
+    {
+      key: "sticker",
+      label: "Sticker (shop)",
+      amount: stickerAmount,
+      owed: stickerOn && !fees.sticker,
+    },
   ].filter((fee) => fee.amount > 0);
   const feesDue = feeQueue.filter((f) => f.owed).reduce((s, f) => s + f.amount, 0);
 
@@ -90,7 +100,8 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const upfrontTotals = useMemo(
     () =>
       upfrontTotalsForAmount(plannedLoanAmount, {
-        membershipFeeAmount: feeQueue.find((fee) => fee.key === "membership" && fee.owed)?.amount ?? 0,
+        membershipFeeAmount:
+          feeQueue.find((fee) => fee.key === "membership" && fee.owed)?.amount ?? 0,
         cardFeeAmount: feeQueue.find((fee) => fee.key === "card" && fee.owed)?.amount ?? 0,
         stickerFeeAmount: feeQueue.find((fee) => fee.key === "sticker" && fee.owed)?.amount ?? 0,
         includeSticker: stickerOn,

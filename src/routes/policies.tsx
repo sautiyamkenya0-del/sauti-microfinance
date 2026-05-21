@@ -50,8 +50,8 @@ function Policies() {
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               Members with {fmtKES(mandatorySharesThreshold)} in shares and{" "}
-              {fmtKES(mandatorySavingsThreshold)} in mandatory savings qualify for premium loans
-              and annual dividends.
+              {fmtKES(mandatorySavingsThreshold)} in mandatory savings qualify for premium loans and
+              annual dividends.
             </p>
           </div>
         </div>
@@ -100,7 +100,8 @@ function Policies() {
                 day.
               </li>
               <li>
-                Compounded default penalty of {SBC_FEES.defaultPenaltyPct}% daily after the due date.
+                Compounded default penalty of {SBC_FEES.defaultPenaltyPct}% daily after the due
+                date.
               </li>
               <li>Collateral joint registration fee is separate and may be added or deducted.</li>
               <li>
@@ -108,8 +109,8 @@ function Policies() {
                 sticker fee {fmtKES(stickerAmount)} where applicable.
               </li>
               <li>
-                First-time total upfront now means tiered upfront plus membership fee, card fee,
-                and sticker fee where the business is permanent.
+                First-time total upfront now means tiered upfront plus membership fee, card fee, and
+                sticker fee where the business is permanent.
               </li>
             </ul>
           </Section>
@@ -149,8 +150,8 @@ function Policies() {
             />
             <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
               Daily savings attached to active loans follows the same threshold waterfall as a
-              normal non-loan contribution: savings first, shares next, then the purpose pool.
-              The remainder of the same payment reduces the active loan balance.
+              normal non-loan contribution: savings first, shares next, then the purpose pool. The
+              remainder of the same payment reduces the active loan balance.
             </div>
           </div>
         </Section>

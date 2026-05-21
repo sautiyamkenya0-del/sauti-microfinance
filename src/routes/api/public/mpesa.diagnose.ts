@@ -68,14 +68,19 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
 
         await requireDirectorActor();
         const adminEnv = getSupabaseAdminEnvStatus();
-        const [envDetails, consumerKeyDetails, consumerSecretDetails, shortcodeDetails, passkeyDetails] =
-          await Promise.all([
-            inspectSecret("MPESA_ENV"),
-            inspectSecret("MPESA_CONSUMER_KEY"),
-            inspectSecret("MPESA_CONSUMER_SECRET"),
-            inspectSecret("MPESA_SHORTCODE"),
-            inspectSecret("MPESA_PASSKEY"),
-          ]);
+        const [
+          envDetails,
+          consumerKeyDetails,
+          consumerSecretDetails,
+          shortcodeDetails,
+          passkeyDetails,
+        ] = await Promise.all([
+          inspectSecret("MPESA_ENV"),
+          inspectSecret("MPESA_CONSUMER_KEY"),
+          inspectSecret("MPESA_CONSUMER_SECRET"),
+          inspectSecret("MPESA_SHORTCODE"),
+          inspectSecret("MPESA_PASSKEY"),
+        ]);
 
         const configVariants = await loadMpesaConfigVariants();
         const sc = shortcodeDetails.value ?? "";
@@ -176,7 +181,8 @@ export const Route = createFileRoute("/api/public/mpesa/diagnose")({
             access_token_prefix: String(authResult.accessToken ?? "").slice(0, 12) + "...",
             expires_in: authResult.expiresIn,
             note:
-              authResult.config.label === "hosting_env" || authResult.config.label === "runtime_vault"
+              authResult.config.label === "hosting_env" ||
+              authResult.config.label === "runtime_vault"
                 ? `OAuth succeeded after switching to ${authResult.config.label}. If this is the desired long-term source, set SAUTI_MPESA_SECRET_SOURCE=${authResult.config.label === "hosting_env" ? "env-first" : "runtime-first"} or clean up the conflicting MPESA_* values.`
                 : "OAuth is working. If STK Push still returns 404.001.03 Invalid Access Token, the Daraja app is authenticated but not provisioned for Lipa Na M-Pesa Online / STK Push in this environment.",
           });

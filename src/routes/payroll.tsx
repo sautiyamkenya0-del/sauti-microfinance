@@ -15,7 +15,11 @@ import {
   requestStaffPayrollPayoutRecord,
   upsertStaffPayrollProfileRecord,
 } from "@/lib/payroll.functions";
-import { payableSalaryFromAttendance, payrollMonthWindow, previousPayrollMonth } from "@/lib/payroll";
+import {
+  payableSalaryFromAttendance,
+  payrollMonthWindow,
+  previousPayrollMonth,
+} from "@/lib/payroll";
 import { fmtKES, roleLabel, useStore } from "@/lib/store";
 
 type PayrollProfile = {
@@ -74,7 +78,9 @@ function PayrollPage() {
     ]);
     setProfiles(nextProfiles as PayrollProfile[]);
     setPayments(nextPayments as PayrollPayment[]);
-    setCashSummary(nextCashSummary as { inflow: number; outflow: number; pending: number; available: number });
+    setCashSummary(
+      nextCashSummary as { inflow: number; outflow: number; pending: number; available: number },
+    );
   }
 
   useEffect(() => {
@@ -110,7 +116,9 @@ function PayrollPage() {
           end: period.end,
           alreadyPaid,
         });
-        const latestPayment = paymentsForMonth.find((payment) => payment.staffId === staffMember.id);
+        const latestPayment = paymentsForMonth.find(
+          (payment) => payment.staffId === staffMember.id,
+        );
         return {
           staffMember,
           profile,
@@ -227,7 +235,9 @@ function PayrollPage() {
                         onChange={(event) => {
                           const nextSalary = Number(event.target.value) || 0;
                           setProfiles((current) => {
-                            const existing = current.find((item) => item.staffId === staffMember.id);
+                            const existing = current.find(
+                              (item) => item.staffId === staffMember.id,
+                            );
                             if (existing) {
                               return current.map((item) =>
                                 item.staffId === staffMember.id
@@ -235,7 +245,10 @@ function PayrollPage() {
                                   : item,
                               );
                             }
-                            return [...current, { staffId: staffMember.id, baseSalary: nextSalary }];
+                            return [
+                              ...current,
+                              { staffId: staffMember.id, baseSalary: nextSalary },
+                            ];
                           });
                         }}
                         className="w-28 rounded-md border border-border bg-card px-3 py-2 text-right text-sm"
@@ -257,7 +270,8 @@ function PayrollPage() {
                             ? "success"
                             : latestPayment?.status === "requested"
                               ? "warning"
-                              : latestPayment?.status === "failed" || latestPayment?.status === "timeout"
+                              : latestPayment?.status === "failed" ||
+                                  latestPayment?.status === "timeout"
                                 ? "destructive"
                                 : "default"
                         }

@@ -20,8 +20,14 @@ create index if not exists idx_mpesa_receipt_allocations_ref
 create index if not exists idx_mpesa_receipt_allocations_member
   on public.mpesa_receipt_allocations(member_id, created_at desc);
 
+drop index if exists public.idx_mpesa_receipt_allocations_unique_tx;
+
 create unique index if not exists idx_mpesa_receipt_allocations_unique_tx
-  on public.mpesa_receipt_allocations(event_id, transaction_id, allocation_type)
+  on public.mpesa_receipt_allocations (
+    coalesce(event_id::text, ''),
+    transaction_id,
+    allocation_type
+  )
   where transaction_id is not null;
 
 insert into public.mpesa_receipt_allocations (
