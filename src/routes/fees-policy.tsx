@@ -58,6 +58,8 @@ import {
   type TargetPeriod,
 } from "@/lib/performance-targets";
 import {
+  PREMIUM_POLICY_TERMS,
+  STANDARD_POLICY_TERMS,
   WATERFALL_DESTINATION_LABELS,
   WATERFALL_SCENARIO_LABELS,
   waterfallOptionsForScenario,
@@ -1325,20 +1327,43 @@ function PolicyCenterPage() {
               </button>
             }
           >
-            <div className="grid gap-4 p-5 md:grid-cols-5">
-              {[7, 14, 30, 60, 90].map((days) => (
-                <NumberField
-                  key={days}
-                  label={`${days} day interest %`}
-                  value={interestDraft[days as keyof typeof interestDraft]}
-                  onChange={(value) =>
-                    setInterestDraft((current) => ({
-                      ...current,
-                      [days]: value,
-                    }))
-                  }
-                />
-              ))}
+            <div className="grid gap-6 p-5 lg:grid-cols-2">
+              <div className="space-y-3">
+                <div className="text-sm font-medium">Standard loans</div>
+                <div className="grid gap-4 md:grid-cols-3">
+                  {STANDARD_POLICY_TERMS.map((days) => (
+                    <NumberField
+                      key={`standard-${days}`}
+                      label={`${days} day interest %`}
+                      value={interestDraft.standard[days]}
+                      onChange={(value) =>
+                        setInterestDraft((current) => ({
+                          ...current,
+                          standard: { ...current.standard, [days]: value },
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium">Premium loans</div>
+                <div className="grid gap-4 md:grid-cols-4">
+                  {PREMIUM_POLICY_TERMS.map((days) => (
+                    <NumberField
+                      key={`premium-${days}`}
+                      label={`${days} day interest %`}
+                      value={interestDraft.premium[days]}
+                      onChange={(value) =>
+                        setInterestDraft((current) => ({
+                          ...current,
+                          premium: { ...current.premium, [days]: value },
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
               New loan applications use these fixed rates immediately. Existing loans keep the rate
@@ -1981,7 +2006,6 @@ function PolicyCenterPage() {
                       <MetricCard
                         label="Undistributed balance"
                         value={fmtKES(carryoverUndistributedBalance)}
-                        tone={Math.abs(carryoverUndistributedBalance) <= 1 ? "success" : "warning"}
                       />
                       <MetricCard
                         label="Derived pending balance"

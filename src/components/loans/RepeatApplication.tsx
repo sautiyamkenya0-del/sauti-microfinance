@@ -3,8 +3,8 @@ import {
   useStore,
   fmtKES,
   loanPricingPreview,
-  loanRateForTerm,
-  normalizeLoanTermDays,
+  loanProductTypeForAmount,
+  normalizeLoanTermDaysForType,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
@@ -12,7 +12,7 @@ import {
   type LoanChargeMode,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 type ReconfirmRow = [label: string, checked: boolean, onChange: (value: boolean) => void];
@@ -49,27 +49,22 @@ export function RepeatApplication({
   const [confirmGuar, setConfirmGuar] = useState(false);
   const [confirmBiz, setConfirmBiz] = useState(false);
   const [changesSinceLast, setChangesSinceLast] = useState("");
-  const repaymentOptions = loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
-
-  useEffect(() => {
-    if (repaymentOptions.includes(repaymentDays as (typeof repaymentOptions)[number])) return;
-    setRepaymentDays(repaymentOptions[repaymentOptions.length - 1]);
-  }, [repaymentDays, repaymentOptions]);
+  const loanType = loanCategory === "Premium" ? "premium" : "standard";
+  const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
 
   const calc = useMemo(() => {
-    const termDays = normalizeLoanTermDays(repaymentDays);
-    const ratePct = loanRateForTerm(termDays);
+    const termDays = normalizeLoanTermDaysForType(repaymentDays, loanType);
     const pricing = loanPricingPreview({
+      loanType,
       netAmount: loanAmount,
-      termDays,
-      ratePct,
+      termDays: repaymentDays,
       processingFeeMode,
       insuranceFeeMode,
       dailySavingsAmount: Number(savingsPlan),
     });
     const ded = pricing.deductions;
     return {
-      ratePct,
+      ratePct: pricing.ratePct,
       termDays,
       interest: pricing.interest,
       total: pricing.totalRepayment,
@@ -78,7 +73,7 @@ export function RepeatApplication({
       financedPrincipal: pricing.financedPrincipal,
       daily: pricing.dailyLoanInstallment,
     };
-  }, [insuranceFeeMode, loanAmount, processingFeeMode, repaymentDays, savingsPlan]);
+  }, [insuranceFeeMode, loanAmount, loanType, processingFeeMode, repaymentDays, savingsPlan]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
@@ -90,7 +85,7 @@ export function RepeatApplication({
       principal: loanAmount,
       rate: calc.ratePct,
       termDays: calc.termDays,
-      termMonths: termPeriodsFromDays(calc.termDays),
+      termMonths: termPeriodsFromDays(calc.termDays, loanType),
       startDate: new Date().toISOString().slice(0, 10),
       officerId: currentUser.id,
       status: "pending",
@@ -175,7 +170,11 @@ export function RepeatApplication({
             type="number"
             label="Amount Requested (KSh)"
             value={String(loanAmount)}
-            onChange={(v) => setLoanAmount(Number(v))}
+            onChange={(v) => {
+              const nextAmount = Number(v);
+              setLoanAmount(nextAmount);
+              setLoanCategory(loanProductTypeForAmount(nextAmount) === "premium" ? "Premium" : "Normal");
+            }}
           />
           <Select
             label="Purpose"
@@ -189,12 +188,22 @@ export function RepeatApplication({
             onChange={(v) => setRepaymentPlan(v as "Daily" | "Weekly" | "Monthly")}
             options={["Daily", "Weekly", "Monthly"]}
           />
+          <Input
+            type="number"
+            label="Repayment Days"
+            value={String(repaymentDays)}
+            onChange={(v) => setRepaymentDays(Math.max(1, Number(v) || 0))}
+          />
           <Select
-            label="Repayment Period (days)"
+            label="Repayment Term Band"
             value={String(calc.termDays)}
             onChange={(v) => setRepaymentDays(Number(v))}
             options={repaymentOptions.map((d) => String(d))}
           />
+          <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
+            Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
+            at {calc.ratePct}%.
+          </div>
           <Select
             label="Daily Savings Plan"
             value={savingsPlan}

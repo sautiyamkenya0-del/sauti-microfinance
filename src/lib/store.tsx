@@ -40,8 +40,11 @@ import { normalizeFeePolicies, type FeePolicy } from "@/lib/fees-policy";
 import {
   DEFAULT_POLICY_SETTINGS,
   getActivePolicySettings,
+  normalizePolicyTermDays,
+  policyInterestRateForTerm,
   setActivePolicySettings,
   transactionFeeForAmount,
+  type PolicyLoanType,
   type PolicySettings,
 } from "@/lib/policy-settings";
 import { listStaffMessages } from "@/lib/runtime-data.functions";
@@ -49,10 +52,10 @@ import { listStaffMessages } from "@/lib/runtime-data.functions";
 export type Role = "director" | "manager" | "loan_officer";
 
 export type MandatoryFees = {
-  membership: boolean; // 500/=
-  card: boolean; // 500/=
+  membership: boolean; // registration fee settled
+  card: boolean; // membership card settled
   hasShop: boolean; // sticker only required if member has a physical shop
-  sticker: boolean; // 500/= when hasShop
+  sticker: boolean; // sticker settled when a shop / permanent business applies
   firstUpfrontPaid: boolean; // first-installment / loan upfront already settled manually
 };
 
@@ -96,6 +99,16 @@ export type Member = {
 /** SBC policy: loan terms are fixed-day buckets, not months. */
 export type LoanTermDays = 7 | 14 | 30 | 60 | 90;
 export type LoanChargeMode = "upfront" | "financed";
+export type LoanProductType = PolicyLoanType;
+
+export type LoanFixedFeeModes = {
+  membershipFeeAmount?: number;
+  membershipFeeMode?: LoanChargeMode;
+  cardFeeAmount?: number;
+  cardFeeMode?: LoanChargeMode;
+  stickerFeeAmount?: number;
+  stickerFeeMode?: LoanChargeMode;
+};
 
 export type Loan = {
   id: string;
@@ -338,17 +351,10 @@ export type MpesaAllocation = {
   notes: string[];
 };
 
-const SHARE_PRICE = 500;
+const SHARE_PRICE = 100;
 export const STANDARD_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
 export const PREMIUM_LOAN_TERMS: LoanTermDays[] = [14, 30, 60, 90];
 export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30, 60, 90];
-export const SBC_TERM_RATE_PCT_BY_DAYS: Record<LoanTermDays, number> = {
-  7: DEFAULT_POLICY_SETTINGS.interestRates[7],
-  14: DEFAULT_POLICY_SETTINGS.interestRates[14],
-  30: DEFAULT_POLICY_SETTINGS.interestRates[30],
-  60: DEFAULT_POLICY_SETTINGS.interestRates[60],
-  90: DEFAULT_POLICY_SETTINGS.interestRates[90],
-};
 
 /**
  * SBC mandatory thresholds before extra savings can spill into the purpose pool.
@@ -1115,21 +1121,24 @@ export function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
 }
 
 export function normalizeLoanTermDays(termDays?: number): LoanTermDays {
-  if (termDays === 7 || termDays === 14 || termDays === 30 || termDays === 60 || termDays === 90)
-    return termDays;
-  if ((termDays ?? 0) <= 10) return 7;
-  if ((termDays ?? 0) <= 21) return 14;
-  if ((termDays ?? 0) <= 45) return 30;
-  if ((termDays ?? 0) <= 75) return 60;
-  return 90;
+  return normalizePolicyTermDays(termDays);
 }
 
-export function termPeriodsFromDays(termDays?: number) {
-  return Math.max(1, Math.ceil(normalizeLoanTermDays(termDays) / 30));
+export function normalizeLoanTermDaysForType(termDays?: number, loanType?: LoanProductType) {
+  return normalizePolicyTermDays(termDays, loanType);
 }
 
-export function loanRateForTerm(termDays?: number) {
-  return getActivePolicySettings().interestRates[normalizeLoanTermDays(termDays)];
+export function termPeriodsFromDays(termDays?: number, loanType?: LoanProductType) {
+  return Math.max(1, Math.ceil(normalizeLoanTermDaysForType(termDays, loanType) / 30));
+}
+
+export function loanProductTypeForAmount(amount: number): LoanProductType {
+  return Number(amount ?? 0) > 5000 ? "premium" : "standard";
+}
+
+export function loanRateForTerm(termDays?: number, loanType?: LoanProductType, amount?: number) {
+  const resolvedLoanType = loanType ?? loanProductTypeForAmount(Number(amount ?? 0));
+  return policyInterestRateForTerm(termDays, resolvedLoanType, getActivePolicySettings());
 }
 
 export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths">) {
@@ -1148,6 +1157,51 @@ export function shareValueForUnits(units: number) {
   return Number(units ?? 0) * SHARE_PRICE;
 }
 
+export function summarizeLoanFixedFees(options?: LoanFixedFeeModes) {
+  const membershipFeeAmount = Math.max(0, Number(options?.membershipFeeAmount ?? 0));
+  const cardFeeAmount = Math.max(0, Number(options?.cardFeeAmount ?? 0));
+  const stickerFeeAmount = Math.max(0, Number(options?.stickerFeeAmount ?? 0));
+  const membershipFeeMode = options?.membershipFeeMode === "financed" ? "financed" : "upfront";
+  const cardFeeMode = options?.cardFeeMode === "financed" ? "financed" : "upfront";
+  const stickerFeeMode = options?.stickerFeeMode === "financed" ? "financed" : "upfront";
+
+  const rows = [
+    {
+      key: "membership",
+      label: "Registration fee",
+      amount: membershipFeeAmount,
+      mode: membershipFeeMode,
+    },
+    {
+      key: "card",
+      label: "Membership card",
+      amount: cardFeeAmount,
+      mode: cardFeeMode,
+    },
+    {
+      key: "sticker",
+      label: "Sticker fee",
+      amount: stickerFeeAmount,
+      mode: stickerFeeMode,
+    },
+  ] as const;
+
+  return {
+    rows,
+    membershipFee: rows[0],
+    cardFee: rows[1],
+    stickerFee: rows[2],
+    totalUpfront: rows.reduce(
+      (sum, row) => sum + (row.mode === "upfront" ? row.amount : 0),
+      0,
+    ),
+    totalFinanced: rows.reduce(
+      (sum, row) => sum + (row.mode === "financed" ? row.amount : 0),
+      0,
+    ),
+  };
+}
+
 export function loanDailySavingsAmount(approvedAmount: number) {
   return Number(approvedAmount ?? 0) <= 5000 ? 50 : 100;
 }
@@ -1162,19 +1216,24 @@ export function loanPricingPreview(args: {
   netAmount: number;
   termDays?: number;
   ratePct?: number;
+  loanType?: LoanProductType;
   processingFeeMode?: LoanChargeMode;
   insuranceFeeMode?: LoanChargeMode;
   dailySavingsAmount?: number;
+  fixedFees?: LoanFixedFeeModes;
 }) {
   const netAmount = Math.max(0, Number(args.netAmount ?? 0));
-  const termDays = normalizeLoanTermDays(args.termDays);
-  const ratePct = Number(args.ratePct ?? loanRateForTerm(termDays));
+  const resolvedLoanType = args.loanType ?? loanProductTypeForAmount(netAmount);
+  const termDays = normalizeLoanTermDaysForType(args.termDays, resolvedLoanType);
+  const ratePct = Number(args.ratePct ?? loanRateForTerm(termDays, resolvedLoanType, netAmount));
   const deductions = sbcDeductions(netAmount, {
     processingMode: args.processingFeeMode,
     insuranceMode: args.insuranceFeeMode,
   });
-  const periods = termPeriodsFromDays(termDays);
-  const schedule = loanScheduleTotal(deductions.financedPrincipal, ratePct, periods);
+  const fixedFees = summarizeLoanFixedFees(args.fixedFees);
+  const financedPrincipal = deductions.financedPrincipal + fixedFees.totalFinanced;
+  const periods = termPeriodsFromDays(termDays, resolvedLoanType);
+  const schedule = loanScheduleTotal(financedPrincipal, ratePct, periods);
   const dailySavingsAmount = Math.max(
     0,
     Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
@@ -1185,11 +1244,12 @@ export function loanPricingPreview(args: {
   return {
     ratePct,
     termDays,
+    loanType: resolvedLoanType,
     periods,
     deductions,
     netAmount,
     netDisbursedAmount: netAmount,
-    financedPrincipal: deductions.financedPrincipal,
+    financedPrincipal,
     interest: schedule.interest,
     totalRepayment: schedule.total,
     dailySavingsAmount,
@@ -1198,6 +1258,9 @@ export function loanPricingPreview(args: {
     roundOff: Math.max(0, dailyInclusive - rawDailyInclusive),
     totalSavingsAccrued: dailySavingsAmount * termDays,
     grandTotalCollected: dailyInclusive * termDays,
+    fixedFees,
+    totalUpfrontCharges: deductions.totalUpfrontCharges + fixedFees.totalUpfront,
+    totalFinancedCharges: deductions.totalFinancedCharges + fixedFees.totalFinanced,
   };
 }
 

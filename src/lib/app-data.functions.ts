@@ -31,6 +31,7 @@ import {
   POLICY_SETTING_LABELS,
   clonePolicySettings,
   mergePolicySettings,
+  normalizePolicyTermDays,
   policySettingsRowsFromConfig,
   transactionFeeForAmount,
   waterfallRuleForScenario,
@@ -181,7 +182,7 @@ function summarizeAttachment(attachment?: Record<string, unknown>) {
   };
 }
 
-const SHARE_PRICE = 500;
+const SHARE_PRICE = 100;
 const ROUNDING_BASE = DEFAULT_POLICY_SETTINGS.percentages.roundOffStep;
 const MANDATORY_SAVINGS_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold;
 const MANDATORY_SHARES_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySharesThreshold;
@@ -194,13 +195,7 @@ function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
 }
 
 function normalizeLoanTermDays(termDays?: number) {
-  if (termDays === 7 || termDays === 14 || termDays === 30 || termDays === 60 || termDays === 90)
-    return termDays;
-  if ((termDays ?? 0) <= 10) return 7;
-  if ((termDays ?? 0) <= 21) return 14;
-  if ((termDays ?? 0) <= 45) return 30;
-  if ((termDays ?? 0) <= 75) return 60;
-  return 90;
+  return normalizePolicyTermDays(termDays);
 }
 
 function termPeriodsFromDays(termDays?: number) {
@@ -1457,7 +1452,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       queuePurposePoolContribution(
         remainingSavingsPortion,
         stillBelowShares
-          ? "share-stage remainder below a full 500 share block"
+          ? `share-stage remainder below a full ${SHARE_PRICE} share block`
           : "amount above mandatory savings and shares thresholds",
       );
       remainingSavingsPortion = 0;

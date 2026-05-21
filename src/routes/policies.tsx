@@ -7,6 +7,14 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { Section } from "@/components/ui-bits";
 import { SBC_FEES, SBC_UPFRONT_TABLE, fmtKES, useStore } from "@/lib/store";
 
+const PURPOSE_POOL_DISTRIBUTION = [
+  ["Levies & Permits Fund", "35%", "Enables members to pay business permits flexibly."],
+  ["Biashara Boost", "20%", "Business growth and expansion."],
+  ["Welfare Fund", "10%", "Emergencies such as accidents, sickness, and funerals."],
+  ["Legal Fund", "15%", "Legal aid and representation."],
+  ["Operations/Admin", "20%", "Running SBC, staff, IT systems, and growth."],
+] as const;
+
 export const Route = createFileRoute("/policies")({
   head: () => ({ meta: [{ title: "SBC Policies - Sauti Microfinance" }] }),
   component: Policies,
@@ -74,13 +82,13 @@ function Policies() {
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
               <li>
                 <span className="font-medium text-foreground">Normal Loans:</span> KSh 1,000-5,000
-                (7-30 days, {policySettings.interestRates[7]}%-{policySettings.interestRates[30]}%
-                interest).
+                (7-30 days, {policySettings.interestRates.standard[7]}%-
+                {policySettings.interestRates.standard[30]}% interest).
               </li>
               <li>
                 <span className="font-medium text-foreground">Premium Loans:</span> KSh 5,000 and
-                above (14-90 days, {policySettings.interestRates[14]}%-
-                {policySettings.interestRates[90]}% interest).
+                above (14-90 days, {policySettings.interestRates.premium[14]}%-
+                {policySettings.interestRates.premium[90]}% interest).
               </li>
               <li>
                 Processing fee {SBC_FEES.processingPct}%, insurance {SBC_FEES.insurancePct}%, and
@@ -143,6 +151,36 @@ function Policies() {
               Daily savings attached to active loans follows the same threshold waterfall as a
               normal non-loan contribution: savings first, shares next, then the purpose pool.
               The remainder of the same payment reduces the active loan balance.
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Purpose Pool Distribution">
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-muted-foreground">
+              After a member is compliant, daily contributions route excess purpose-pool money into
+              these internal funds. Minimum daily contribution is KSh 50 for semi-permanent
+              businesses and KSh 100 for permanent or mobile businesses such as Uber and matatu.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Allocation</th>
+                    <th className="px-5 py-3 text-right">% of Pool</th>
+                    <th className="px-5 py-3 text-left">Purpose</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {PURPOSE_POOL_DISTRIBUTION.map(([allocation, pct, purpose]) => (
+                    <tr key={allocation}>
+                      <td className="px-5 py-3 font-medium">{allocation}</td>
+                      <td className="px-5 py-3 text-right">{pct}</td>
+                      <td className="px-5 py-3 text-xs text-muted-foreground">{purpose}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </Section>

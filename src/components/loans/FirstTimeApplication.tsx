@@ -5,15 +5,15 @@ import {
   formatMembershipNumber,
   fmtKES,
   loanPricingPreview,
-  loanRateForTerm,
+  loanProductTypeForAmount,
   nextMembershipNumber,
   normalizeMembershipNumber,
-  normalizeLoanTermDays,
+  normalizeLoanTermDaysForType,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
-  upfrontTotalsForAmount,
+  upfrontRequirementForAmount,
   type LoanChargeMode,
 } from "@/lib/store";
 import { feePolicyAppliesToMember } from "@/lib/fees-policy";
@@ -86,13 +86,14 @@ export function FirstTimeApplication({
     dailySavingsPlan: "50" as "50" | "100",
     processingFeeMode: "financed" as LoanChargeMode,
     insuranceFeeMode: "financed" as LoanChargeMode,
+    registrationFeeMode: "upfront" as LoanChargeMode,
+    cardFeeMode: "upfront" as LoanChargeMode,
+    stickerFeeMode: "upfront" as LoanChargeMode,
   }));
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
-  const loanCategory = useMemo<"Normal" | "Premium">(
-    () => (f.loanAmount > 5000 ? "Premium" : "Normal"),
-    [f.loanAmount],
-  );
-  const repaymentOptions = loanCategory === "Premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+  const loanType = useMemo(() => loanProductTypeForAmount(f.loanAmount), [f.loanAmount]);
+  const loanCategory = loanType === "premium" ? "Premium" : "Normal";
+  const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
 
   useEffect(() => {
     if (existing) {
@@ -113,11 +114,6 @@ export function FirstTimeApplication({
       }));
     }
   }, [existing, memberId, nextMemberNo]);
-
-  useEffect(() => {
-    if (repaymentOptions.includes(f.repaymentDays as (typeof repaymentOptions)[number])) return;
-    setF((prev) => ({ ...prev, repaymentDays: repaymentOptions[repaymentOptions.length - 1] }));
-  }, [f.repaymentDays, repaymentOptions]);
 
   const previewMemberId = useMemo(
     () => normalizeMembershipNumber(f.membershipNo) || existing?.id || nextMemberNo,
@@ -164,46 +160,58 @@ export function FirstTimeApplication({
       : 0;
 
   const calc = useMemo(() => {
-    const termDays = normalizeLoanTermDays(f.repaymentDays);
-    const ratePct = loanRateForTerm(termDays);
+    const termDays = normalizeLoanTermDaysForType(f.repaymentDays, loanType);
     const pricing = loanPricingPreview({
+      loanType,
       netAmount: f.loanAmount,
-      termDays,
-      ratePct,
+      termDays: f.repaymentDays,
       processingFeeMode: f.processingFeeMode,
       insuranceFeeMode: f.insuranceFeeMode,
       dailySavingsAmount: Number(f.dailySavingsPlan),
+      fixedFees: {
+        membershipFeeAmount: membershipFeeDue,
+        membershipFeeMode: f.registrationFeeMode,
+        cardFeeAmount: cardFeeDue,
+        cardFeeMode: f.cardFeeMode,
+        stickerFeeAmount: stickerFeeDue,
+        stickerFeeMode: f.stickerFeeMode,
+      },
     });
     const ded = pricing.deductions;
-    const upfrontTotals = upfrontTotalsForAmount(f.loanAmount, {
-      membershipFeeAmount: membershipFeeDue,
-      cardFeeAmount: cardFeeDue,
-      stickerFeeAmount: stickerFeeDue,
-      includeSticker: stickerApplicable,
-    });
+    const upfrontBase = upfrontRequirementForAmount(f.loanAmount);
     return {
-      ratePct,
+      ratePct: pricing.ratePct,
       termDays,
       interest: pricing.interest,
       total: pricing.totalRepayment,
       ded,
       upfront: {
-        range: upfrontTotals.tier?.range ?? "",
-        minShares: upfrontTotals.sharesAmount,
-        minSavings: upfrontTotals.savingsAmount,
+        range: upfrontBase.tier?.range ?? "",
+        minShares: upfrontBase.sharesAmount,
+        minSavings: upfrontBase.savingsAmount,
       },
-      upfrontTotals,
+      upfrontBase,
+      fixedFeeRows: pricing.fixedFees.rows,
+      fixedFeesUpfront: pricing.fixedFees.totalUpfront,
+      fixedFeesFinanced: pricing.fixedFees.totalFinanced,
+      totalUpfrontNow: upfrontBase.total + pricing.totalUpfrontCharges,
       netDisbursed: pricing.netDisbursedAmount,
       financedPrincipal: pricing.financedPrincipal,
       dailyPay: pricing.dailyLoanInstallment,
+      totalUpfrontCharges: pricing.totalUpfrontCharges,
+      totalFinancedCharges: pricing.totalFinancedCharges,
     };
   }, [
     cardFeeDue,
+    f.cardFeeMode,
     f.loanAmount,
     f.insuranceFeeMode,
     f.processingFeeMode,
     f.repaymentDays,
+    f.registrationFeeMode,
     f.dailySavingsPlan,
+    f.stickerFeeMode,
+    loanType,
     membershipFeeDue,
     stickerApplicable,
     stickerFeeDue,
@@ -247,7 +255,7 @@ export function FirstTimeApplication({
       principal: f.loanAmount,
       rate: calc.ratePct,
       termDays: calc.termDays,
-      termMonths: termPeriodsFromDays(calc.termDays),
+      termMonths: termPeriodsFromDays(calc.termDays, loanType),
       startDate: new Date().toISOString().slice(0, 10),
       officerId: currentUser.id,
       status: "pending",
@@ -412,12 +420,22 @@ export function FirstTimeApplication({
             onChange={(v) => set("repaymentPlan", v as "Daily" | "Weekly" | "Monthly")}
             options={["Daily", "Weekly", "Monthly"]}
           />
+          <Input
+            type="number"
+            label="Repayment Days"
+            value={String(f.repaymentDays)}
+            onChange={(v) => set("repaymentDays", Math.max(1, Number(v) || 0))}
+          />
           <Select
-            label="Repayment Period (days)"
+            label="Repayment Term Band"
             value={String(calc.termDays)}
             onChange={(v) => set("repaymentDays", Number(v))}
             options={repaymentOptions.map((d) => String(d))}
           />
+          <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
+            Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest
+            band at {calc.ratePct}%.
+          </div>
           <Select
             label="Daily Savings Plan"
             value={f.dailySavingsPlan}
@@ -435,6 +453,27 @@ export function FirstTimeApplication({
             value={f.insuranceFeeMode}
             onChange={(v) => set("insuranceFeeMode", v as LoanChargeMode)}
             options={["financed", "upfront"]}
+          />
+          <Select
+            label={`Registration Fee (${fmtKES(membershipFeeDue)})`}
+            value={f.registrationFeeMode}
+            onChange={(v) => set("registrationFeeMode", v as LoanChargeMode)}
+            disabled={membershipFeeDue <= 0}
+            options={["upfront", "financed"]}
+          />
+          <Select
+            label={`Membership Card (${fmtKES(cardFeeDue)})`}
+            value={f.cardFeeMode}
+            onChange={(v) => set("cardFeeMode", v as LoanChargeMode)}
+            disabled={cardFeeDue <= 0}
+            options={["upfront", "financed"]}
+          />
+          <Select
+            label={`Sticker Fee (${fmtKES(stickerFeeDue)})`}
+            value={f.stickerFeeMode}
+            onChange={(v) => set("stickerFeeMode", v as LoanChargeMode)}
+            disabled={stickerFeeDue <= 0}
+            options={["upfront", "financed"]}
           />
         </div>
       </Section>
@@ -687,7 +726,8 @@ export function FirstTimeApplication({
               label="Fixed Transaction Fee"
               value={fmtKES(calc.ded.transactionCost)}
             />
-            <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
+            <Row label="Fixed Fees Financed" value={fmtKES(calc.fixedFeesFinanced)} />
+            <Row label="Total Financed Charges" value={fmtKES(calc.totalFinancedCharges)} bold />
           </div>
           <div className="space-y-2">
             <Row label="Net Disbursable" value={fmtKES(calc.netDisbursed)} bold />
@@ -695,14 +735,14 @@ export function FirstTimeApplication({
             <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
             <Row label="Daily Repayment" value={fmtKES(calc.dailyPay)} />
             <Row label="Repayment Period" value={`${calc.termDays} days`} />
-            {calc.upfrontTotals.totalUpfrontNow > 0 && (
+            {calc.totalUpfrontNow > 0 && (
               <div className="bg-muted/50 rounded-md p-3 text-xs">
                 <div className="font-medium text-foreground">
-                  {calc.upfrontTotals.tier
-                    ? `Upfront for ${calc.upfrontTotals.tier.range}:`
+                  {calc.upfrontBase.tier
+                    ? `Upfront for ${calc.upfrontBase.tier.range}:`
                     : "First-time upfront:"}
                 </div>
-                {calc.upfrontTotals.tier ? (
+                {calc.upfrontBase.tier ? (
                   <div>
                   Min Shares: {fmtKES(calc.upfront.minShares)} · Min Savings:{" "}
                   {fmtKES(calc.upfront.minSavings)}
@@ -710,16 +750,16 @@ export function FirstTimeApplication({
                 ) : null}
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Tiered upfront base</span>
-                  <span>{fmtKES(calc.upfrontTotals.total)}</span>
+                  <span>{fmtKES(calc.upfrontBase.total)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">Mandatory fees due now</span>
-                  <span>{fmtKES(calc.upfrontTotals.mandatoryFeesTotal)}</span>
+                  <span className="text-muted-foreground">Fixed fees due upfront</span>
+                  <span>{fmtKES(calc.fixedFeesUpfront)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
                   <span>Total upfront now</span>
                   <span>
-                    {fmtKES(calc.upfrontTotals.totalUpfrontNow + calc.ded.totalUpfrontCharges)}
+                    {fmtKES(calc.totalUpfrontNow)}
                   </span>
                 </div>
                 <div className="mt-1 text-muted-foreground">

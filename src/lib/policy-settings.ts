@@ -1,4 +1,16 @@
 export type PolicyLoanTerm = 7 | 14 | 30 | 60 | 90;
+export type StandardPolicyLoanTerm = 7 | 14 | 30;
+export type PremiumPolicyLoanTerm = 14 | 30 | 60 | 90;
+export type PolicyLoanType = "standard" | "premium";
+
+export const STANDARD_POLICY_TERMS: StandardPolicyLoanTerm[] = [7, 14, 30];
+export const PREMIUM_POLICY_TERMS: PremiumPolicyLoanTerm[] = [14, 30, 60, 90];
+export const ALL_POLICY_TERMS: PolicyLoanTerm[] = [7, 14, 30, 60, 90];
+
+export type PolicyInterestRates = {
+  standard: Record<StandardPolicyLoanTerm, number>;
+  premium: Record<PremiumPolicyLoanTerm, number>;
+};
 
 export type PolicyPercentages = {
   processingPct: number;
@@ -38,7 +50,7 @@ export type TransactionFeeBand = {
 
 export type PolicySettings = {
   percentages: PolicyPercentages;
-  interestRates: Record<PolicyLoanTerm, number>;
+  interestRates: PolicyInterestRates;
   waterfallRules: WaterfallRule[];
   transactionFeeBands: TransactionFeeBand[];
 };
@@ -93,11 +105,17 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
     roundOffStep: 1,
   },
   interestRates: {
-    7: 10,
-    14: 15,
-    30: 20,
-    60: 25,
-    90: 30,
+    standard: {
+      7: 10,
+      14: 15,
+      30: 20,
+    },
+    premium: {
+      14: 15,
+      30: 20,
+      60: 25,
+      90: 25,
+    },
   },
   waterfallRules: [
     {
@@ -220,7 +238,10 @@ let activePolicySettings: PolicySettings = clonePolicySettings(DEFAULT_POLICY_SE
 export function clonePolicySettings(settings: PolicySettings): PolicySettings {
   return {
     percentages: { ...settings.percentages },
-    interestRates: { ...settings.interestRates },
+    interestRates: {
+      standard: { ...settings.interestRates.standard },
+      premium: { ...settings.interestRates.premium },
+    },
     waterfallRules: settings.waterfallRules.map((rule) => ({
       scenario: rule.scenario,
       steps: [...rule.steps],
@@ -265,25 +286,24 @@ function normalizeTransactionFeeBandId(value: unknown, index: number) {
 
 function sanitizeTransactionFeeBands(value: unknown): TransactionFeeBand[] {
   const bands = Array.isArray(value) ? value : [];
-  return bands
-    .map((candidate, index) => {
-      if (!isPlainObject(candidate)) return null;
+  const sanitized: TransactionFeeBand[] = [];
+  bands.forEach((candidate, index) => {
+    if (!isPlainObject(candidate)) return;
       const minAmount = Math.max(0, Math.floor(toFiniteNumber(candidate.minAmount, 0)));
       const rawMax = candidate.maxAmount;
       const maxAmount =
         rawMax == null || rawMax === ""
           ? undefined
           : Math.max(minAmount, Math.floor(toFiniteNumber(rawMax, minAmount)));
-      return {
+      sanitized.push({
         id: normalizeTransactionFeeBandId(candidate.id, index),
         minAmount,
         maxAmount,
         feeAmount: Math.max(0, toFiniteNumber(candidate.feeAmount, 0)),
         label: String(candidate.label ?? "").trim() || undefined,
-      } satisfies TransactionFeeBand;
-    })
-    .filter((band): band is TransactionFeeBand => band !== null)
-    .sort((a, b) => a.minAmount - b.minAmount);
+      });
+  });
+  return sanitized.sort((a, b) => a.minAmount - b.minAmount);
 }
 
 function sanitizeSteps(
@@ -310,6 +330,53 @@ export function waterfallOptionsForScenario(scenario: WaterfallScenario): Waterf
     return ["membership_fee", "card_fee", "sticker_fee", "penalties"];
   }
   return ["investment"];
+}
+
+function sanitizeInterestRates(value: unknown): PolicyInterestRates {
+  if (!isPlainObject(value)) {
+    return {
+      standard: { ...DEFAULT_POLICY_SETTINGS.interestRates.standard },
+      premium: { ...DEFAULT_POLICY_SETTINGS.interestRates.premium },
+    };
+  }
+
+  const standardCandidate = isPlainObject(value.standard) ? value.standard : value;
+  const premiumCandidate = isPlainObject(value.premium) ? value.premium : value;
+
+  return {
+    standard: {
+      7: toFiniteNumber(
+        standardCandidate["7"],
+        DEFAULT_POLICY_SETTINGS.interestRates.standard[7],
+      ),
+      14: toFiniteNumber(
+        standardCandidate["14"],
+        DEFAULT_POLICY_SETTINGS.interestRates.standard[14],
+      ),
+      30: toFiniteNumber(
+        standardCandidate["30"],
+        DEFAULT_POLICY_SETTINGS.interestRates.standard[30],
+      ),
+    },
+    premium: {
+      14: toFiniteNumber(
+        premiumCandidate["14"],
+        DEFAULT_POLICY_SETTINGS.interestRates.premium[14],
+      ),
+      30: toFiniteNumber(
+        premiumCandidate["30"],
+        DEFAULT_POLICY_SETTINGS.interestRates.premium[30],
+      ),
+      60: toFiniteNumber(
+        premiumCandidate["60"],
+        DEFAULT_POLICY_SETTINGS.interestRates.premium[60],
+      ),
+      90: toFiniteNumber(
+        premiumCandidate["90"],
+        DEFAULT_POLICY_SETTINGS.interestRates.premium[90],
+      ),
+    },
+  };
 }
 
 export function mergePolicySettings(rows?: PolicySettingRow[] | null): PolicySettings {
@@ -364,14 +431,8 @@ export function mergePolicySettings(rows?: PolicySettingRow[] | null): PolicySet
   }
 
   const interestRow = byKey.get("interest_rates");
-  if (interestRow && isPlainObject(interestRow.value)) {
-    next.interestRates = {
-      7: toFiniteNumber(interestRow.value["7"], DEFAULT_POLICY_SETTINGS.interestRates[7]),
-      14: toFiniteNumber(interestRow.value["14"], DEFAULT_POLICY_SETTINGS.interestRates[14]),
-      30: toFiniteNumber(interestRow.value["30"], DEFAULT_POLICY_SETTINGS.interestRates[30]),
-      60: toFiniteNumber(interestRow.value["60"], DEFAULT_POLICY_SETTINGS.interestRates[60]),
-      90: toFiniteNumber(interestRow.value["90"], DEFAULT_POLICY_SETTINGS.interestRates[90]),
-    };
+  if (interestRow) {
+    next.interestRates = sanitizeInterestRates(interestRow.value);
   }
 
   const waterfallRow = byKey.get("waterfall_rules");
@@ -418,11 +479,17 @@ export function policySettingsRowsFromConfig(settings: PolicySettings): PolicySe
       key: "interest_rates",
       label: POLICY_SETTING_LABELS.interest_rates,
       value: {
-        7: settings.interestRates[7],
-        14: settings.interestRates[14],
-        30: settings.interestRates[30],
-        60: settings.interestRates[60],
-        90: settings.interestRates[90],
+        standard: {
+          7: settings.interestRates.standard[7],
+          14: settings.interestRates.standard[14],
+          30: settings.interestRates.standard[30],
+        },
+        premium: {
+          14: settings.interestRates.premium[14],
+          30: settings.interestRates.premium[30],
+          60: settings.interestRates.premium[60],
+          90: settings.interestRates.premium[90],
+        },
       },
     },
     {
@@ -495,4 +562,37 @@ export function transactionFeeForAmount(
   }
 
   return 0;
+}
+
+export function normalizePolicyTermDays(termDays?: number, loanType?: PolicyLoanType): PolicyLoanTerm {
+  const normalized = Math.max(0, Math.floor(Number(termDays ?? 0)));
+  const terms = loanType === "standard"
+    ? STANDARD_POLICY_TERMS
+    : loanType === "premium"
+      ? PREMIUM_POLICY_TERMS
+      : ALL_POLICY_TERMS;
+
+  for (const term of terms) {
+    if (normalized <= term) return term;
+  }
+
+  return terms[terms.length - 1];
+}
+
+export function policyInterestRateForTerm(
+  termDays: number | undefined,
+  loanType: PolicyLoanType,
+  settings: PolicySettings = activePolicySettings,
+) {
+  const bucket = normalizePolicyTermDays(termDays, loanType);
+  if (loanType === "standard") {
+    const standardBucket =
+      bucket === 7 || bucket === 14 || bucket === 30 ? bucket : STANDARD_POLICY_TERMS[STANDARD_POLICY_TERMS.length - 1];
+    return settings.interestRates.standard[standardBucket];
+  }
+  const premiumBucket =
+    bucket === 14 || bucket === 30 || bucket === 60 || bucket === 90
+      ? bucket
+      : PREMIUM_POLICY_TERMS[PREMIUM_POLICY_TERMS.length - 1];
+  return settings.interestRates.premium[premiumBucket];
 }

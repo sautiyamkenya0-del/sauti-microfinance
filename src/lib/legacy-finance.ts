@@ -1,4 +1,9 @@
-import { DEFAULT_POLICY_SETTINGS, type PolicySettings } from "@/lib/policy-settings";
+import {
+  DEFAULT_POLICY_SETTINGS,
+  normalizePolicyTermDays,
+  policyInterestRateForTerm,
+  type PolicySettings,
+} from "@/lib/policy-settings";
 
 export type LegacyCarryoverProfile = {
   memberId: string;
@@ -83,22 +88,17 @@ function diffDays(from: string, to: string) {
 }
 
 function normalizeTermDays(termDays?: number): 7 | 14 | 30 | 60 | 90 {
-  if (termDays === 7 || termDays === 14 || termDays === 30 || termDays === 60 || termDays === 90)
-    return termDays;
-  if ((termDays ?? 0) <= 10) return 7;
-  if ((termDays ?? 0) <= 21) return 14;
-  if ((termDays ?? 0) <= 45) return 30;
-  if ((termDays ?? 0) <= 75) return 60;
-  return 90;
+  return normalizePolicyTermDays(termDays);
 }
 
 export function effectiveLegacyInterestRate(
-  loan: Pick<LegacyCarryoverLoan, "termDays" | "interestRatePct">,
+  loan: Pick<LegacyCarryoverLoan, "termDays" | "interestRatePct" | "principal">,
   settings: PolicySettings = DEFAULT_POLICY_SETTINGS,
 ) {
   const configured = Number(loan.interestRatePct ?? 0);
   if (configured > 0) return configured;
-  return settings.interestRates[normalizeTermDays(loan.termDays)];
+  const loanType = Number(loan.principal ?? 0) > 5000 ? "premium" : "standard";
+  return policyInterestRateForTerm(loan.termDays, loanType, settings);
 }
 
 export function summarizeLegacyCarryoverLoan(

@@ -19,6 +19,8 @@ const NO_STORE_HEADERS = {
   Expires: "0",
 };
 
+const NEW_SYSTEM_CONFIRMATION_ENDPOINT = "https://sbm.sautiyamkenya.co.ke/api/confirmation";
+
 function successAck(resultDesc: string = "Success") {
   return Response.json({ ResultCode: 0, ResultDesc: resultDesc }, { headers: NO_STORE_HEADERS });
 }
@@ -70,6 +72,36 @@ async function readBodyObject(request: Request) {
       throw new Error("Callback body is not valid JSON.");
     }
     return Object.fromEntries(params.entries());
+  }
+}
+
+async function forwardConfirmationToNewSystem(request: Request, body: Record<string, unknown>) {
+  const target = new URL(NEW_SYSTEM_CONFIRMATION_ENDPOINT);
+  const current = new URL(request.url);
+  if (current.hostname.toLowerCase() === target.hostname.toLowerCase()) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(NEW_SYSTEM_CONFIRMATION_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      console.error("new system confirmation forward failed", {
+        endpoint: NEW_SYSTEM_CONFIRMATION_ENDPOINT,
+        status: response.status,
+      });
+    }
+  } catch (error) {
+    console.error("new system confirmation forward error", {
+      endpoint: NEW_SYSTEM_CONFIRMATION_ENDPOINT,
+      error: String(error ?? ""),
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -306,6 +338,7 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
   try {
     console.info("mpesa confirmation request body", body);
+    await forwardConfirmationToNewSystem(request, body);
     // Emit an error-level log to ensure Vercel/hosted logs capture confirmation payloads
     console.error("mpesa confirmation payload (for visibility)", {
       bodySummary: {

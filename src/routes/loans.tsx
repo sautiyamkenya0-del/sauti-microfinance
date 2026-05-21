@@ -1,21 +1,23 @@
+import { useMemo, useState } from "react";
+
 import { createFileRoute } from "@tanstack/react-router";
+
 import { AppHeader } from "@/components/AppHeader";
+import { AppraisalForm } from "@/components/loans/AppraisalForm";
+import { FieldVisits } from "@/components/loans/FieldVisits";
+import { FirstTimeApplication } from "@/components/loans/FirstTimeApplication";
+import { FollowUps } from "@/components/loans/FollowUps";
+import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
+import { PendingReview } from "@/components/loans/PendingReview";
+import { RepeatApplication } from "@/components/loans/RepeatApplication";
+import { Simulator } from "@/components/loans/Simulator";
 import { SectionTabs } from "@/components/SectionTabs";
 import { isMemberCategory, useStore } from "@/lib/store";
-import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
-import { FirstTimeApplication } from "@/components/loans/FirstTimeApplication";
-import { RepeatApplication } from "@/components/loans/RepeatApplication";
-import { AppraisalForm } from "@/components/loans/AppraisalForm";
-import { Simulator } from "@/components/loans/Simulator";
-import { PendingReview } from "@/components/loans/PendingReview";
-import { FollowUps } from "@/components/loans/FollowUps";
-import { FieldVisits } from "@/components/loans/FieldVisits";
-import { useState } from "react";
 
 type Tab = "book" | "new" | "appraisal" | "simulator" | "review" | "followups" | "visits";
 
 export const Route = createFileRoute("/loans")({
-  head: () => ({ meta: [{ title: "Loans — Sauti Microfinance" }] }),
+  head: () => ({ meta: [{ title: "Loans - Sauti Microfinance" }] }),
   component: LoansHub,
 });
 
@@ -23,11 +25,22 @@ function LoansHub() {
   const { currentUser, memberLoanCount, members } = useStore();
   const [tab, setTab] = useState<Tab>("book");
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [memberQuery, setMemberQuery] = useState("");
   const [historyMemberId, setHistoryMemberId] = useState<string | null>(null);
 
   const isFirstTime = selectedMemberId ? memberLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
+  const filteredMemberAccounts = useMemo(() => {
+    const query = memberQuery.trim().toLowerCase();
+    if (!query) return memberAccounts;
+    return memberAccounts.filter(
+      (member) =>
+        member.name.toLowerCase().includes(query) ||
+        member.id.toLowerCase().includes(query) ||
+        member.phone.toLowerCase().includes(query),
+    );
+  }, [memberAccounts, memberQuery]);
 
   const tabs: { key: Tab; label: string; hidden?: boolean }[] = [
     { key: "book", label: "Loan Book" },
@@ -45,19 +58,18 @@ function LoansHub() {
         title="Loans"
         subtitle="One workspace for the full loan lifecycle: application, appraisal, review, disbursement, follow-up."
       />
-      <main className="flex-1 p-6 lg:p-8 space-y-6">
+      <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="lending" />
-        {/* Tab nav */}
         <div className="flex flex-wrap items-center gap-1 border-b border-border">
           {tabs
-            .filter((t) => !t.hidden)
-            .map((t) => (
+            .filter((item) => !item.hidden)
+            .map((item) => (
               <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${tab === t.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                key={item.key}
+                onClick={() => setTab(item.key)}
+                className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition ${tab === item.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
-                {t.label}
+                {item.label}
               </button>
             ))}
         </div>
@@ -66,29 +78,43 @@ function LoansHub() {
 
         {tab === "new" && (
           <div className="space-y-4">
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap items-end gap-3">
-              <label className="block flex-1 min-w-[280px]">
-                <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
-                  Select Member
-                </span>
-                <select
-                  value={selectedMemberId}
-                  onChange={(e) => setSelectedMemberId(e.target.value)}
-                  className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                >
-                  <option value="">— New / Walk-in (capture full details) —</option>
-                  {memberAccounts.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id} · {m.name} · {m.phone} · ({memberLoanCount(m.id)} loans)
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
+              <div className="grid min-w-[320px] flex-1 gap-3 md:grid-cols-[220px,1fr]">
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Search Member
+                  </span>
+                  <input
+                    value={memberQuery}
+                    onChange={(event) => setMemberQuery(event.target.value)}
+                    placeholder="Search name, member no., or phone"
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Select Member
+                  </span>
+                  <select
+                    value={selectedMemberId}
+                    onChange={(event) => setSelectedMemberId(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  >
+                    <option value="">- New / Walk-in (capture full details) -</option>
+                    {filteredMemberAccounts.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.id} - {member.name} - {member.phone} - (
+                        {memberLoanCount(member.id)} loans)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               {selectedMemberId && (
                 <div className="text-xs text-muted-foreground">
                   {isFirstTime
-                    ? "First-time borrower — full application form below."
-                    : "Repeat borrower — short-form below (KYC re-confirmation only)."}
+                    ? "First-time borrower - full application form below."
+                    : "Repeat borrower - short form below (KYC re-confirmation only)."}
                 </div>
               )}
             </div>
@@ -114,10 +140,10 @@ function LoansHub() {
           <MemberLoanHistory
             memberId={historyMemberId}
             onClose={() => setHistoryMemberId(null)}
-            onNewLoan={(id, first) => {
+            onNewLoan={(id) => {
               setSelectedMemberId(id);
               setHistoryMemberId(null);
-              setTab(first ? "new" : "new");
+              setTab("new");
             }}
           />
         )}

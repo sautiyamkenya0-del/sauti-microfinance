@@ -33,13 +33,17 @@ import { Route as AiRouteImport } from './routes/ai'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiValidationRouteImport } from './routes/api/validation'
 import { Route as ApiConfirmationRouteImport } from './routes/api/confirmation'
+import { Route as ApiMpesaRegisterNowRouteImport } from './routes/api/mpesa/register-now'
 import { Route as ApiMpesaQueueRouteImport } from './routes/api/mpesa.queue'
 import { Route as ApiAiScanMpesaRouteImport } from './routes/api/ai.scan-mpesa'
 import { Route as ApiAiChatRouteImport } from './routes/api/ai.chat'
+import { Route as ApiPublicPaymentsValidationRouteImport } from './routes/api/public/payments.validation'
+import { Route as ApiPublicPaymentsConfirmationRouteImport } from './routes/api/public/payments.confirmation'
 import { Route as ApiPublicMpesaValidationRouteImport } from './routes/api/public/mpesa.validation'
 import { Route as ApiPublicMpesaStkpushRouteImport } from './routes/api/public/mpesa.stkpush'
 import { Route as ApiPublicMpesaDiagnoseRouteImport } from './routes/api/public/mpesa.diagnose'
 import { Route as ApiPublicMpesaConfirmationRouteImport } from './routes/api/public/mpesa.confirmation'
+import { Route as ApiAdminMpesaRegisterC2bUrlsRouteImport } from './routes/api/admin/mpesa.register-c2b-urls'
 import { Route as ApiPublicMpesaB2cTimeoutRouteImport } from './routes/api/public/mpesa.b2c.timeout'
 import { Route as ApiPublicMpesaB2cResultRouteImport } from './routes/api/public/mpesa.b2c.result'
 
@@ -163,6 +167,11 @@ const ApiConfirmationRoute = ApiConfirmationRouteImport.update({
   path: '/api/confirmation',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMpesaRegisterNowRoute = ApiMpesaRegisterNowRouteImport.update({
+  id: '/api/mpesa/register-now',
+  path: '/api/mpesa/register-now',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMpesaQueueRoute = ApiMpesaQueueRouteImport.update({
   id: '/api/mpesa/queue',
   path: '/api/mpesa/queue',
@@ -178,6 +187,18 @@ const ApiAiChatRoute = ApiAiChatRouteImport.update({
   path: '/api/ai/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicPaymentsValidationRoute =
+  ApiPublicPaymentsValidationRouteImport.update({
+    id: '/api/public/payments/validation',
+    path: '/api/public/payments/validation',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicPaymentsConfirmationRoute =
+  ApiPublicPaymentsConfirmationRouteImport.update({
+    id: '/api/public/payments/confirmation',
+    path: '/api/public/payments/confirmation',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicMpesaValidationRoute =
   ApiPublicMpesaValidationRouteImport.update({
     id: '/api/public/mpesa/validation',
@@ -198,6 +219,12 @@ const ApiPublicMpesaConfirmationRoute =
   ApiPublicMpesaConfirmationRouteImport.update({
     id: '/api/public/mpesa/confirmation',
     path: '/api/public/mpesa/confirmation',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminMpesaRegisterC2bUrlsRoute =
+  ApiAdminMpesaRegisterC2bUrlsRouteImport.update({
+    id: '/api/admin/mpesa/register-c2b-urls',
+    path: '/api/admin/mpesa/register-c2b-urls',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiPublicMpesaB2cTimeoutRoute =
@@ -240,10 +267,14 @@ export interface FileRoutesByFullPath {
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
+  '/api/mpesa/register-now': typeof ApiMpesaRegisterNowRoute
+  '/api/admin/mpesa/register-c2b-urls': typeof ApiAdminMpesaRegisterC2bUrlsRoute
   '/api/public/mpesa/confirmation': typeof ApiPublicMpesaConfirmationRoute
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/payments/confirmation': typeof ApiPublicPaymentsConfirmationRoute
+  '/api/public/payments/validation': typeof ApiPublicPaymentsValidationRoute
   '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
   '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
@@ -275,10 +306,14 @@ export interface FileRoutesByTo {
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
+  '/api/mpesa/register-now': typeof ApiMpesaRegisterNowRoute
+  '/api/admin/mpesa/register-c2b-urls': typeof ApiAdminMpesaRegisterC2bUrlsRoute
   '/api/public/mpesa/confirmation': typeof ApiPublicMpesaConfirmationRoute
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/payments/confirmation': typeof ApiPublicPaymentsConfirmationRoute
+  '/api/public/payments/validation': typeof ApiPublicPaymentsValidationRoute
   '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
   '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
@@ -311,10 +346,14 @@ export interface FileRoutesById {
   '/api/ai/chat': typeof ApiAiChatRoute
   '/api/ai/scan-mpesa': typeof ApiAiScanMpesaRoute
   '/api/mpesa/queue': typeof ApiMpesaQueueRoute
+  '/api/mpesa/register-now': typeof ApiMpesaRegisterNowRoute
+  '/api/admin/mpesa/register-c2b-urls': typeof ApiAdminMpesaRegisterC2bUrlsRoute
   '/api/public/mpesa/confirmation': typeof ApiPublicMpesaConfirmationRoute
   '/api/public/mpesa/diagnose': typeof ApiPublicMpesaDiagnoseRoute
   '/api/public/mpesa/stkpush': typeof ApiPublicMpesaStkpushRoute
   '/api/public/mpesa/validation': typeof ApiPublicMpesaValidationRoute
+  '/api/public/payments/confirmation': typeof ApiPublicPaymentsConfirmationRoute
+  '/api/public/payments/validation': typeof ApiPublicPaymentsValidationRoute
   '/api/public/mpesa/b2c/result': typeof ApiPublicMpesaB2cResultRoute
   '/api/public/mpesa/b2c/timeout': typeof ApiPublicMpesaB2cTimeoutRoute
 }
@@ -348,10 +387,14 @@ export interface FileRouteTypes {
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
+    | '/api/mpesa/register-now'
+    | '/api/admin/mpesa/register-c2b-urls'
     | '/api/public/mpesa/confirmation'
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/payments/confirmation'
+    | '/api/public/payments/validation'
     | '/api/public/mpesa/b2c/result'
     | '/api/public/mpesa/b2c/timeout'
   fileRoutesByTo: FileRoutesByTo
@@ -383,10 +426,14 @@ export interface FileRouteTypes {
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
+    | '/api/mpesa/register-now'
+    | '/api/admin/mpesa/register-c2b-urls'
     | '/api/public/mpesa/confirmation'
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/payments/confirmation'
+    | '/api/public/payments/validation'
     | '/api/public/mpesa/b2c/result'
     | '/api/public/mpesa/b2c/timeout'
   id:
@@ -418,10 +465,14 @@ export interface FileRouteTypes {
     | '/api/ai/chat'
     | '/api/ai/scan-mpesa'
     | '/api/mpesa/queue'
+    | '/api/mpesa/register-now'
+    | '/api/admin/mpesa/register-c2b-urls'
     | '/api/public/mpesa/confirmation'
     | '/api/public/mpesa/diagnose'
     | '/api/public/mpesa/stkpush'
     | '/api/public/mpesa/validation'
+    | '/api/public/payments/confirmation'
+    | '/api/public/payments/validation'
     | '/api/public/mpesa/b2c/result'
     | '/api/public/mpesa/b2c/timeout'
   fileRoutesById: FileRoutesById
@@ -454,10 +505,14 @@ export interface RootRouteChildren {
   ApiAiChatRoute: typeof ApiAiChatRoute
   ApiAiScanMpesaRoute: typeof ApiAiScanMpesaRoute
   ApiMpesaQueueRoute: typeof ApiMpesaQueueRoute
+  ApiMpesaRegisterNowRoute: typeof ApiMpesaRegisterNowRoute
+  ApiAdminMpesaRegisterC2bUrlsRoute: typeof ApiAdminMpesaRegisterC2bUrlsRoute
   ApiPublicMpesaConfirmationRoute: typeof ApiPublicMpesaConfirmationRoute
   ApiPublicMpesaDiagnoseRoute: typeof ApiPublicMpesaDiagnoseRoute
   ApiPublicMpesaStkpushRoute: typeof ApiPublicMpesaStkpushRoute
   ApiPublicMpesaValidationRoute: typeof ApiPublicMpesaValidationRoute
+  ApiPublicPaymentsConfirmationRoute: typeof ApiPublicPaymentsConfirmationRoute
+  ApiPublicPaymentsValidationRoute: typeof ApiPublicPaymentsValidationRoute
   ApiPublicMpesaB2cResultRoute: typeof ApiPublicMpesaB2cResultRoute
   ApiPublicMpesaB2cTimeoutRoute: typeof ApiPublicMpesaB2cTimeoutRoute
 }
@@ -632,6 +687,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiConfirmationRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mpesa/register-now': {
+      id: '/api/mpesa/register-now'
+      path: '/api/mpesa/register-now'
+      fullPath: '/api/mpesa/register-now'
+      preLoaderRoute: typeof ApiMpesaRegisterNowRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mpesa/queue': {
       id: '/api/mpesa/queue'
       path: '/api/mpesa/queue'
@@ -651,6 +713,20 @@ declare module '@tanstack/react-router' {
       path: '/api/ai/chat'
       fullPath: '/api/ai/chat'
       preLoaderRoute: typeof ApiAiChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/payments/validation': {
+      id: '/api/public/payments/validation'
+      path: '/api/public/payments/validation'
+      fullPath: '/api/public/payments/validation'
+      preLoaderRoute: typeof ApiPublicPaymentsValidationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/payments/confirmation': {
+      id: '/api/public/payments/confirmation'
+      path: '/api/public/payments/confirmation'
+      fullPath: '/api/public/payments/confirmation'
+      preLoaderRoute: typeof ApiPublicPaymentsConfirmationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/mpesa/validation': {
@@ -679,6 +755,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/mpesa/confirmation'
       fullPath: '/api/public/mpesa/confirmation'
       preLoaderRoute: typeof ApiPublicMpesaConfirmationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/mpesa/register-c2b-urls': {
+      id: '/api/admin/mpesa/register-c2b-urls'
+      path: '/api/admin/mpesa/register-c2b-urls'
+      fullPath: '/api/admin/mpesa/register-c2b-urls'
+      preLoaderRoute: typeof ApiAdminMpesaRegisterC2bUrlsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/mpesa/b2c/timeout': {
@@ -726,10 +809,14 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAiChatRoute: ApiAiChatRoute,
   ApiAiScanMpesaRoute: ApiAiScanMpesaRoute,
   ApiMpesaQueueRoute: ApiMpesaQueueRoute,
+  ApiMpesaRegisterNowRoute: ApiMpesaRegisterNowRoute,
+  ApiAdminMpesaRegisterC2bUrlsRoute: ApiAdminMpesaRegisterC2bUrlsRoute,
   ApiPublicMpesaConfirmationRoute: ApiPublicMpesaConfirmationRoute,
   ApiPublicMpesaDiagnoseRoute: ApiPublicMpesaDiagnoseRoute,
   ApiPublicMpesaStkpushRoute: ApiPublicMpesaStkpushRoute,
   ApiPublicMpesaValidationRoute: ApiPublicMpesaValidationRoute,
+  ApiPublicPaymentsConfirmationRoute: ApiPublicPaymentsConfirmationRoute,
+  ApiPublicPaymentsValidationRoute: ApiPublicPaymentsValidationRoute,
   ApiPublicMpesaB2cResultRoute: ApiPublicMpesaB2cResultRoute,
   ApiPublicMpesaB2cTimeoutRoute: ApiPublicMpesaB2cTimeoutRoute,
 }

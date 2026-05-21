@@ -42,6 +42,39 @@ type BookRow = {
   note: string;
 };
 
+const PURPOSE_POOL_DISTRIBUTION = [
+  {
+    key: "levies_permits",
+    label: "Levies & Permits Fund",
+    pct: 35,
+    purpose: "Enables members to pay business permits flexibly.",
+  },
+  {
+    key: "biashara_boost",
+    label: "Biashara Boost",
+    pct: 20,
+    purpose: "Business growth and expansion.",
+  },
+  {
+    key: "welfare",
+    label: "Welfare Fund",
+    pct: 10,
+    purpose: "Emergencies such as accidents, sickness, and funerals.",
+  },
+  {
+    key: "legal",
+    label: "Legal Fund",
+    pct: 15,
+    purpose: "Legal aid and representation.",
+  },
+  {
+    key: "operations_admin",
+    label: "Operations/Admin",
+    pct: 20,
+    purpose: "Running SBC, staff, IT systems, and growth.",
+  },
+];
+
 function ReportsPage() {
   const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
   const loadSnapshots = useServerFn(listReportSnapshots);
@@ -58,6 +91,7 @@ function ReportsPage() {
   } = useStore();
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
+  const [purposePoolMemberId, setPurposePoolMemberId] = useState("");
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -123,6 +157,18 @@ function ReportsPage() {
     (sum, transaction) => sum + transaction.amount,
     0,
   );
+  const filteredPurposePoolTransactions = purposePoolMemberId
+    ? purposePoolTransactions.filter((transaction) => transaction.memberId === purposePoolMemberId)
+    : purposePoolTransactions;
+  const filteredPurposePoolRevenue = filteredPurposePoolTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
+  const purposePoolRows = PURPOSE_POOL_DISTRIBUTION.map((row) => ({
+    ...row,
+    totalAmount: (purposePoolRevenue * row.pct) / 100,
+    filteredAmount: (filteredPurposePoolRevenue * row.pct) / 100,
+  }));
   const roundOffRevenue = roundOff.reduce((sum, entry) => sum + entry.amount, 0);
   const dailyPenaltyRevenue = paidPenalties
     .filter((penalty) => classifyPenalty(penalty.reason) === "daily")
@@ -361,6 +407,60 @@ function ReportsPage() {
           />
         </div>
 
+        <Section
+          title="Purpose Pool Distribution"
+          action={
+            <select
+              value={purposePoolMemberId}
+              onChange={(event) => setPurposePoolMemberId(event.target.value)}
+              className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
+            >
+              <option value="">All clients</option>
+              {memberAccounts.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.id} - {member.name}
+                </option>
+              ))}
+            </select>
+          }
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Allocation</th>
+                  <th className="px-5 py-3 text-right">% of Pool</th>
+                  <th className="px-5 py-3 text-right">All Clients</th>
+                  <th className="px-5 py-3 text-right">Filtered Client</th>
+                  <th className="px-5 py-3 text-left">Purpose</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {purposePoolRows.map((row) => (
+                  <tr key={row.key}>
+                    <td className="px-5 py-3 font-medium">{row.label}</td>
+                    <td className="px-5 py-3 text-right">{row.pct}%</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.totalAmount)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.filteredAmount)}</td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">{row.purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t border-border font-medium">
+                <tr>
+                  <td className="px-5 py-3">Total purpose pool</td>
+                  <td className="px-5 py-3 text-right">100%</td>
+                  <td className="px-5 py-3 text-right">{fmtKES(purposePoolRevenue)}</td>
+                  <td className="px-5 py-3 text-right">{fmtKES(filteredPurposePoolRevenue)}</td>
+                  <td className="px-5 py-3 text-xs text-muted-foreground">
+                    Filter a client to view their Biashara Boost and other pool slices.
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Section>
+
         <div className="grid gap-6 lg:grid-cols-2">
           <Section title="Monthly Revenue vs Expenses">
             <div className="h-72 p-4">
@@ -453,6 +553,8 @@ function ReportsPage() {
                           feeBookRows,
                           penaltyBookRows,
                           transactionSummary,
+                          purposePoolRows,
+                          purposePoolMemberId,
                         },
                         chartData: {
                           monthly,

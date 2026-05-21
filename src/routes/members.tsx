@@ -170,7 +170,8 @@ function MembersPage() {
                   <th className="px-5 py-3 text-left">Name</th>
                   <th className="px-5 py-3 text-left">Phone</th>
                   <th className="px-5 py-3 text-left">Joined</th>
-                  <th className="px-5 py-3 text-right">Shares</th>
+                  <th className="px-5 py-3 text-right">Share No.</th>
+                  <th className="px-5 py-3 text-right">Shares Value</th>
                   <th className="px-5 py-3 text-right">Savings</th>
                   <th className="px-5 py-3 text-right">Loans</th>
                   <th className="px-5 py-3 text-left">Category</th>
@@ -202,12 +203,8 @@ function MembersPage() {
                       </td>
                       <td className="px-5 py-3 text-muted-foreground">{m.phone}</td>
                       <td className="px-5 py-3 text-muted-foreground">{m.joinedAt}</td>
-                      <td className="px-5 py-3 text-right">
-                        {m.shares}{" "}
-                        <span className="text-xs text-muted-foreground">
-                          ({fmtKES(m.shares * sharePrice)})
-                        </span>
-                      </td>
+                      <td className="px-5 py-3 text-right">{m.shares}</td>
+                      <td className="px-5 py-3 text-right">{fmtKES(m.shares * sharePrice)}</td>
                       <td className="px-5 py-3 text-right">{fmtKES(m.savingsBalance)}</td>
                       <td className="px-5 py-3 text-right">
                         {active}/{memberLoans.length}
