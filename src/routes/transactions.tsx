@@ -143,7 +143,7 @@ function TxPage() {
     () =>
       rows.filter((transaction) => {
         if (filter === "mpesa") {
-          if (!transaction.isMpesaAudit) return false;
+          if (!transaction.isMpesaAudit && transaction.by !== "MPESA") return false;
         } else if (filter !== "all" && transaction.type !== filter) {
           return false;
         }

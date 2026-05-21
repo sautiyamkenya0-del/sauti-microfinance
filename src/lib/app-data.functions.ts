@@ -658,7 +658,13 @@ async function insertMpesaReceiptAllocationRow(args: {
     note: args.note ?? null,
     created_at: args.createdAt ?? undefined,
   });
-  if (error) throw new Error(error.message);
+  if (error) {
+    console.warn("Skipping M-Pesa receipt allocation audit insert", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
   return id;
 }
 
@@ -2343,6 +2349,75 @@ function mpesaRawTimestampValue(raw: Record<string, unknown> | null | undefined)
   return `${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`;
 }
 
+function mpesaRawNumberValue(value: unknown) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const text = String(value ?? "")
+    .replace(/,/g, "")
+    .trim();
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return undefined;
+  const amount = Number(match[0]);
+  return Number.isFinite(amount) ? amount : undefined;
+}
+
+function mpesaRawResultParameters(raw: Record<string, unknown> | null | undefined) {
+  const result = asJsonObject(raw?.Result);
+  const directParameters = asJsonObject(raw?.ResultParameters).ResultParameter;
+  const nestedParameters = asJsonObject(result.ResultParameters).ResultParameter;
+  const value = directParameters ?? nestedParameters;
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+function mpesaRawAccountBalance(raw: Record<string, unknown> | null | undefined) {
+  const directKeys = [
+    "OrgAccountBalance",
+    "AccountBalance",
+    "AvailableBalance",
+    "AvailableFunds",
+    "B2CUtilityAccountAvailableFunds",
+    "B2CWorkingAccountAvailableFunds",
+    "WorkingAccountAvailableFunds",
+    "UtilityAccountAvailableFunds",
+  ];
+
+  for (const key of directKeys) {
+    const amount = mpesaRawNumberValue(raw?.[key]);
+    if (amount !== undefined) return amount;
+  }
+
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    const normalizedKey = key.toLowerCase();
+    if (
+      !normalizedKey.includes("orgaccountbalance") &&
+      !normalizedKey.includes("accountbalance") &&
+      !normalizedKey.includes("availablebalance") &&
+      !normalizedKey.includes("availablefunds")
+    ) {
+      continue;
+    }
+    const amount = mpesaRawNumberValue(value);
+    if (amount !== undefined) return amount;
+  }
+
+  for (const item of mpesaRawResultParameters(raw)) {
+    const parameter = asJsonObject(item);
+    const key = String(parameter.Key ?? parameter.Name ?? "").toLowerCase();
+    if (
+      !key.includes("orgaccountbalance") &&
+      !key.includes("accountbalance") &&
+      !key.includes("availablebalance") &&
+      !key.includes("availablefunds")
+    ) {
+      continue;
+    }
+    const amount = mpesaRawNumberValue(parameter.Value);
+    if (amount !== undefined) return amount;
+  }
+
+  return undefined;
+}
+
 function mpesaDisplayTypeLabel(value?: string | null) {
   switch (String(value ?? "").trim()) {
     case "deposit":
@@ -2378,6 +2453,22 @@ function payoutPurposeToTransactionType(value?: string | null) {
       return "staff_payroll";
     default:
       return "withdrawal";
+  }
+}
+
+async function listMpesaReceiptAllocationRows(supabaseAdmin: any) {
+  try {
+    return await fetchAllRows(() =>
+      (supabaseAdmin as any)
+        .from("mpesa_receipt_allocations")
+        .select("*")
+        .order("created_at", { ascending: true }),
+    );
+  } catch (error: any) {
+    console.warn("Skipping M-Pesa receipt allocations while reading audit data", {
+      message: error?.message ?? String(error ?? ""),
+    });
+    return [];
   }
 }
 
@@ -3170,12 +3261,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
           .in("kind", ["confirmation", "b2c_request", "b2c_result", "b2c_timeout"])
           .order("created_at", { ascending: false }),
       ),
-      fetchAllRows(() =>
-        (supabaseAdmin as any)
-          .from("mpesa_receipt_allocations")
-          .select("*")
-          .order("created_at", { ascending: true }),
-      ),
+      listMpesaReceiptAllocationRows(supabaseAdmin),
       fetchAllRows(() =>
         supabaseAdmin
           .from("transactions")
@@ -3296,6 +3382,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         payerName: String(event.payer_name ?? "").trim() || undefined,
         phone: String(event.phone ?? "").trim() || undefined,
         mpesaRef: receiptRef,
+        paybillBalance: mpesaRawAccountBalance(raw),
         businessShortCode: String(raw.BusinessShortCode ?? raw.ShortCode ?? "").trim() || undefined,
         exactReceivedAt: exactAt,
         createdAt: String(event.created_at ?? "").trim() || exactAt,
@@ -3372,6 +3459,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         payerName: undefined,
         phone: undefined,
         mpesaRef: receiptRef,
+        paybillBalance: undefined,
         businessShortCode: undefined,
         exactReceivedAt: createdAt,
         createdAt,
@@ -3427,8 +3515,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         String(request.originator_conversation_id ?? "").trim() ||
         undefined;
       const payoutCreatedAt = String(resultEvent?.created_at ?? request.created_at ?? "").trim();
+      const resultRaw = asJsonObject(resultEvent?.raw);
       const exactAt =
-        mpesaRawTimestampValue(asJsonObject(resultEvent?.raw)) ?? (payoutCreatedAt || undefined);
+        mpesaRawTimestampValue(resultRaw) ?? (payoutCreatedAt || undefined);
       const payoutRow = {
         id: `payout-${request.id}`,
         source: "mpesa_payout",
@@ -3447,6 +3536,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         payerName: undefined,
         phone: String(request.phone ?? "").trim() || undefined,
         mpesaRef: receiptRef,
+        paybillBalance: mpesaRawAccountBalance(resultRaw),
         businessShortCode: undefined,
         exactReceivedAt: exactAt,
         createdAt: String(request.created_at ?? "").trim() || exactAt,
