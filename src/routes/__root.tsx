@@ -141,6 +141,7 @@ function AppLayout() {
   const { isAuthenticated, isHydrated, authMode, currentUser } = useStore();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
+  const isMpesaPublicApi = pathname.startsWith("/api/public/mpesa");
   const canDrainMpesaQueue =
     authMode === "staff" && (currentUser?.role === "director" || currentUser?.role === "manager");
 
@@ -152,7 +153,7 @@ function AppLayout() {
     );
   }
 
-  if (!isAuthenticated && !isLoginRoute) {
+  if (!isAuthenticated && !isLoginRoute && !isMpesaPublicApi) {
     return (
       <>
         <SplashScreen />
