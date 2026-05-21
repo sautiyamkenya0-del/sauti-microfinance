@@ -224,7 +224,15 @@ export async function handleMpesaValidationRequest(request: Request) {
     const payerName = buildC2bPayerName(body);
     const phone = textValue(body.MSISDN ?? body.PhoneNumber);
 
+    console.warn("mpesa validation callback received", {
+      account,
+      amount,
+      payerName,
+      phone,
+    });
     console.info("mpesa validation request body", body);
+    // Also emit an error-level log so platforms that filter info logs still show the payload
+    console.error("mpesa validation payload (for visibility)", { account, amount, payerName, phone });
     await logErrorToServer({
       level: "info",
       category: "mpesa.validation.payload",
@@ -298,6 +306,12 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
   try {
     console.info("mpesa confirmation request body", body);
+    // Emit an error-level log to ensure Vercel/hosted logs capture confirmation payloads
+    console.error("mpesa confirmation payload (for visibility)", {
+      bodySummary: {
+        account: String(body?.Body?.stkCallback?.AccountReference ?? body?.AccountReference ?? ""),
+      },
+    });
     await logErrorToServer({
       level: "info",
       category: "mpesa.confirmation.payload",
@@ -309,7 +323,8 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
     const normalized = await normalizeConfirmationBody(body);
     const expectedShortcodes = await listConfiguredMpesaShortcodes();
-    console.info("mpesa confirmation normalized", {
+    // Put normalized summary at error level to make it visible in filtered logs
+    console.error("mpesa confirmation normalized (for visibility)", {
       account: normalized.account,
       amount: normalized.amount,
       mpesaRef: normalized.eventRef,
@@ -398,6 +413,13 @@ export async function handleMpesaB2cResultRequest(request: Request) {
 
   try {
     const normalized = normalizeB2cResultBody(body);
+    // Ensure B2C result payloads appear in host logs
+    console.error("mpesa b2c result normalized (for visibility)", {
+      conversationId: normalized.conversationId,
+      originatorConversationId: normalized.originatorConversationId,
+      payoutRef: normalized.payoutRef,
+      resultCode: normalized.resultCode,
+    });
     await applyMpesaWithdrawalResultToDatabase({
       raw: normalized.raw,
       conversationId: normalized.conversationId,
@@ -434,6 +456,11 @@ export async function handleMpesaB2cTimeoutRequest(request: Request) {
 
   try {
     const normalized = normalizeB2cTimeoutBody(body);
+    // Log timeouts at error level for visibility
+    console.error("mpesa b2c timeout normalized (for visibility)", {
+      conversationId: normalized.conversationId,
+      originatorConversationId: normalized.originatorConversationId,
+    });
     await markMpesaWithdrawalTimeout({
       raw: normalized.raw,
       conversationId: normalized.conversationId,
