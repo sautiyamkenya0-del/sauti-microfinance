@@ -3162,7 +3162,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
     await requireStaffActor();
     const supabaseAdmin = await requireSupabaseAdmin();
 
-    const [events, allocations, members, payoutRequests] = await Promise.all([
+    const [events, allocations, linkedTransactions, members, payoutRequests] = await Promise.all([
       fetchAllRows(() =>
         supabaseAdmin
           .from("mpesa_events")
@@ -3176,6 +3176,12 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
           .select("*")
           .order("created_at", { ascending: true }),
       ),
+      fetchAllRows(() =>
+        supabaseAdmin
+          .from("transactions")
+          .select("id, type, amount, member_id, loan_id, note, account, payer_name, ref, created_at")
+          .eq("by_staff", MPESA_SYSTEM_STAFF_ID),
+      ),
       fetchAllRows(() => supabaseAdmin.from("members").select("id, name")),
       fetchAllRows(() =>
         supabaseAdmin.from("system_payout_requests").select("*").order("created_at", {
@@ -3186,6 +3192,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
 
     const memberNames = new Map(
       members.map((row: any) => [String(row.id ?? "").trim(), String(row.name ?? "").trim()]),
+    );
+    const transactionsById = new Map(
+      linkedTransactions.map((row: any) => [String(row.id ?? "").trim(), row]),
     );
     const confirmationRefs = new Set<string>();
     for (const event of events) {
@@ -3232,10 +3241,29 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       const eventAllocations = (allocationsByEvent.get(String(event.id ?? "").trim()) ?? []).sort(
         (a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
       );
-      const primaryAllocation = eventAllocations[0] ?? null;
+      const linkedTransaction = event.transaction_id
+        ? transactionsById.get(String(event.transaction_id).trim())
+        : null;
+      const receiptAllocations =
+        eventAllocations.length > 0 || !linkedTransaction
+          ? eventAllocations
+          : [
+              {
+                id: `linked-${linkedTransaction.id}`,
+                transaction_id: linkedTransaction.id,
+                allocation_type: linkedTransaction.type,
+                amount: linkedTransaction.amount,
+                note: linkedTransaction.note,
+                member_id: linkedTransaction.member_id,
+                loan_id: linkedTransaction.loan_id,
+                created_at: linkedTransaction.created_at,
+              },
+            ];
+      const primaryAllocation = receiptAllocations[0] ?? null;
       const memberId =
-        String(primaryAllocation?.member_id ?? event.account ?? "").trim() || undefined;
-      const account = String(event.account ?? raw.BillRefNumber ?? "")
+        String(primaryAllocation?.member_id ?? linkedTransaction?.member_id ?? event.account ?? "")
+          .trim() || undefined;
+      const account = String(event.account ?? linkedTransaction?.account ?? raw.BillRefNumber ?? "")
         .trim()
         .toUpperCase();
       const receiptRef =
@@ -3244,7 +3272,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       const exactAt = mpesaRawTimestampValue(raw) ?? (eventCreatedAt || undefined);
       const primaryType =
         String(primaryAllocation?.allocation_type ?? "").trim() || "mpesa_unallocated";
-      const allocatedAmount = eventAllocations.reduce(
+      const allocatedAmount = receiptAllocations.reduce(
         (sum, allocation) => sum + toNumber(allocation.amount),
         0,
       );
@@ -3274,8 +3302,8 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         note:
           String(primaryAllocation?.note ?? "").trim() ||
           String(raw.TransactionType ?? "Pay Bill").trim(),
-        allocationCount: eventAllocations.length,
-        allocations: eventAllocations.map((allocation) => ({
+        allocationCount: receiptAllocations.length,
+        allocations: receiptAllocations.map((allocation) => ({
           id: String(allocation.id),
           transactionId: allocation.transaction_id ? String(allocation.transaction_id) : undefined,
           type: String(allocation.allocation_type ?? "").trim(),
@@ -3285,9 +3313,14 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
           memberId: allocation.member_id ? String(allocation.member_id) : undefined,
           loanId: allocation.loan_id ? String(allocation.loan_id) : undefined,
         })),
-        transactionIds: eventAllocations
-          .map((allocation) => String(allocation.transaction_id ?? "").trim())
-          .filter(Boolean),
+        transactionIds: Array.from(
+          new Set([
+            ...receiptAllocations
+              .map((allocation) => String(allocation.transaction_id ?? "").trim())
+              .filter(Boolean),
+            String(event.transaction_id ?? "").trim(),
+          ]),
+        ).filter(Boolean),
       };
 
       if (data.memberId && receiptRow.memberId !== data.memberId) continue;

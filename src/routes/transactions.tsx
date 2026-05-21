@@ -51,7 +51,6 @@ function isInternalSyntheticTransaction(transaction: { by?: string; note?: strin
     .trim()
     .toLowerCase();
   return (
-    transaction.by === "MPESA" ||
     note.startsWith("policy redistribution:") ||
     note.startsWith("purpose pool reallocation ->") ||
     note.startsWith("round-off captured from m-pesa receipt")
