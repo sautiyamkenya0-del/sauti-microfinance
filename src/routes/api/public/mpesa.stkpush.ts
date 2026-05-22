@@ -46,7 +46,7 @@ function formatDarajaPhone(value: unknown) {
 function callbackUrlFromConfig(configuredUrl: string | undefined, requestUrl: string) {
   const configured = String(configuredUrl ?? "").trim();
   if (configured) return configured;
-  return `${new URL(requestUrl).origin}/api/public/mpesa/confirmation`;
+  return `${new URL(requestUrl).origin}/api/public/payments/confirmation`;
 }
 
 async function sendDarajaStkPush(args: {

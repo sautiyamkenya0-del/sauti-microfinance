@@ -109,6 +109,132 @@ function asJsonObject(value: unknown) {
     : {};
 }
 
+type CarryoverLiveState = {
+  savingsBalance: number;
+  shareUnits: number;
+  membershipFeePaid: boolean;
+  cardFeePaid: boolean;
+  stickerFeePaid: boolean;
+  firstUpfrontPaid: boolean;
+  source: "snapshot" | "ledger" | "member";
+};
+
+function readBooleanValue(value: unknown) {
+  return (
+    value === true ||
+    String(value ?? "")
+      .trim()
+      .toLowerCase() === "true"
+  );
+}
+
+function liveStateFromMemberRow(member: Record<string, unknown>): CarryoverLiveState {
+  return {
+    savingsBalance: Number(member.savings_balance ?? 0),
+    shareUnits: Math.max(0, Math.floor(Number(member.shares ?? 0))),
+    membershipFeePaid: readBooleanValue(member.fee_membership),
+    cardFeePaid: readBooleanValue(member.fee_card),
+    stickerFeePaid: readBooleanValue(member.fee_sticker),
+    firstUpfrontPaid: readBooleanValue(member.fee_first_upfront_paid),
+    source: "member",
+  };
+}
+
+function readPreCarryoverLiveState(value: unknown): CarryoverLiveState | null {
+  const breakdown = asJsonObject(value);
+  const snapshot = asJsonObject(breakdown.preCarryoverLiveState);
+  if (Object.keys(snapshot).length === 0) return null;
+
+  return {
+    savingsBalance: Number(snapshot.savingsBalance ?? snapshot.savings_balance ?? 0),
+    shareUnits: Math.max(
+      0,
+      Math.floor(Number(snapshot.shareUnits ?? snapshot.share_units ?? snapshot.shares ?? 0)),
+    ),
+    membershipFeePaid: readBooleanValue(
+      snapshot.membershipFeePaid ?? snapshot.membership_fee_paid ?? snapshot.fee_membership,
+    ),
+    cardFeePaid: readBooleanValue(
+      snapshot.cardFeePaid ?? snapshot.card_fee_paid ?? snapshot.fee_card,
+    ),
+    stickerFeePaid: readBooleanValue(
+      snapshot.stickerFeePaid ?? snapshot.sticker_fee_paid ?? snapshot.fee_sticker,
+    ),
+    firstUpfrontPaid: readBooleanValue(
+      snapshot.firstUpfrontPaid ?? snapshot.first_upfront_paid ?? snapshot.fee_first_upfront_paid,
+    ),
+    source: "snapshot",
+  };
+}
+
+function serializableCarryoverLiveState(state: CarryoverLiveState) {
+  return {
+    savingsBalance: state.savingsBalance,
+    shareUnits: state.shareUnits,
+    membershipFeePaid: state.membershipFeePaid,
+    cardFeePaid: state.cardFeePaid,
+    stickerFeePaid: state.stickerFeePaid,
+    firstUpfrontPaid: state.firstUpfrontPaid,
+  };
+}
+
+async function rebuildMemberLiveStateFromTransactionLedger(
+  runtimeDb: any,
+  memberId: string,
+): Promise<CarryoverLiveState> {
+  const rows = await fetchAllRows<Record<string, unknown>>(() =>
+    runtimeDb.from("transactions").select("type, amount, note").eq("member_id", memberId),
+  );
+
+  let savingsBalance = 0;
+  let shareAmount = 0;
+  let membershipFeePaid = false;
+  let cardFeePaid = false;
+  let stickerFeePaid = false;
+  let firstUpfrontPaid = false;
+
+  for (const row of rows) {
+    const type = String(row.type ?? "");
+    const amount = Number(row.amount ?? 0);
+    const note = String(row.note ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (type === "deposit") savingsBalance += amount;
+    if (type === "withdrawal") savingsBalance -= amount;
+    if (type === "share_purchase") shareAmount += amount;
+
+    if (type === "fee_payment") {
+      if (note.includes("membership fee") || note.includes("registration fee")) {
+        membershipFeePaid = true;
+      }
+      if (note.includes("membership card") || /\bcard\b/.test(note)) {
+        cardFeePaid = true;
+      }
+      if (note.includes("sticker")) {
+        stickerFeePaid = true;
+      }
+      if (note.includes("upfront")) {
+        firstUpfrontPaid = true;
+      }
+    }
+
+    if (type === "loan_repayment") {
+      firstUpfrontPaid = true;
+    }
+  }
+
+  return {
+    savingsBalance,
+    shareUnits: Math.max(0, Math.floor(shareAmount / SHARE_PRICE)),
+    membershipFeePaid,
+    cardFeePaid,
+    stickerFeePaid,
+    firstUpfrontPaid,
+    source: "ledger",
+  };
+}
+
 function makeId(prefix: string) {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -6217,6 +6343,24 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
     if (!data.memberId) throw new Error("Member id is required.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const [existingProfileResult, currentMemberResult] = await Promise.all([
+      runtimeDb
+        .from("member_carryover_profiles")
+        .select("collection_breakdown")
+        .eq("member_id", data.memberId)
+        .maybeSingle(),
+      runtimeDb
+        .from("members")
+        .select(
+          "savings_balance, shares, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid",
+        )
+        .eq("id", data.memberId)
+        .maybeSingle(),
+    ]);
+    if (existingProfileResult.error) throw new Error(existingProfileResult.error.message);
+    if (currentMemberResult.error) throw new Error(currentMemberResult.error.message);
+    if (!currentMemberResult.data) throw new Error("Member not found.");
+
     const collectionBreakdown = {
       ...data.collectionBreakdown,
       totalDepositsRecorded: Math.max(
@@ -6227,6 +6371,20 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
         ) || 0,
       ),
     };
+    const existingSnapshot = readPreCarryoverLiveState(
+      existingProfileResult.data?.collection_breakdown,
+    );
+    const incomingSnapshot = readPreCarryoverLiveState(collectionBreakdown);
+    if (!incomingSnapshot) {
+      if (existingSnapshot) {
+        collectionBreakdown.preCarryoverLiveState =
+          serializableCarryoverLiveState(existingSnapshot);
+      } else if (!existingProfileResult.data) {
+        collectionBreakdown.preCarryoverLiveState = serializableCarryoverLiveState(
+          liveStateFromMemberRow(currentMemberResult.data as Record<string, unknown>),
+        );
+      }
+    }
     const totalCollected = Math.max(
       0,
       Number(
@@ -6291,6 +6449,86 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
       },
     });
     return { ok: true };
+  });
+
+export const resetMemberCarryoverRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { memberId: string }) => ({
+    memberId: String(data?.memberId ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.memberId) throw new Error("Member id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: member, error: memberError } = await runtimeDb
+      .from("members")
+      .select(
+        "id, savings_balance, shares, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid",
+      )
+      .eq("id", data.memberId)
+      .maybeSingle();
+    if (memberError) throw new Error(memberError.message);
+    if (!member) throw new Error("Member not found.");
+
+    const { data: profile, error: profileError } = await runtimeDb
+      .from("member_carryover_profiles")
+      .select("collection_breakdown")
+      .eq("member_id", data.memberId)
+      .maybeSingle();
+    if (profileError) throw new Error(profileError.message);
+
+    const snapshot = readPreCarryoverLiveState(profile?.collection_breakdown);
+    const restored =
+      snapshot ?? (await rebuildMemberLiveStateFromTransactionLedger(runtimeDb, data.memberId));
+
+    const { error: updateMemberError } = await runtimeDb
+      .from("members")
+      .update({
+        savings_balance: restored.savingsBalance,
+        shares: restored.shareUnits,
+        fee_membership: restored.membershipFeePaid,
+        fee_card: restored.cardFeePaid,
+        fee_sticker: restored.stickerFeePaid,
+        fee_first_upfront_paid: restored.firstUpfrontPaid,
+      })
+      .eq("id", data.memberId);
+    if (updateMemberError) throw new Error(updateMemberError.message);
+
+    const { error: loansDeleteError } = await runtimeDb
+      .from("member_carryover_loans")
+      .delete()
+      .eq("member_id", data.memberId);
+    if (loansDeleteError) throw new Error(loansDeleteError.message);
+
+    const { error: profileDeleteError } = await runtimeDb
+      .from("member_carryover_profiles")
+      .delete()
+      .eq("member_id", data.memberId);
+    if (profileDeleteError) throw new Error(profileDeleteError.message);
+
+    await auditAction({
+      actor,
+      action: "member_carryover.reset",
+      targetType: "member_carryover_profile",
+      targetId: data.memberId,
+      summary: `${actor.name} reset carryover records for ${data.memberId}`,
+      details: {
+        restoredFrom: restored.source,
+        savingsBalance: restored.savingsBalance,
+        shareUnits: restored.shareUnits,
+        membershipFeePaid: restored.membershipFeePaid,
+        cardFeePaid: restored.cardFeePaid,
+        stickerFeePaid: restored.stickerFeePaid,
+        firstUpfrontPaid: restored.firstUpfrontPaid,
+      },
+    });
+
+    return {
+      ok: true,
+      restoredFrom: restored.source,
+      savingsBalance: restored.savingsBalance,
+      shareUnits: restored.shareUnits,
+    };
   });
 
 export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" })

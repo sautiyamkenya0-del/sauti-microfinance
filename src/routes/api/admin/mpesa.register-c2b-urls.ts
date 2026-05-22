@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { requireManagerOrDirectorActor } from "@/lib/auth.server";
-import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
 import { fetchMpesaDaraja } from "@/lib/mpesa-config.server";
 import { readServerEnv } from "@/lib/server-env";
 import { logErrorToServer } from "@/lib/error-logging.server";
@@ -11,6 +10,22 @@ const NO_STORE_HEADERS = {
   Expires: "0",
 };
 
+function c2bCallbackBaseUrl(request: Request) {
+  const explicitBase = String(readServerEnv("MPESA_PUBLIC_BASE_URL") ?? "").trim();
+  if (explicitBase) return explicitBase.replace(/\/+$/, "");
+
+  const publicBase = String(readServerEnv("PUBLIC_BASE_URL") ?? "").trim();
+  if (publicBase) return publicBase.replace(/\/+$/, "");
+
+  const domain = String(readServerEnv("MPESA_DOMAIN") ?? "").trim();
+  if (domain) {
+    if (/^https?:\/\//i.test(domain)) return domain.replace(/\/+$/, "");
+    return `https://${domain.replace(/\/+$/, "")}`;
+  }
+
+  return new URL(request.url).origin.replace(/\/+$/, "");
+}
+
 /**
  * Admin-only endpoint to register/update Safaricom C2B callback URLs.
  * This tells Safaricom where to send unprompted PayBill transactions (manual payments).
@@ -20,7 +35,7 @@ const NO_STORE_HEADERS = {
 export const Route = createFileRoute("/api/admin/mpesa/register-c2b-urls")({
   server: {
     handlers: {
-      POST: async () => {
+      POST: async ({ request }) => {
         // Require admin/director authentication
         await requireManagerOrDirectorActor();
 
@@ -86,12 +101,13 @@ export const Route = createFileRoute("/api/admin/mpesa/register-c2b-urls")({
             );
           }
 
-          // Determine the domain; default to current request host or env variable
-          const domain = readServerEnv("MPESA_DOMAIN") || "sbm.sautiyamkenya.co.ke";
-          const protocol = "https";
-
-          const confirmationUrl = `${protocol}://${domain}/api/public/mpesa/confirmation`;
-          const validationUrl = `${protocol}://${domain}/api/public/mpesa/validation`;
+          const baseUrl = c2bCallbackBaseUrl(request);
+          const confirmationUrl =
+            String(readServerEnv("MPESA_C2B_CONFIRMATION_URL") ?? "").trim() ||
+            `${baseUrl}/api/public/payments/confirmation`;
+          const validationUrl =
+            String(readServerEnv("MPESA_C2B_VALIDATION_URL") ?? "").trim() ||
+            `${baseUrl}/api/public/payments/validation`;
 
           // Register URLs with Safaricom
           const registerUrl =

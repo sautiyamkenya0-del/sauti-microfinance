@@ -9,10 +9,11 @@ This is not a code bug. Your new TanStack/React codebase is **100% ready** to ac
 ## Root Cause
 
 Safaricom's servers are still configured to send manual PayBill callbacks to your **old PHP endpoints**:
+
 - `https://business.sautiyamkenya.co.ke/api/confirmation`
 - `https://business.sautiyamkenya.co.ke/api/validation`
 
-Your old PHP code had a `registerUrl()` function that executed a one-time registration with Safaricom to tell them: *"Route all unprompted payments to this URL."* 
+Your old PHP code had a `registerUrl()` function that executed a one-time registration with Safaricom to tell them: _"Route all unprompted payments to this URL."_
 
 When you migrated to the new React site (now at `sbm.sautiyamkenya.co.ke` or your new domain), you didn't re-register, so Safaricom is **still pointing to the old location**.
 
@@ -28,6 +29,7 @@ You need to call Safaricom's `RegisterURL` endpoint **one time** to update their
 ### Option 1: Use the Admin Registration Endpoint (Recommended)
 
 A new route has been added at:
+
 ```
 POST /api/admin/mpesa/register-c2b-urls
 ```
@@ -37,19 +39,22 @@ POST /api/admin/mpesa/register-c2b-urls
 1. **Ensure you're logged in as a Manager or Director** (or equivalent admin role).
 
 2. **Call the endpoint** (replace domain with your actual domain):
+
    ```bash
    curl -X POST https://sbm.sautiyamkenya.co.ke/api/admin/mpesa/register-c2b-urls \
      -H "Cookie: [your-session-cookie]"
    ```
+
    Or use Postman/Insomnia with your session cookie.
 
 3. **Expected success response:**
+
    ```json
    {
      "ok": true,
      "shortcode": "4157239",
-     "confirmationUrl": "https://sbm.sautiyamkenya.co.ke/api/public/mpesa/confirmation",
-     "validationUrl": "https://sbm.sautiyamkenya.co.ke/api/public/mpesa/validation",
+     "confirmationUrl": "https://sbm.sautiyamkenya.co.ke/api/public/payments/confirmation",
+     "validationUrl": "https://sbm.sautiyamkenya.co.ke/api/public/payments/validation",
      "response": {
        "ResponseCode": "0",
        "ResponseDescription": "success"
@@ -78,8 +83,8 @@ curl -X POST https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl \
   -d '{
     "ShortCode": "4157239",
     "ResponseType": "Completed",
-    "ConfirmationURL": "https://your-domain.com/api/public/mpesa/confirmation",
-    "ValidationURL": "https://your-domain.com/api/public/mpesa/validation"
+    "ConfirmationURL": "https://your-domain.com/api/public/payments/confirmation",
+    "ValidationURL": "https://your-domain.com/api/public/payments/validation"
   }'
 ```
 
@@ -87,7 +92,7 @@ curl -X POST https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl \
 
 1. Safaricom will update their routing tables immediately (usually within seconds).
 2. The next manual PayBill transaction will be routed to your new React site.
-3. Your `POST /api/public/mpesa/confirmation` endpoint will receive the callback.
+3. Your `POST /api/public/payments/confirmation` endpoint will receive the callback.
 4. The transaction will be processed by your `applyMpesaPaymentToDatabase` logic.
 5. You'll see new logs in your `error_logs` table and Vercel console with summaries like:
    ```
@@ -112,20 +117,21 @@ After registration:
 
 ## Configuration Notes
 
-- **Domain**: The registration uses the `MPESA_DOMAIN` environment variable (defaults to `sbm.sautiyamkenya.co.ke`). Update this if your domain changes.
+- **Domain**: The registration uses `MPESA_PUBLIC_BASE_URL`, then `PUBLIC_BASE_URL`, then `MPESA_DOMAIN`, then the current request origin. Update one of these if your domain changes.
 - **Endpoints**: The fixed endpoints are:
-  - Confirmation: `/api/public/mpesa/confirmation`
-  - Validation: `/api/public/mpesa/validation`
+  - Confirmation: `/api/public/payments/confirmation`
+  - Validation: `/api/public/payments/validation`
+- **Safe path**: The registration uses `/payments/*` callback paths and keeps the older `/mpesa/*` handlers only for compatibility.
 - **ResponseType**: Set to `"Completed"` (Safaricom's recommendation for handling timeouts).
 
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
-|---------|---|---|
-| "Missing required MPESA configuration" | Env vars not set | Check `.env.local` or Vercel project settings |
-| "Failed to obtain access token" | Bad consumer key/secret | Verify credentials in Daraja portal |
-| "Safaricom registration failed" | Invalid shortcode or domain | Verify shortcode; ensure domain is reachable |
-| Still no logs after registration | Old PHP server intercepting requests | Check firewall/DNS; may need to take down old PHP server |
+| Symptom                                | Likely Cause                         | Fix                                                      |
+| -------------------------------------- | ------------------------------------ | -------------------------------------------------------- |
+| "Missing required MPESA configuration" | Env vars not set                     | Check `.env.local` or Vercel project settings            |
+| "Failed to obtain access token"        | Bad consumer key/secret              | Verify credentials in Daraja portal                      |
+| "Safaricom registration failed"        | Invalid shortcode or domain          | Verify shortcode; ensure domain is reachable             |
+| Still no logs after registration       | Old PHP server intercepting requests | Check firewall/DNS; may need to take down old PHP server |
 
 ---
 

@@ -31,6 +31,7 @@ import { Badge, Section, StatCard } from "@/components/ui-bits";
 import {
   deleteFeePolicyRecord,
   deleteMemberCarryoverLoanRecord,
+  resetMemberCarryoverRecord,
   triggerPurposePoolRedistributionRecord,
   upsertMemberCarryoverLoanRecord,
   upsertMemberCarryoverProfileRecord,
@@ -102,6 +103,7 @@ type CarryoverCollectionBreakdown = {
   totalDepositsRecorded: number;
   purposePoolBalance: number;
   feeBuckets: CarryoverFeeBuckets;
+  preCarryoverLiveState?: Record<string, unknown>;
 };
 
 const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
@@ -139,6 +141,7 @@ function PolicyCenterPage() {
   const saveCarryoverProfile = useServerFn(upsertMemberCarryoverProfileRecord);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const deleteCarryoverLoan = useServerFn(deleteMemberCarryoverLoanRecord);
+  const resetCarryover = useServerFn(resetMemberCarryoverRecord);
   const triggerRedistribution = useServerFn(triggerPurposePoolRedistributionRecord);
   const waivePenalty = useServerFn(waivePenaltyRecord);
   const { rows: targetRows, upsertTarget, removeTarget } = usePerformanceTargetActions();
@@ -200,6 +203,7 @@ function PolicyCenterPage() {
   const [waiverNote, setWaiverNote] = useState("");
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
   const [isRedistributing, setIsRedistributing] = useState(false);
+  const [carryoverResetting, setCarryoverResetting] = useState(false);
 
   useEffect(() => {
     setPercentagesDraft(policySettings.percentages);
@@ -650,6 +654,31 @@ function PolicyCenterPage() {
     await refreshCarryoverDetails(selectedClient.id);
     await refreshAllCarryoverLoans();
     toast.success(carryoverLoanDraft.id ? "Carryover loan updated" : "Carryover loan saved");
+  }
+
+  async function resetSelectedClientCarryover() {
+    if (!selectedClient || carryoverResetting) return;
+    const confirmed = window.confirm(
+      `Reset all carryover balances and loans for ${selectedClient.name}? The live member balances will be restored from the pre-carryover snapshot when available, otherwise from this client's transaction history.`,
+    );
+    if (!confirmed) return;
+
+    setCarryoverResetting(true);
+    try {
+      const result = await resetCarryover({ data: { memberId: selectedClient.id } });
+      await reloadAppData();
+      await refreshCarryoverDetails(selectedClient.id);
+      await refreshAllCarryoverLoans();
+      toast.success(
+        result.restoredFrom === "snapshot"
+          ? "Carryover reset and pre-carryover balances restored."
+          : "Carryover reset and balances rebuilt from transaction history.",
+      );
+    } catch (error: any) {
+      toast.error(error?.message ?? "Carryover reset failed.");
+    } finally {
+      setCarryoverResetting(false);
+    }
   }
 
   function beginEditCarryoverLoan(loan: LegacyCarryoverLoan) {
@@ -1706,13 +1735,23 @@ function PolicyCenterPage() {
                 <Section
                   title="Carryover balances"
                   action={
-                    <button
-                      onClick={() => void saveCarryoverProfileDraft()}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      Save carryover
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => void resetSelectedClientCarryover()}
+                        disabled={carryoverResetting}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        {carryoverResetting ? "Resetting..." : "Reset carryover"}
+                      </button>
+                      <button
+                        onClick={() => void saveCarryoverProfileDraft()}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        Save carryover
+                      </button>
+                    </div>
                   }
                 >
                   <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
@@ -2839,6 +2878,10 @@ function readCarryoverBreakdown(
   return {
     totalDepositsRecorded: Number(next.totalDepositsRecorded ?? 0) || 0,
     purposePoolBalance: Number(next.purposePoolBalance ?? 0) || 0,
+    preCarryoverLiveState:
+      next.preCarryoverLiveState && typeof next.preCarryoverLiveState === "object"
+        ? (next.preCarryoverLiveState as Record<string, unknown>)
+        : undefined,
     feeBuckets: {
       membership: Number(feeBuckets.membership ?? 0) || 0,
       card: Number(feeBuckets.card ?? 0) || 0,

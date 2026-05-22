@@ -160,7 +160,7 @@ function buildVariantFromSecrets(args: {
   const normalizedEnv = normalizeMpesaEnv(envDetails.value);
   const pubBase = String(readServerEnv("PUBLIC_BASE_URL") ?? "").trim();
   const callbackFallback = pubBase
-    ? `${pubBase.replace(/\/+$/, "")}/api/public/mpesa/confirmation`
+    ? `${pubBase.replace(/\/+$/, "")}/api/public/payments/confirmation`
     : "";
   const callbackUrlValue =
     String(callbackUrlDetails.value ?? "").trim() || callbackFallback || undefined;
