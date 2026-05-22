@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 
 import { AppHeader } from "@/components/AppHeader";
 import { AppraisalForm } from "@/components/loans/AppraisalForm";
@@ -12,7 +13,10 @@ import { PendingReview } from "@/components/loans/PendingReview";
 import { RepeatApplication } from "@/components/loans/RepeatApplication";
 import { Simulator } from "@/components/loans/Simulator";
 import { SectionTabs } from "@/components/SectionTabs";
+import { type LegacyCarryoverLoan } from "@/lib/legacy-finance";
+import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
 import { isMemberCategory, useStore } from "@/lib/store";
+import { toast } from "sonner";
 
 type Tab = "book" | "new" | "appraisal" | "simulator" | "review" | "followups" | "visits";
 
@@ -23,12 +27,26 @@ export const Route = createFileRoute("/loans")({
 
 function LoansHub() {
   const { currentUser, memberLoanCount, members } = useStore();
+  const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const [tab, setTab] = useState<Tab>("book");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
   const [historyMemberId, setHistoryMemberId] = useState<string | null>(null);
+  const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
 
-  const isFirstTime = selectedMemberId ? memberLoanCount(selectedMemberId) === 0 : true;
+  useEffect(() => {
+    loadCarryoverLoans()
+      .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
+      .catch((error: any) => {
+        toast.error(error?.message ?? "Failed to load carryover loan records.");
+      });
+  }, [loadCarryoverLoans]);
+
+  const carryoverLoanCount = (memberId: string) =>
+    carryoverLoans.filter((loan) => loan.memberId === memberId).length;
+  const totalLoanCount = (memberId: string) =>
+    memberLoanCount(memberId) + carryoverLoanCount(memberId);
+  const isFirstTime = selectedMemberId ? totalLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const filteredMemberAccounts = useMemo(() => {
@@ -74,7 +92,12 @@ function LoansHub() {
             ))}
         </div>
 
-        {tab === "book" && <LoanBook onSelectMember={(id) => setHistoryMemberId(id)} />}
+        {tab === "book" && (
+          <LoanBook
+            carryoverLoans={carryoverLoans}
+            onSelectMember={(id) => setHistoryMemberId(id)}
+          />
+        )}
 
         {tab === "new" && (
           <div className="space-y-4">
@@ -103,7 +126,7 @@ function LoansHub() {
                     <option value="">- New / Walk-in (capture full details) -</option>
                     {filteredMemberAccounts.map((member) => (
                       <option key={member.id} value={member.id}>
-                        {member.id} - {member.name} - {member.phone} - ({memberLoanCount(member.id)}{" "}
+                        {member.id} - {member.name} - {member.phone} - ({totalLoanCount(member.id)}{" "}
                         loans)
                       </option>
                     ))}
@@ -139,6 +162,7 @@ function LoansHub() {
         {historyMemberId && (
           <MemberLoanHistory
             memberId={historyMemberId}
+            carryoverLoans={carryoverLoans}
             onClose={() => setHistoryMemberId(null)}
             onNewLoan={(id) => {
               setSelectedMemberId(id);

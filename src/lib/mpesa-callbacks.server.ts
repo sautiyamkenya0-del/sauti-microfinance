@@ -344,10 +344,12 @@ export async function handleMpesaConfirmationRequest(request: Request) {
   try {
     console.info("mpesa confirmation request body", body);
     await forwardConfirmationToNewSystem(request, body);
+    const bodyForSummary = asRecord(body.Body);
+    const stkCallbackForSummary = asRecord(bodyForSummary.stkCallback);
     // Emit an error-level log to ensure Vercel/hosted logs capture confirmation payloads
     console.error("mpesa confirmation payload (for visibility)", {
       bodySummary: {
-        account: String(body?.Body?.stkCallback?.AccountReference ?? body?.AccountReference ?? ""),
+        account: String(stkCallbackForSummary.AccountReference ?? body.AccountReference ?? ""),
       },
     });
     await logErrorToServer({
@@ -395,8 +397,7 @@ export async function handleMpesaConfirmationRequest(request: Request) {
     let processedResult: Awaited<ReturnType<typeof applyMpesaPaymentToDatabase>> | undefined;
     if (
       normalized.success &&
-      normalized.amount > 0 &&
-      normalized.account &&
+      normalized.amount >= 1 &&
       (!event.processed || !event.transaction_id)
     ) {
       processedResult = await applyMpesaPaymentToDatabase({

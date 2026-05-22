@@ -12,8 +12,12 @@ import {
   useStore,
 } from "@/lib/store";
 import { createReportSnapshotRecord } from "@/lib/app-data.functions";
-import { type ReportSnapshot } from "@/lib/legacy-finance";
-import { listReportSnapshots } from "@/lib/runtime-data.functions";
+import {
+  summarizeLegacyCarryoverLoan,
+  type LegacyCarryoverLoan,
+  type ReportSnapshot,
+} from "@/lib/legacy-finance";
+import { listAllCarryoverLoans, listReportSnapshots } from "@/lib/runtime-data.functions";
 import {
   Bar,
   BarChart,
@@ -78,6 +82,7 @@ const PURPOSE_POOL_DISTRIBUTION = [
 function ReportsPage() {
   const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
   const loadSnapshots = useServerFn(listReportSnapshots);
+  const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const {
     loans,
     members,
@@ -88,8 +93,10 @@ function ReportsPage() {
     penalties,
     roundOff,
     staff,
+    policySettings,
   } = useStore();
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
+  const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [purposePoolMemberId, setPurposePoolMemberId] = useState("");
 
@@ -105,9 +112,28 @@ function ReportsPage() {
     refreshSnapshots().catch(() => {});
   }, [refreshSnapshots]);
 
+  const refreshCarryoverLoans = useCallback(async () => {
+    try {
+      setCarryoverLoans((await loadCarryoverLoans()) as LegacyCarryoverLoan[]);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load carryover loans.");
+    }
+  }, [loadCarryoverLoans]);
+
+  useEffect(() => {
+    refreshCarryoverLoans().catch(() => {});
+  }, [refreshCarryoverLoans]);
+
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const disbursedLoans = loans.filter(
     (loan) => loan.status !== "pending" && loan.status !== "rejected",
+  );
+  const carryoverLoanRows = carryoverLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
+  const openCarryoverLoanRows = carryoverLoanRows.filter(
+    ({ loan, summary }) => loan.status !== "closed" && !summary.isFinished,
   );
   const activeLoans = loans.filter((loan) => loan.status === "active");
   const feeTransactions = transactions.filter((transaction) => transaction.type === "fee_payment");
@@ -125,29 +151,43 @@ function ReportsPage() {
   const paidPenalties = penalties.filter((penalty) => penalty.status === "paid");
   const outstandingPenalties = penalties.filter((penalty) => penalty.status === "outstanding");
 
-  const portfolio = activeLoans.reduce((sum, loan) => sum + loanSummary(loan).balance, 0);
+  const portfolio =
+    activeLoans.reduce((sum, loan) => sum + loanSummary(loan).balance, 0) +
+    openCarryoverLoanRows.reduce((sum, row) => sum + row.summary.totalOwedNow, 0);
   const memberSavings = memberAccounts.reduce((sum, member) => sum + member.savingsBalance, 0);
   const shareCap = memberAccounts.reduce((sum, member) => sum + member.shares, 0) * sharePrice;
   const investorCap = investors.reduce((sum, investor) => sum + investor.contributed, 0);
   const expenses = pettyCash.reduce((sum, entry) => sum + entry.amount, 0);
 
-  const interestEarned = disbursedLoans.reduce((sum, loan) => {
+  const liveInterestEarned = disbursedLoans.reduce((sum, loan) => {
     const summary = loanSummary(loan);
     const paidRatio = summary.total > 0 ? Math.min(1, loan.paid / summary.total) : 0;
     return sum + summary.interest * paidRatio;
   }, 0);
-  const processingFees = disbursedLoans.reduce((sum, loan) => {
-    const principal = loan.approvedAmount ?? loan.principal;
-    return sum + sbcDeductions(principal).processing;
+  const carryoverInterestEarned = carryoverLoanRows.reduce((sum, row) => {
+    const paidRatio =
+      row.summary.totalRepayment > 0
+        ? Math.min(1, row.loan.paidToDate / row.summary.totalRepayment)
+        : 0;
+    return sum + row.summary.interest * paidRatio;
   }, 0);
-  const insuranceFees = disbursedLoans.reduce((sum, loan) => {
-    const principal = loan.approvedAmount ?? loan.principal;
-    return sum + sbcDeductions(principal).insurance;
-  }, 0);
-  const transactionCostFees = disbursedLoans.reduce((sum, loan) => {
-    const principal = loan.approvedAmount ?? loan.principal;
-    return sum + (loan.transactionFeeAmount ?? transactionFeeAmountForLoan(principal));
-  }, 0);
+  const interestEarned = liveInterestEarned + carryoverInterestEarned;
+  const processingFees =
+    disbursedLoans.reduce((sum, loan) => {
+      const principal = loan.approvedAmount ?? loan.principal;
+      return sum + sbcDeductions(principal).processing;
+    }, 0) + carryoverLoans.reduce((sum, loan) => sum + sbcDeductions(loan.principal).processing, 0);
+  const insuranceFees =
+    disbursedLoans.reduce((sum, loan) => {
+      const principal = loan.approvedAmount ?? loan.principal;
+      return sum + sbcDeductions(principal).insurance;
+    }, 0) + carryoverLoans.reduce((sum, loan) => sum + sbcDeductions(loan.principal).insurance, 0);
+  const transactionCostFees =
+    disbursedLoans.reduce((sum, loan) => {
+      const principal = loan.approvedAmount ?? loan.principal;
+      return sum + (loan.transactionFeeAmount ?? transactionFeeAmountForLoan(principal));
+    }, 0) +
+    carryoverLoans.reduce((sum, loan) => sum + transactionFeeAmountForLoan(loan.principal), 0);
   const transactionFees = processingFees + insuranceFees + transactionCostFees;
   const mandatoryFees = mandatoryFeeTransactions.reduce(
     (sum, transaction) => sum + transaction.amount,
@@ -196,16 +236,16 @@ function ReportsPage() {
     {
       key: "interest",
       label: "Interest earned",
-      count: disbursedLoans.length,
+      count: disbursedLoans.length + carryoverLoans.length,
       amount: interestEarned,
-      note: "Recognized from the paid portion of issued loans.",
+      note: "Recognized from the paid portion of live and carryover loans.",
     },
     {
       key: "transaction_fees",
       label: "Transaction fees",
-      count: disbursedLoans.length,
+      count: disbursedLoans.length + carryoverLoans.length,
       amount: transactionFees,
-      note: "Processing, insurance, and transaction-cost deductions on disbursed loans.",
+      note: "Processing, insurance, and transaction-cost deductions on live and carryover loans.",
     },
     {
       key: "mandatory_fees",
@@ -249,23 +289,23 @@ function ReportsPage() {
     {
       key: "processing_fees",
       label: "Processing fees",
-      count: disbursedLoans.length,
+      count: disbursedLoans.length + carryoverLoans.length,
       amount: processingFees,
-      note: "Loan processing fees earned on disbursement.",
+      note: "Loan processing fees earned on live and carryover disbursements.",
     },
     {
       key: "insurance_fees",
       label: "Insurance fees",
-      count: disbursedLoans.length,
+      count: disbursedLoans.length + carryoverLoans.length,
       amount: insuranceFees,
-      note: "Insurance deductions earned on disbursement.",
+      note: "Insurance deductions earned on live and carryover disbursements.",
     },
     {
       key: "transaction_cost_fees",
       label: "Transaction cost fees",
-      count: disbursedLoans.length,
+      count: disbursedLoans.length + carryoverLoans.length,
       amount: transactionCostFees,
-      note: "Transaction-cost deductions earned on disbursement.",
+      note: "Transaction-cost deductions earned on live and carryover disbursements.",
     },
     {
       key: "mandatory_fee_payments",
@@ -317,6 +357,8 @@ function ReportsPage() {
 
   const monthly = buildMonthlyBook({
     loans: disbursedLoans,
+    carryoverLoans,
+    policySettings,
     transactions,
     penalties: paidPenalties,
     roundOff,
@@ -760,6 +802,8 @@ function classifyPenalty(reason: string) {
 
 function buildMonthlyBook(args: {
   loans: ReturnType<typeof useStore>["loans"];
+  carryoverLoans: LegacyCarryoverLoan[];
+  policySettings: ReturnType<typeof useStore>["policySettings"];
   transactions: ReturnType<typeof useStore>["transactions"];
   penalties: ReturnType<typeof useStore>["penalties"];
   roundOff: ReturnType<typeof useStore>["roundOff"];
@@ -790,6 +834,16 @@ function buildMonthlyBook(args: {
     const deductions = sbcDeductions(loan.approvedAmount ?? loan.principal);
     book[key].revenue += summary.interest;
     book[key].revenue += deductions.total;
+  });
+
+  args.carryoverLoans.forEach((loan) => {
+    const key = loan.startDate.slice(0, 7);
+    if (!book[key]) return;
+    const summary = summarizeLegacyCarryoverLoan(loan, args.policySettings);
+    const paidRatio =
+      summary.totalRepayment > 0 ? Math.min(1, loan.paidToDate / summary.totalRepayment) : 0;
+    book[key].revenue += summary.interest * paidRatio;
+    book[key].revenue += sbcDeductions(loan.principal).total;
   });
 
   args.transactions

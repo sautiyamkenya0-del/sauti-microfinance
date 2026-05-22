@@ -338,7 +338,7 @@ export const loadMemberCarryover = createServerFn({ method: "POST" })
   });
 
 export const listAllCarryoverLoans = createServerFn({ method: "POST" }).handler(async () => {
-  await requireDirectorActor();
+  await requireStaffActor();
   const runtimeDb = requireSupabaseAdmin() as any;
   const { data, error } = await runtimeDb
     .from("member_carryover_loans")

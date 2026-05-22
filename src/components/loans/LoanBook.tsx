@@ -7,6 +7,7 @@ import {
   loanTermDaysOf,
   type Loan,
 } from "@/lib/store";
+import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -44,8 +45,18 @@ function dailyTotalOf(l: Loan): number {
   return loanSummary(l).dailyCollectionAmount;
 }
 
-export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string) => void }) {
-  const { loans, members, staff, currentUser, recordTransaction } = useStore();
+type LoanBookRow =
+  | { kind: "live"; loan: Loan; sortKey: string }
+  | { kind: "carryover"; loan: LegacyCarryoverLoan; sortKey: string };
+
+export function LoanBook({
+  carryoverLoans = [],
+  onSelectMember,
+}: {
+  carryoverLoans?: LegacyCarryoverLoan[];
+  onSelectMember: (memberId: string) => void;
+}) {
+  const { loans, members, staff, currentUser, recordTransaction, policySettings } = useStore();
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
@@ -55,29 +66,46 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
   const today = new Date().toISOString().slice(0, 10);
 
   const visible = useMemo(() => {
-    let list =
+    const liveLoans =
       currentUser.role === "loan_officer"
         ? loans.filter((l) => l.officerId === currentUser.id)
         : loans;
+    let list: LoanBookRow[] = [
+      ...liveLoans.map((loan) => ({ kind: "live" as const, loan, sortKey: loan.startDate })),
+      ...carryoverLoans.map((loan) => ({
+        kind: "carryover" as const,
+        loan,
+        sortKey: loan.startDate,
+      })),
+    ];
 
-    list = list.filter((l) => {
+    list = list.filter((row) => {
+      const status = row.loan.status;
+      const isFinished =
+        row.kind === "carryover"
+          ? row.loan.finished || summarizeLegacyCarryoverLoan(row.loan, policySettings).isFinished
+          : row.loan.status === "closed";
+      const dueDate =
+        row.kind === "carryover"
+          ? summarizeLegacyCarryoverLoan(row.loan, policySettings).dueDate
+          : dueDateOf(row.loan);
       switch (filter) {
         case "all":
           return true;
         case "active":
-          return l.status === "active";
+          return status === "active" && !isFinished;
         case "pending":
-          return l.status === "pending";
+          return row.kind === "live" && status === "pending";
         case "approved":
-          return l.status === "active" || l.status === "closed";
+          return status === "active" || isFinished;
         case "rejected":
-          return l.status === "rejected";
+          return row.kind === "live" && status === "rejected";
         case "completed":
-          return l.status === "closed";
+          return isFinished;
         case "defaulted":
-          return l.status === "defaulted";
+          return status === "defaulted";
         case "overdue":
-          return l.status === "active" && dueDateOf(l) < today;
+          return status === "active" && !isFinished && dueDate < today;
         default:
           return true;
       }
@@ -85,17 +113,24 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
 
     if (activeQuery.trim()) {
       const q = activeQuery.trim().toLowerCase();
-      list = list.filter((l) => {
-        const m = members.find((x) => x.id === l.memberId);
-        return [m?.id, m?.name, m?.phone, m?.businessName, l.id]
+      list = list.filter((row) => {
+        const m = members.find((x) => x.id === row.loan.memberId);
+        return [
+          m?.id,
+          m?.name,
+          m?.phone,
+          m?.businessName,
+          row.loan.id,
+          row.kind === "carryover" ? row.loan.label : undefined,
+        ]
           .filter(Boolean)
           .some((v) => String(v).toLowerCase().includes(q));
       });
     }
-    return list.sort((a, b) => Number(b.id.replace(/\D/g, "")) - Number(a.id.replace(/\D/g, "")));
-  }, [loans, members, filter, activeQuery, currentUser, today]);
+    return list.sort((a, b) => String(b.sortKey).localeCompare(String(a.sortKey)));
+  }, [loans, members, filter, activeQuery, currentUser, today, carryoverLoans, policySettings]);
 
-  const empty = loans.length === 0;
+  const empty = loans.length === 0 && carryoverLoans.length === 0;
 
   return (
     <Section
@@ -180,24 +215,43 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
                 </td>
               </tr>
             )}
-            {visible.map((l) => {
+            {visible.map((row) => {
+              const l = row.loan;
               const m = members.find((x) => x.id === l.memberId);
-              const o = staff.find((s) => s.id === l.officerId);
-              const summary = loanSummary(l);
-              const idNum = l.id.replace(/\D/g, "");
+              const liveLoan = row.loan as Loan;
+              const legacyLoan = row.loan as LegacyCarryoverLoan;
+              const o =
+                row.kind === "live" ? staff.find((s) => s.id === liveLoan.officerId) : undefined;
+              const summary =
+                row.kind === "live"
+                  ? loanSummary(liveLoan)
+                  : summarizeLegacyCarryoverLoan(legacyLoan, policySettings);
+              const idNum = l.id.replace(/\D/g, "") || l.id;
+              const statusLabel =
+                row.kind === "carryover" &&
+                (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).isFinished
+                  ? "closed"
+                  : l.status;
               const tone =
-                l.status === "active"
+                statusLabel === "active"
                   ? "success"
-                  : l.status === "closed"
+                  : statusLabel === "closed"
                     ? "default"
-                    : l.status === "pending"
+                    : statusLabel === "pending"
                       ? "warning"
-                      : l.status === "rejected"
+                      : statusLabel === "rejected"
                         ? "destructive"
                         : "destructive";
               return (
-                <tr key={l.id} className="hover:bg-muted/30">
-                  <td className="px-5 py-3 font-medium">{idNum}</td>
+                <tr key={`${row.kind}-${l.id}`} className="hover:bg-muted/30">
+                  <td className="px-5 py-3 font-medium">
+                    {idNum}
+                    {row.kind === "carryover" ? (
+                      <div className="mt-1 text-[10px] uppercase text-muted-foreground">
+                        Carryover
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="px-5 py-3">
                     <div className="font-medium uppercase text-xs">
                       {(m?.name ?? "—").toUpperCase()}
@@ -212,20 +266,45 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
                   </td>
                   <td className="px-5 py-3">
                     <Badge tone={tone as never}>
-                      {l.status === "closed"
+                      {statusLabel === "closed"
                         ? "Completed"
-                        : l.status[0].toUpperCase() + l.status.slice(1)}
+                        : statusLabel[0].toUpperCase() + statusLabel.slice(1)}
                     </Badge>
                   </td>
-                  <td className="px-5 py-3 text-xs">{fmtKES(summary.approved)}</td>
-                  <td className="px-5 py-3 text-xs">{fmtKES(summary.balance)}</td>
+                  <td className="px-5 py-3 text-xs">
+                    {fmtKES(
+                      row.kind === "live"
+                        ? (summary as ReturnType<typeof loanSummary>).approved
+                        : legacyLoan.principal,
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-xs">
+                    {fmtKES(
+                      row.kind === "live"
+                        ? (summary as ReturnType<typeof loanSummary>).balance
+                        : (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).totalOwedNow,
+                    )}
+                  </td>
                   <td className="px-5 py-3 text-xs leading-tight">
                     <div>{summary.termDays} days</div>
                     <div className="text-[11px] text-muted-foreground">
-                      Savings {fmtKES(loanDailySavingsAmount(summary.approved))}
+                      Savings{" "}
+                      {fmtKES(
+                        row.kind === "live"
+                          ? loanDailySavingsAmount(
+                              (summary as ReturnType<typeof loanSummary>).approved,
+                            )
+                          : legacyLoan.dailySavingsAmount,
+                      )}
                     </div>
                     <div className="text-[11px] text-muted-foreground">
-                      Daily total {fmtKES(dailyTotalOf(l))}
+                      Daily total{" "}
+                      {fmtKES(
+                        row.kind === "live"
+                          ? dailyTotalOf(liveLoan)
+                          : (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>)
+                              .dailyInclusive,
+                      )}
                     </div>
                   </td>
                   <td className="px-5 py-3 text-xs">{summary.dueDate}</td>
@@ -300,10 +379,12 @@ export function LoanBook({ onSelectMember }: { onSelectMember: (memberId: string
 
 export function MemberLoanHistory({
   memberId,
+  carryoverLoans = [],
   onClose,
   onNewLoan,
 }: {
   memberId: string;
+  carryoverLoans?: LegacyCarryoverLoan[];
   onClose: () => void;
   onNewLoan: (memberId: string, isFirstTime: boolean) => void;
 }) {
@@ -317,10 +398,12 @@ export function MemberLoanHistory({
     roundOffBalance,
     settlePenaltyFromPool,
     currentUser,
+    policySettings,
   } = useStore();
   const member = members.find((m) => m.id === memberId);
   if (!member) return null;
   const memberLoans = loans.filter((l) => l.memberId === memberId);
+  const memberCarryoverLoans = carryoverLoans.filter((loan) => loan.memberId === memberId);
   const repayments = transactions.filter(
     (t) => t.memberId === memberId && t.type === "loan_repayment",
   );
@@ -330,7 +413,8 @@ export function MemberLoanHistory({
   const memberRoundOff = roundOff.filter((r) => r.memberId === memberId);
   const pool = roundOffBalance(memberId);
   const outstandingPen = memberPenalties.filter((p) => p.status === "outstanding");
-  const isFirstTime = memberLoans.length === 0;
+  const totalLoanHistoryCount = memberLoans.length + memberCarryoverLoans.length;
+  const isFirstTime = totalLoanHistoryCount === 0;
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex justify-end" onClick={onClose}>
@@ -353,7 +437,7 @@ export function MemberLoanHistory({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <Stat label="Savings" v={fmtKES(member.savingsBalance)} />
           <Stat label="Shares" v={`${member.shares} units`} />
-          <Stat label="Total Loans" v={String(memberLoans.length)} />
+          <Stat label="Total Loans" v={String(totalLoanHistoryCount)} />
           <Stat label="Round-Off Pool" v={fmtKES(pool)} />
         </div>
 
@@ -403,13 +487,38 @@ export function MemberLoanHistory({
         </div>
 
         <div>
-          <h3 className="font-semibold text-sm mb-2">Loan History ({memberLoans.length})</h3>
-          {memberLoans.length === 0 && (
+          <h3 className="font-semibold text-sm mb-2">Loan History ({totalLoanHistoryCount})</h3>
+          {totalLoanHistoryCount === 0 && (
             <div className="text-xs text-muted-foreground">
               No prior loans. This will be the member's first loan.
             </div>
           )}
           <div className="space-y-2">
+            {memberCarryoverLoans.map((l) => {
+              const summary = summarizeLegacyCarryoverLoan(l, policySettings);
+              const pct = Math.min(100, Math.round(summary.paidPct));
+              return (
+                <div key={l.id} className="border border-border rounded-md p-3">
+                  <div className="flex justify-between items-center">
+                    <div className="text-sm font-medium">
+                      {l.id} Â· {fmtKES(l.principal)}
+                    </div>
+                    <Badge tone={summary.isFinished ? "success" : "default"}>
+                      {summary.isFinished ? "closed" : l.status} Â· carryover
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {l.startDate} Â· {summary.termDays} days Â· {l.label}
+                  </div>
+                  <div className="text-xs mt-1">
+                    Paid {fmtKES(l.paidToDate)} / {fmtKES(summary.totalRepayment)}
+                  </div>
+                  <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
+                    <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
             {memberLoans.map((l) => {
               const summary = loanSummary(l);
               const pct = Math.min(100, Math.round((l.paid / summary.total) * 100));

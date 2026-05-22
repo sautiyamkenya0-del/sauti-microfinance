@@ -640,6 +640,7 @@ function PolicyCenterPage() {
     });
     await reloadAppData();
     await refreshCarryoverDetails(selectedClient.id);
+    await refreshAllCarryoverLoans();
     toast.success("Carryover balances saved");
   }
 
