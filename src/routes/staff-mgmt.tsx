@@ -1,7 +1,9 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section } from "@/components/ui-bits";
+import { resetStaffPasswordRecord } from "@/lib/app-data.functions";
 import { useStore, roleLabel, type Staff } from "@/lib/store";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -16,6 +18,7 @@ export const Route = createFileRoute("/staff-mgmt")({
 
 function StaffMgmt() {
   const { currentUser, staff, attendance, removeStaff, updateStaff } = useStore();
+  const resetStaffPassword = useServerFn(resetStaffPasswordRecord);
   const { memos, postMemo, removeMemo } = useStaffMemos();
   const [staffDialog, setStaffDialog] = useState<{ open: boolean; editing?: Staff }>({
     open: false,
@@ -28,9 +31,8 @@ function StaffMgmt() {
   if (currentUser.role !== "director") return <Navigate to="/" />;
 
   async function resetPassword(s: Staff) {
-    const newPwd = `Sauti!${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
-    await updateStaff(s.id, { tempPassword: newPwd });
-    toast.success(`New password for ${s.name}: ${newPwd}`);
+    const result = await resetStaffPassword({ data: { id: s.id } });
+    toast.success(`New password for ${s.name}: ${result.tempPassword}`);
   }
   function uploadPhoto(staffId: string, file: File) {
     const r = new FileReader();

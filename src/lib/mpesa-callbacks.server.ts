@@ -47,6 +47,54 @@ function numberValue(value: unknown) {
   return Number.isFinite(next) ? next : 0;
 }
 
+function readCallbackValue(body: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (body[key] !== undefined && body[key] !== null) return body[key];
+  }
+  const lowerKeyMap = new Map(Object.keys(body).map((key) => [key.toLowerCase(), key]));
+  for (const key of keys) {
+    const actualKey = lowerKeyMap.get(key.toLowerCase());
+    if (actualKey && body[actualKey] !== undefined && body[actualKey] !== null) {
+      return body[actualKey];
+    }
+  }
+  return undefined;
+}
+
+function hasMpesaLikeFields(body: Record<string, unknown>) {
+  return [
+    "TransID",
+    "trans_id",
+    "mpesa_ref",
+    "MpesaReceiptNumber",
+    "BillRefNumber",
+    "bill_ref_number",
+    "AccountReference",
+    "TransAmount",
+    "trans_amount",
+    "Amount",
+  ].some((key) => readCallbackValue(body, [key]) !== undefined);
+}
+
+function unwrapCallbackPayload(body: Record<string, unknown>) {
+  if (hasMpesaLikeFields(body)) return body;
+  for (const key of [
+    "payload",
+    "data",
+    "request",
+    "callback",
+    "event",
+    "message",
+    "mpesa",
+    "transaction",
+    "body",
+  ]) {
+    const candidate = asRecord(readCallbackValue(body, [key]));
+    if (hasMpesaLikeFields(candidate)) return candidate;
+  }
+  return body;
+}
+
 function mpesaTimestampValue(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!/^\d{14}$/.test(raw)) return undefined;
@@ -59,9 +107,19 @@ function mpesaTimestampValue(value: unknown) {
   return `${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`;
 }
 
+function callbackTimestampValue(value: unknown) {
+  const mpesaTimestamp = mpesaTimestampValue(value);
+  if (mpesaTimestamp) return mpesaTimestamp;
+  const raw = textValue(value);
+  if (!raw) return undefined;
+  const parsed = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
 async function readBodyObject(request: Request) {
+  const queryParams = new URL(request.url).searchParams;
   const rawText = await request.text();
-  if (!rawText.trim()) return {};
+  if (!rawText.trim()) return Object.fromEntries(queryParams.entries());
 
   try {
     const parsed = JSON.parse(rawText);
@@ -106,11 +164,20 @@ async function forwardConfirmationToNewSystem(request: Request, body: Record<str
 }
 
 function buildC2bPayerName(body: Record<string, unknown>) {
-  const combined = [body.FirstName, body.MiddleName, body.LastName]
+  const combined = [
+    readCallbackValue(body, ["FirstName", "first_name", "firstname"]),
+    readCallbackValue(body, ["MiddleName", "middle_name", "middlename"]),
+    readCallbackValue(body, ["LastName", "last_name", "lastname"]),
+  ]
     .filter(Boolean)
     .join(" ")
     .trim();
-  return combined || textValue(body.CustomerName);
+  return (
+    combined ||
+    textValue(
+      readCallbackValue(body, ["CustomerName", "customer_name", "payer_name", "payerName", "name"]),
+    )
+  );
 }
 
 function readStkMetadataValue(items: unknown[], name: string) {
@@ -202,19 +269,77 @@ async function normalizeConfirmationBody(body: Record<string, unknown>) {
     };
   }
 
+  const c2bRoot = unwrapCallbackPayload(root);
+  const account = readCallbackValue(c2bRoot, [
+    "BillRefNumber",
+    "bill_ref_number",
+    "billRefNumber",
+    "AccountReference",
+    "account_reference",
+    "accountReference",
+    "account",
+    "Account",
+    "account_number",
+    "membership_number",
+  ]);
+  const amount = readCallbackValue(c2bRoot, [
+    "TransAmount",
+    "trans_amount",
+    "transAmount",
+    "Amount",
+    "amount",
+  ]);
+  const phone = readCallbackValue(c2bRoot, [
+    "MSISDN",
+    "msisdn",
+    "PhoneNumber",
+    "phone_number",
+    "phoneNumber",
+    "phone",
+  ]);
+  const shortcode = readCallbackValue(c2bRoot, [
+    "BusinessShortCode",
+    "business_shortcode",
+    "businessShortCode",
+    "ShortCode",
+    "short_code",
+    "shortcode",
+  ]);
+  const paymentRef = readCallbackValue(c2bRoot, [
+    "TransID",
+    "trans_id",
+    "transId",
+    "MpesaReceiptNumber",
+    "mpesa_receipt_number",
+    "mpesaReceiptNumber",
+    "mpesa_ref",
+    "mpesaRef",
+    "receipt",
+    "receipt_number",
+  ]);
+  const transTime = readCallbackValue(c2bRoot, [
+    "TransTime",
+    "trans_time",
+    "transTime",
+    "TransactionDate",
+    "transaction_date",
+    "created_at",
+    "createdAt",
+  ]);
+
   return {
     channel: "c2b" as const,
     raw: body,
-    account: String(root.BillRefNumber ?? root.AccountReference ?? "")
+    account: String(account ?? "")
       .trim()
       .toUpperCase(),
-    amount: numberValue(root.TransAmount ?? root.Amount),
-    payerName: buildC2bPayerName(root),
-    payerPhone: textValue(root.MSISDN ?? root.PhoneNumber),
-    businessShortCode: textValue(root.BusinessShortCode ?? root.ShortCode),
-    paymentRef: textValue(root.TransID ?? root.MpesaReceiptNumber),
-    eventRef: textValue(root.TransID ?? root.MpesaReceiptNumber),
-    createdAt: mpesaTimestampValue(root.TransTime) ?? undefined,
+    amount: numberValue(amount),
+    payerName: buildC2bPayerName(c2bRoot),
+    payerPhone: textValue(phone),
+    businessShortCode: textValue(shortcode),
+    paymentRef: textValue(paymentRef),
+    eventRef: textValue(paymentRef),
+    createdAt: callbackTimestampValue(transTime),
     success: true,
     resultCode: 0,
     resultDesc: "Accepted",
@@ -249,12 +374,26 @@ function normalizeB2cTimeoutBody(body: Record<string, unknown>) {
 export async function handleMpesaValidationRequest(request: Request) {
   try {
     const body = await readBodyObject(request);
-    const account = String(body.BillRefNumber ?? body.AccountReference ?? "")
+    const root = unwrapCallbackPayload(body);
+    const account = String(
+      readCallbackValue(root, [
+        "BillRefNumber",
+        "bill_ref_number",
+        "AccountReference",
+        "account_reference",
+        "account",
+        "membership_number",
+      ]) ?? "",
+    )
       .trim()
       .toUpperCase();
-    const amount = numberValue(body.TransAmount ?? body.Amount);
-    const payerName = buildC2bPayerName(body);
-    const phone = textValue(body.MSISDN ?? body.PhoneNumber);
+    const amount = numberValue(
+      readCallbackValue(root, ["TransAmount", "trans_amount", "Amount", "amount"]),
+    );
+    const payerName = buildC2bPayerName(root);
+    const phone = textValue(
+      readCallbackValue(root, ["MSISDN", "msisdn", "PhoneNumber", "phone_number", "phone"]),
+    );
 
     console.warn("mpesa validation callback received", {
       account,

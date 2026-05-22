@@ -7,6 +7,7 @@ import {
   requireSignedInSession,
   requireStaffActor,
 } from "@/lib/auth.server";
+import { normalizeLegacyCarryoverLoanFeeBreakdown } from "@/lib/legacy-finance";
 
 type DbRow = Record<string, unknown>;
 
@@ -178,6 +179,12 @@ function mapCarryoverLoanRow(row: DbRow) {
     status: readText(row.status) as "active" | "closed" | "defaulted",
     finished: row.finished === true,
     penaltyWaivedAmount: readNumber(row.penalty_waived_amount),
+    feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+      row.fee_breakdown && typeof row.fee_breakdown === "object"
+        ? (row.fee_breakdown as Record<string, unknown>)
+        : {},
+      Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
+    ),
     notes: optionalText(row.notes),
     createdBy: optionalText(row.created_by),
     updatedBy: optionalText(row.updated_by),

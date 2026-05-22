@@ -38,7 +38,10 @@ import {
   type PolicySettingKey,
   type PolicySettingRow,
 } from "@/lib/policy-settings";
-import { summarizeLegacyCarryoverLoan } from "@/lib/legacy-finance";
+import {
+  normalizeLegacyCarryoverLoanFeeBreakdown,
+  summarizeLegacyCarryoverLoan,
+} from "@/lib/legacy-finance";
 import { requestMpesaWithdrawalPayout } from "@/lib/mpesa-payouts.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
@@ -938,6 +941,11 @@ async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
         status: String(loan.status ?? "active") as "active" | "closed" | "defaulted",
         finished: loan.finished === true,
         penaltyWaivedAmount: Number(loan.penalty_waived_amount ?? 0),
+        loanCycleNumber: Number(loan.loan_cycle_number ?? 1),
+        feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+          loan.fee_breakdown as Record<string, unknown>,
+          Number(loan.loan_cycle_number ?? 1),
+        ),
       },
       policySettings,
     );
@@ -4521,22 +4529,25 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
     }
     const supabaseAdmin = await requireSupabaseAdmin();
     const patch = data.patch;
-    const { error } = await supabaseAdmin
-      .from("staff")
-      .update({
-        name: patch.name?.trim() || undefined,
-        role: patch.role as never,
-        email: patch.email?.trim() || undefined,
-        phone: patch.phone?.trim() || null,
-        national_id: patch.nationalId?.trim() || null,
-        address: patch.address?.trim() || null,
-        notes: patch.notes?.trim() || null,
-        photo: patch.photo || null,
-        temp_password: patch.tempPassword ? hashPassword(patch.tempPassword) : undefined,
-        can_mark_attendance: patch.role === "director" ? true : patch.canMarkAttendance,
-        fingerprint_enrolled: patch.fingerprintEnrolled,
-      })
-      .eq("id", data.id);
+    const hasPatch = (key: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, key);
+    const updates: Record<string, unknown> = {};
+    if (hasPatch("name")) updates.name = patch.name?.trim() || undefined;
+    if (hasPatch("role")) updates.role = patch.role as never;
+    if (hasPatch("email")) updates.email = patch.email?.trim() || undefined;
+    if (hasPatch("phone")) updates.phone = patch.phone?.trim() || null;
+    if (hasPatch("nationalId")) updates.national_id = patch.nationalId?.trim() || null;
+    if (hasPatch("address")) updates.address = patch.address?.trim() || null;
+    if (hasPatch("notes")) updates.notes = patch.notes?.trim() || null;
+    if (hasPatch("photo")) updates.photo = patch.photo || null;
+    if (patch.tempPassword) updates.temp_password = hashPassword(patch.tempPassword);
+    if (hasPatch("canMarkAttendance")) {
+      updates.can_mark_attendance = patch.role === "director" ? true : patch.canMarkAttendance;
+    }
+    if (hasPatch("fingerprintEnrolled")) {
+      updates.fingerprint_enrolled = patch.fingerprintEnrolled;
+    }
+    if (Object.keys(updates).length === 0) return { ok: true };
+    const { error } = await supabaseAdmin.from("staff").update(updates).eq("id", data.id);
     if (error) throw new Error(error.message);
     await auditAction({
       actor,
@@ -4555,6 +4566,53 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
       },
     });
     return { ok: true };
+  });
+
+function makeStaffTemporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let suffix = "";
+  for (let index = 0; index < 10; index += 1) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `Sauti!${suffix}`;
+}
+
+export const resetStaffPasswordRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({
+    id: String(data?.id ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.id) throw new Error("Staff id is required.");
+    const supabaseAdmin = await requireSupabaseAdmin();
+    const { data: staffRow, error: staffError } = await supabaseAdmin
+      .from("staff")
+      .select("id, name, email, role")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (staffError) throw new Error(staffError.message);
+    if (!staffRow) throw new Error("Staff account not found.");
+
+    const tempPassword = makeStaffTemporaryPassword();
+    const { error } = await supabaseAdmin
+      .from("staff")
+      .update({ temp_password: hashPassword(tempPassword) })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "staff.password_reset",
+      targetType: "staff",
+      targetId: data.id,
+      summary: `${actor.name} reset staff password for ${staffRow.name}`,
+      details: {
+        email: staffRow.email,
+        role: staffRow.role,
+      },
+    });
+
+    return { tempPassword };
   });
 
 export const deleteStaffRecord = createServerFn({ method: "POST" })
@@ -6549,6 +6607,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       status: "active" | "closed" | "defaulted";
       finished: boolean;
       penaltyWaivedAmount: number;
+      feeBreakdown?: Record<string, unknown>;
       notes?: string;
     }) => ({
       id: String(data?.id ?? "").trim() || undefined,
@@ -6566,6 +6625,10 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       status: data?.status ?? "active",
       finished: !!data?.finished,
       penaltyWaivedAmount: Math.max(0, Number(data?.penaltyWaivedAmount ?? 0)),
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        data?.feeBreakdown,
+        Math.max(1, Math.floor(Number(data?.loanCycleNumber ?? 1))),
+      ),
       notes: data?.notes?.trim() || undefined,
     }),
   )
@@ -6593,6 +6656,8 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
         status: data.status,
         finished: data.finished,
         penaltyWaivedAmount: data.penaltyWaivedAmount,
+        loanCycleNumber: data.loanCycleNumber,
+        feeBreakdown: data.feeBreakdown,
       },
       policySettings,
     );
@@ -6618,6 +6683,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       status,
       finished: data.finished || status === "closed" || computedSummary.balance <= 0,
       penalty_waived_amount: data.penaltyWaivedAmount,
+      fee_breakdown: data.feeBreakdown,
       notes: data.notes ?? null,
       created_by: actor.id,
       updated_by: actor.id,

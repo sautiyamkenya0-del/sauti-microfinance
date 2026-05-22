@@ -34,6 +34,18 @@ export type LegacyCarryoverProfile = {
 
 export type LegacyCarryoverLoanStatus = "active" | "closed" | "defaulted";
 
+export type LegacyCarryoverLoanFeeBreakdown = {
+  membershipFeeAmount?: number;
+  cardFeeAmount?: number;
+  stickerFeeAmount?: number;
+  processingFeeAmount?: number;
+  insuranceFeeAmount?: number;
+  transactionFeeAmount?: number;
+  monthlySubscriptionAmount?: number;
+  subscriptionMonths?: number;
+  subscriptionWaived?: boolean;
+};
+
 export type LegacyCarryoverLoan = {
   id: string;
   memberId: string;
@@ -50,6 +62,7 @@ export type LegacyCarryoverLoan = {
   status: LegacyCarryoverLoanStatus;
   finished: boolean;
   penaltyWaivedAmount: number;
+  feeBreakdown?: LegacyCarryoverLoanFeeBreakdown;
   notes?: string;
   createdBy?: string;
   updatedBy?: string;
@@ -91,6 +104,30 @@ function normalizeTermDays(termDays?: number): 7 | 14 | 30 | 60 | 90 {
   return normalizePolicyTermDays(termDays);
 }
 
+function moneyValue(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, next) : 0;
+}
+
+export function normalizeLegacyCarryoverLoanFeeBreakdown(
+  value?: LegacyCarryoverLoanFeeBreakdown | Record<string, unknown> | null,
+  loanCycleNumber: number = 1,
+): LegacyCarryoverLoanFeeBreakdown {
+  const source = value && typeof value === "object" ? value : {};
+  const isFirstLoan = Math.max(1, Math.floor(Number(loanCycleNumber || 1))) === 1;
+  return {
+    membershipFeeAmount: isFirstLoan ? moneyValue(source.membershipFeeAmount) : 0,
+    cardFeeAmount: isFirstLoan ? moneyValue(source.cardFeeAmount) : 0,
+    stickerFeeAmount: isFirstLoan ? moneyValue(source.stickerFeeAmount) : 0,
+    processingFeeAmount: moneyValue(source.processingFeeAmount),
+    insuranceFeeAmount: moneyValue(source.insuranceFeeAmount),
+    transactionFeeAmount: moneyValue(source.transactionFeeAmount),
+    monthlySubscriptionAmount: moneyValue(source.monthlySubscriptionAmount),
+    subscriptionMonths: Math.max(0, Math.floor(Number(source.subscriptionMonths ?? 0))),
+    subscriptionWaived: source.subscriptionWaived === true,
+  };
+}
+
 export function effectiveLegacyInterestRate(
   loan: Pick<LegacyCarryoverLoan, "termDays" | "interestRatePct" | "principal">,
   settings: PolicySettings = DEFAULT_POLICY_SETTINGS,
@@ -114,6 +151,8 @@ export function summarizeLegacyCarryoverLoan(
     | "status"
     | "finished"
     | "penaltyWaivedAmount"
+    | "loanCycleNumber"
+    | "feeBreakdown"
   >,
   settings: PolicySettings = DEFAULT_POLICY_SETTINGS,
   asOfDate: string = new Date().toISOString().slice(0, 10),
@@ -123,8 +162,27 @@ export function summarizeLegacyCarryoverLoan(
   const principal = Number(loan.principal ?? 0);
   const paidToDate = Number(loan.paidToDate ?? 0);
   const dailySavingsAmount = Math.max(0, Number(loan.dailySavingsAmount ?? 0));
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const oneTimeFees =
+    (feeBreakdown.membershipFeeAmount ?? 0) +
+    (feeBreakdown.cardFeeAmount ?? 0) +
+    (feeBreakdown.stickerFeeAmount ?? 0);
+  const loanServiceFees =
+    (feeBreakdown.processingFeeAmount ?? 0) +
+    (feeBreakdown.insuranceFeeAmount ?? 0) +
+    (feeBreakdown.transactionFeeAmount ?? 0);
+  const subscriptionTotalBeforeWaiver =
+    (feeBreakdown.monthlySubscriptionAmount ?? 0) * (feeBreakdown.subscriptionMonths ?? 0);
+  const subscriptionDeducted = feeBreakdown.subscriptionWaived ? 0 : subscriptionTotalBeforeWaiver;
+  const subscriptionWaivedAmount = feeBreakdown.subscriptionWaived
+    ? subscriptionTotalBeforeWaiver
+    : 0;
+  const feeChargesTotal = oneTimeFees + loanServiceFees + subscriptionDeducted;
   const interest = principal * (ratePct / 100);
-  const totalRepayment = principal + interest;
+  const totalRepayment = principal + interest + feeChargesTotal;
   const dailyLoanInstallment = termDays > 0 ? totalRepayment / termDays : totalRepayment;
   const dailyInclusive = dailyLoanInstallment + dailySavingsAmount;
   const totalSavingsAccrued = dailySavingsAmount * termDays;
@@ -148,6 +206,12 @@ export function summarizeLegacyCarryoverLoan(
     termDays,
     ratePct,
     interest,
+    feeBreakdown,
+    oneTimeFees,
+    loanServiceFees,
+    subscriptionDeducted,
+    subscriptionWaivedAmount,
+    feeChargesTotal,
     totalRepayment,
     dailyLoanInstallment,
     dailyInclusive,

@@ -5,6 +5,7 @@ import { handleMpesaValidationRequest } from "@/lib/mpesa-callbacks.server";
 export const Route = createFileRoute("/api/public/payments/validation")({
   server: {
     handlers: {
+      GET: async ({ request }) => handleMpesaValidationRequest(request),
       POST: async ({ request }) => handleMpesaValidationRequest(request),
     },
   },

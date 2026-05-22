@@ -42,6 +42,7 @@ import {
 import {
   type LegacyCarryoverLoan,
   type LegacyCarryoverProfile,
+  normalizeLegacyCarryoverLoanFeeBreakdown,
   summarizeLegacyCarryoverLoan,
 } from "@/lib/legacy-finance";
 import {
@@ -2164,6 +2165,10 @@ function PolicyCenterPage() {
                         setCarryoverLoanDraft((current) => ({
                           ...current,
                           loanCycleNumber: Math.max(1, Math.floor(value)),
+                          feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                            current.feeBreakdown,
+                            Math.max(1, Math.floor(value)),
+                          ),
                         }))
                       }
                     />
@@ -2211,6 +2216,11 @@ function PolicyCenterPage() {
                           dailySavingsAmount: value,
                         }))
                       }
+                    />
+                    <CarryoverLoanFeeFields
+                      loan={carryoverLoanDraft}
+                      summary={carryoverLoanDraftSummary}
+                      onChange={setCarryoverLoanDraft}
                     />
                     <Field label="Start date">
                       <input
@@ -2322,6 +2332,10 @@ function PolicyCenterPage() {
                       <MetricCard
                         label="Repayment total"
                         value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
+                      />
+                      <MetricCard
+                        label="Fees and subscriptions"
+                        value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
                       />
                       <MetricCard
                         label="Owed now"
@@ -2845,6 +2859,7 @@ function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryo
     status: "active",
     finished: false,
     penaltyWaivedAmount: 0,
+    feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown({}, Math.max(1, cycleNumber)),
   };
 }
 
@@ -3210,6 +3225,7 @@ function GuidedCompletedLoanCard({
           value={loan.dailySavingsAmount}
           onChange={(value) => onChange({ ...loan, dailySavingsAmount: value })}
         />
+        <CarryoverLoanFeeFields loan={loan} summary={summary} onChange={onChange} compact />
         <Field label="Start date">
           <input
             type="date"
@@ -3219,8 +3235,9 @@ function GuidedCompletedLoanCard({
           />
         </Field>
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Loan repayment total" value={fmtKES(summary.totalRepayment)} />
+        <MetricCard label="Fees and subscriptions" value={fmtKES(summary.feeChargesTotal)} />
         <MetricCard label="Daily savings accrued" value={fmtKES(summary.totalSavingsAccrued)} />
         <MetricCard label="Cash through cycle" value={fmtKES(summary.totalExpectedCollected)} />
       </div>
@@ -3228,6 +3245,111 @@ function GuidedCompletedLoanCard({
         The redistribution deducts the closed loan repayment total from the client record. The daily
         savings leg should still be reflected in savings, shares, or purpose pool above.
       </div>
+    </div>
+  );
+}
+
+function CarryoverLoanFeeFields({
+  loan,
+  summary,
+  onChange,
+  compact = false,
+}: {
+  loan: LegacyCarryoverLoan;
+  summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+  onChange: (loan: LegacyCarryoverLoan) => void;
+  compact?: boolean;
+}) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const oneTimeLocked = loan.loanCycleNumber > 1;
+  const updateFee = (
+    key: keyof NonNullable<LegacyCarryoverLoan["feeBreakdown"]>,
+    value: number | boolean,
+  ) => {
+    onChange({
+      ...loan,
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        {
+          ...feeBreakdown,
+          [key]: value,
+        },
+        loan.loanCycleNumber,
+      ),
+    });
+  };
+
+  return (
+    <div
+      className={
+        compact
+          ? "md:col-span-2 grid gap-3 rounded-lg border border-border bg-muted/20 p-3 md:grid-cols-2 xl:grid-cols-4"
+          : "md:col-span-2 xl:col-span-4 grid gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-2 xl:grid-cols-4"
+      }
+    >
+      <NumberField
+        label="Membership fee"
+        value={feeBreakdown.membershipFeeAmount ?? 0}
+        disabled={oneTimeLocked}
+        onChange={(value) => updateFee("membershipFeeAmount", value)}
+      />
+      <NumberField
+        label="Card fee"
+        value={feeBreakdown.cardFeeAmount ?? 0}
+        disabled={oneTimeLocked}
+        onChange={(value) => updateFee("cardFeeAmount", value)}
+      />
+      <NumberField
+        label="Sticker fee"
+        value={feeBreakdown.stickerFeeAmount ?? 0}
+        disabled={oneTimeLocked}
+        onChange={(value) => updateFee("stickerFeeAmount", value)}
+      />
+      <NumberField
+        label="Processing fee"
+        value={feeBreakdown.processingFeeAmount ?? 0}
+        onChange={(value) => updateFee("processingFeeAmount", value)}
+      />
+      <NumberField
+        label="Insurance fee"
+        value={feeBreakdown.insuranceFeeAmount ?? 0}
+        onChange={(value) => updateFee("insuranceFeeAmount", value)}
+      />
+      <NumberField
+        label="Transaction fee"
+        value={feeBreakdown.transactionFeeAmount ?? 0}
+        onChange={(value) => updateFee("transactionFeeAmount", value)}
+      />
+      <NumberField
+        label="Monthly subscription"
+        value={feeBreakdown.monthlySubscriptionAmount ?? 0}
+        onChange={(value) => updateFee("monthlySubscriptionAmount", value)}
+      />
+      <NumberField
+        label="Subscription months"
+        value={feeBreakdown.subscriptionMonths ?? 0}
+        onChange={(value) => updateFee("subscriptionMonths", Math.max(0, Math.floor(value)))}
+      />
+      <label className="flex items-center gap-2 rounded-md border border-border bg-background/50 px-3 py-2 text-sm">
+        <input
+          type="checkbox"
+          checked={feeBreakdown.subscriptionWaived === true}
+          onChange={(event) => updateFee("subscriptionWaived", event.target.checked)}
+        />
+        Waive subscriptions
+      </label>
+      <MetricCard label="One-time fees" value={fmtKES(summary.oneTimeFees)} />
+      <MetricCard label="Loan fees" value={fmtKES(summary.loanServiceFees)} />
+      <MetricCard
+        label={feeBreakdown.subscriptionWaived ? "Subscriptions waived" : "Subscriptions due"}
+        value={fmtKES(
+          feeBreakdown.subscriptionWaived
+            ? summary.subscriptionWaivedAmount
+            : summary.subscriptionDeducted,
+        )}
+      />
     </div>
   );
 }
@@ -3255,10 +3377,12 @@ function NumberField({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  disabled?: boolean;
 }) {
   return (
     <Field label={label}>
@@ -3266,6 +3390,7 @@ function NumberField({
         type="number"
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
+        disabled={disabled}
         className="input"
       />
     </Field>
