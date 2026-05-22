@@ -35,6 +35,7 @@ export function MpesaQueueDrainer() {
         }
 
         if (totalProcessed > 0) {
+          window.dispatchEvent(new CustomEvent("sauti:data-changed"));
           (totalFailed ? toast.warning : toast.success)(
             `M-Pesa queue processed ${totalProcessed} confirmation(s); ${totalMatched} matched member account(s).${totalFailed ? ` ${totalFailed} need review.` : ""}`,
           );

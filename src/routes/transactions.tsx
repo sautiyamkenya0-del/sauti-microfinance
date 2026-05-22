@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -70,7 +70,17 @@ function TxPage() {
   const { data: mpesaAuditRows = [], refetch: refetchMpesaAudit } = useQuery({
     queryKey: ["mpesa-receipt-audit"],
     queryFn: () => fetchMpesaAudit({ data: {} }),
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    const refetchAudit = () => {
+      void refetchMpesaAudit();
+    };
+    window.addEventListener("sauti:data-changed", refetchAudit);
+    return () => window.removeEventListener("sauti:data-changed", refetchAudit);
+  }, [refetchMpesaAudit]);
 
   const hiddenTransactionIds = useMemo(
     () => new Set(mpesaAuditRows.flatMap((row: any) => row.transactionIds ?? [])),

@@ -3040,6 +3040,7 @@ function mapSupportThreadRow(row: any, supportMessagesByThread: Map<string, any[
 
 function emptyAppData() {
   return {
+    dataVersion: "",
     isAuthenticated: false,
     authMode: "staff" as const,
     portalMemberId: "",
@@ -3065,12 +3066,80 @@ function emptyAppData() {
   };
 }
 
-export const loadAppData = createServerFn({ method: "POST" }).handler(async () => {
+const APP_DATA_CHANGE_TABLES = [
+  { table: "staff", idColumn: "id" },
+  { table: "members", idColumn: "id" },
+  { table: "loans", idColumn: "id" },
+  { table: "transactions", idColumn: "id" },
+  { table: "petty_cash", idColumn: "id" },
+  { table: "investors", idColumn: "id" },
+  { table: "attendance", idColumn: "id" },
+  { table: "appraisals", idColumn: "id" },
+  { table: "field_visits", idColumn: "id" },
+  { table: "followups", idColumn: "id" },
+  { table: "penalties", idColumn: "id" },
+  { table: "round_off", idColumn: "id" },
+  { table: "staff_messages", idColumn: "id" },
+  { table: "fee_policies", idColumn: "key" },
+  { table: "policy_settings", idColumn: "key" },
+  { table: "mpesa_events", idColumn: "id" },
+  { table: "mpesa_receipt_allocations", idColumn: "id" },
+  { table: "system_payout_requests", idColumn: "id" },
+] as const;
+
+async function latestTableChangeMarker(
+  supabaseAdmin: any,
+  table: string,
+  idColumn: string,
+  column: string,
+) {
+  const selectColumns =
+    column === "updated_at" ? `${idColumn}, updated_at, created_at` : `${idColumn}, created_at`;
+  const { data, error, count } = await supabaseAdmin
+    .from(table)
+    .select(selectColumns, { count: "exact" })
+    .order(column, { ascending: false })
+    .limit(1);
+
+  if (error) {
+    if (isMissingRelationError(error)) return `${table}:missing`;
+    if (column === "updated_at" && isMissingColumnError(error, "updated_at")) {
+      return latestTableChangeMarker(supabaseAdmin, table, idColumn, "created_at");
+    }
+    if (isMissingColumnError(error, "created_at")) {
+      const fallback = await supabaseAdmin
+        .from(table)
+        .select(idColumn, { count: "exact" })
+        .limit(1);
+      if (fallback.error) {
+        if (isMissingRelationError(fallback.error)) return `${table}:missing`;
+        throw new Error(fallback.error.message);
+      }
+      return `${table}:${fallback.count ?? 0}:${fallback.data?.[0]?.[idColumn] ?? ""}`;
+    }
+    throw new Error(error.message);
+  }
+
+  const row = data?.[0] ?? {};
+  return `${table}:${count ?? 0}:${row[idColumn] ?? ""}:${row.updated_at ?? row.created_at ?? ""}`;
+}
+
+async function getAppDataVersion(supabaseAdmin: any) {
+  const markers = await Promise.all(
+    APP_DATA_CHANGE_TABLES.map(({ table, idColumn }) =>
+      latestTableChangeMarker(supabaseAdmin, table, idColumn, "updated_at"),
+    ),
+  );
+  return markers.join("|");
+}
+
+async function buildAppData(version?: string) {
   const session = await getAuthSessionData();
   const base = emptyAppData();
   if (!session.authMode) return base;
 
   const supabaseAdmin = await requireSupabaseAdmin();
+  const dataVersion = version ?? (await getAppDataVersion(supabaseAdmin));
 
   if (session.authMode === "member" && session.memberId) {
     const [
@@ -3127,6 +3196,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
 
     return {
       ...base,
+      dataVersion,
       isAuthenticated: true,
       authMode: "member" as const,
       portalMemberId: memberResult.data.id,
@@ -3216,6 +3286,7 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
 
   return {
     ...base,
+    dataVersion,
     isAuthenticated: true,
     authMode: "staff" as const,
     currentUser: staffRows.find((row) => row.id === actor.id),
@@ -3235,7 +3306,30 @@ export const loadAppData = createServerFn({ method: "POST" }).handler(async () =
     feePolicies: normalizeFeePolicies((feePoliciesResult.data ?? []).map(mapFeePolicyRow)),
     policySettings: mergePolicySettings((policySettingsResult.data ?? []).map(mapPolicySettingRow)),
   };
+}
+
+export const loadAppData = createServerFn({ method: "POST" }).handler(async () => {
+  return buildAppData();
 });
+
+export const loadAppDataIfChanged = createServerFn({ method: "POST" })
+  .inputValidator((data: { knownVersion?: string } | undefined) => ({
+    knownVersion: String(data?.knownVersion ?? ""),
+  }))
+  .handler(async ({ data }) => {
+    const session = await getAuthSessionData();
+    if (!session.authMode) {
+      return { changed: true, version: "", data: emptyAppData() };
+    }
+
+    const supabaseAdmin = await requireSupabaseAdmin();
+    const version = await getAppDataVersion(supabaseAdmin);
+    if (data.knownVersion && data.knownVersion === version) {
+      return { changed: false, version };
+    }
+
+    return { changed: true, version, data: await buildAppData(version) };
+  });
 
 export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
   .inputValidator((data: { memberId?: string; account?: string; query?: string } | undefined) => ({
@@ -3265,7 +3359,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       fetchAllRows(() =>
         supabaseAdmin
           .from("transactions")
-          .select("id, type, amount, member_id, loan_id, note, account, payer_name, ref, created_at")
+          .select(
+            "id, type, amount, member_id, loan_id, note, account, payer_name, ref, created_at",
+          )
           .eq("by_staff", MPESA_SYSTEM_STAFF_ID),
       ),
       fetchAllRows(() => supabaseAdmin.from("members").select("id, name")),
@@ -3347,8 +3443,9 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
             ];
       const primaryAllocation = receiptAllocations[0] ?? null;
       const memberId =
-        String(primaryAllocation?.member_id ?? linkedTransaction?.member_id ?? event.account ?? "")
-          .trim() || undefined;
+        String(
+          primaryAllocation?.member_id ?? linkedTransaction?.member_id ?? event.account ?? "",
+        ).trim() || undefined;
       const account = String(event.account ?? linkedTransaction?.account ?? raw.BillRefNumber ?? "")
         .trim()
         .toUpperCase();
@@ -3516,8 +3613,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         undefined;
       const payoutCreatedAt = String(resultEvent?.created_at ?? request.created_at ?? "").trim();
       const resultRaw = asJsonObject(resultEvent?.raw);
-      const exactAt =
-        mpesaRawTimestampValue(resultRaw) ?? (payoutCreatedAt || undefined);
+      const exactAt = mpesaRawTimestampValue(resultRaw) ?? (payoutCreatedAt || undefined);
       const payoutRow = {
         id: `payout-${request.id}`,
         source: "mpesa_payout",

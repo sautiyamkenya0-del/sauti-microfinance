@@ -35,7 +35,7 @@ type ChatMsg = {
 type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
 
 function StaffChat() {
-  const { staff, currentUser, staffMessages, addStaffMessage, reloadStaffMessages } = useStore();
+  const { staff, currentUser, staffMessages, addStaffMessage } = useStore();
   const others = staff.filter((s) => s.id !== currentUser.id);
   const [activeId, setActiveId] = useState(others[0]?.id ?? "");
   const allMsgs: ChatMsg[] = staffMessages.map((message) => ({
@@ -56,21 +56,6 @@ function StaffChat() {
   useEffect(() => {
     if (!activeId && others[0]?.id) setActiveId(others[0].id);
   }, [activeId, others]);
-
-  useEffect(() => {
-    const sync = () => {
-      if (document.hidden) return;
-      reloadStaffMessages().catch(() => {});
-    };
-    const timer = window.setInterval(sync, 30000);
-    window.addEventListener("focus", sync);
-    document.addEventListener("visibilitychange", sync);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", sync);
-      document.removeEventListener("visibilitychange", sync);
-    };
-  }, [reloadStaffMessages]);
 
   // Mark messages from the open thread as read so badges/notification count drop.
   useEffect(() => {

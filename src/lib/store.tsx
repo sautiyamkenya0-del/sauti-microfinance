@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 
@@ -17,6 +25,7 @@ import {
   createTransactionRecord,
   deleteStaffRecord,
   loadAppData,
+  loadAppDataIfChanged,
   reviewLoanRecord,
   settlePenaltyFromPoolRecord,
   updateStaffRecord,
@@ -525,6 +534,7 @@ const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const load = useServerFn(loadAppData);
+  const loadIfChanged = useServerFn(loadAppDataIfChanged);
   const loadStaffMessages = useServerFn(listStaffMessages);
   const authenticateMember = useServerFn(signInMember);
   const authenticateStaff = useServerFn(signInStaff);
@@ -566,42 +576,78 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [feePolicies, setFeePolicies] = useState<FeePolicy[]>(normalizeFeePolicies([]));
   const [policySettings, setPolicySettingsState] =
     useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
+  const dataVersionRef = useRef("");
+  const fullRefreshRef = useRef<Promise<any> | null>(null);
+  const changeRefreshRef = useRef<Promise<any> | null>(null);
 
-  async function refreshFromDatabase() {
-    try {
-      const data = await load();
-      setIsAuthenticated(!!data.isAuthenticated);
-      setAuthMode(data.authMode ?? "staff");
-      setPortalMemberIdState(data.portalMemberId ?? "");
-      if (data.currentUser) {
-        setCurrentUserState(data.currentUser);
-      } else if (!data.isAuthenticated || data.authMode !== "staff") {
-        setCurrentUserState(seedStaff[0]);
-      }
-      setStaff(data.staff);
-      setMembers(data.members);
-      setLoans(data.loans);
-      setTransactions(data.transactions);
-      setPettyCash(data.pettyCash);
-      setInvestors(data.investors);
-      setAttendance(data.attendance);
-      setAppraisals(data.appraisals);
-      setFieldVisits(data.fieldVisits);
-      setFollowups(data.followups);
-      setPenalties(data.penalties);
-      setRoundOff(data.roundOff);
-      setStaffMessages(data.staffMessages ?? []);
-      setFeePolicies(normalizeFeePolicies(data.feePolicies ?? []));
-      setPolicySettingsState(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
-      setActivePolicySettings(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
-      return data;
-    } finally {
-      setIsHydrated(true);
+  function applyDatabaseState(data: any) {
+    dataVersionRef.current = data.dataVersion ?? dataVersionRef.current;
+    setIsAuthenticated(!!data.isAuthenticated);
+    setAuthMode(data.authMode ?? "staff");
+    setPortalMemberIdState(data.portalMemberId ?? "");
+    if (data.currentUser) {
+      setCurrentUserState(data.currentUser);
+    } else if (!data.isAuthenticated || data.authMode !== "staff") {
+      setCurrentUserState(seedStaff[0]);
     }
+    setStaff(data.staff);
+    setMembers(data.members);
+    setLoans(data.loans);
+    setTransactions(data.transactions);
+    setPettyCash(data.pettyCash);
+    setInvestors(data.investors);
+    setAttendance(data.attendance);
+    setAppraisals(data.appraisals);
+    setFieldVisits(data.fieldVisits);
+    setFollowups(data.followups);
+    setPenalties(data.penalties);
+    setRoundOff(data.roundOff);
+    setStaffMessages(data.staffMessages ?? []);
+    setFeePolicies(normalizeFeePolicies(data.feePolicies ?? []));
+    setPolicySettingsState(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
+    setActivePolicySettings(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
   }
 
-  function refreshInBackground(fallbackMessage: string) {
-    void refreshFromDatabase().catch((error: any) => {
+  async function refreshFromDatabase() {
+    if (fullRefreshRef.current) return fullRefreshRef.current;
+    fullRefreshRef.current = (async () => {
+      try {
+        const data = await load();
+        applyDatabaseState(data);
+        return data;
+      } finally {
+        setIsHydrated(true);
+        fullRefreshRef.current = null;
+      }
+    })();
+    return fullRefreshRef.current;
+  }
+
+  async function refreshIfDatabaseChanged() {
+    if (fullRefreshRef.current) return fullRefreshRef.current;
+    if (changeRefreshRef.current) return changeRefreshRef.current;
+    changeRefreshRef.current = (async () => {
+      try {
+        const result = await loadIfChanged({
+          data: { knownVersion: dataVersionRef.current },
+        });
+        if (result.changed && result.data) {
+          applyDatabaseState(result.data);
+        } else if (result.version) {
+          dataVersionRef.current = result.version;
+        }
+        return result;
+      } finally {
+        setIsHydrated(true);
+        changeRefreshRef.current = null;
+      }
+    })();
+    return changeRefreshRef.current;
+  }
+
+  function refreshInBackground(fallbackMessage: string, full = false) {
+    const task = full ? refreshFromDatabase() : refreshIfDatabaseChanged();
+    void task.catch((error: any) => {
       toast.error(error?.message ?? fallbackMessage);
     });
   }
@@ -627,11 +673,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated || authMode !== "staff") return;
-    const interval = window.setInterval(() => {
-      refreshInBackground("Auto-sync failed.");
-    }, 60000);
-    return () => window.clearInterval(interval);
+    if (!isAuthenticated) return;
+    const syncIfVisible = () => {
+      if (!document.hidden) refreshInBackground("Auto-sync failed.");
+    };
+    const interval = window.setInterval(syncIfVisible, authMode === "staff" ? 15000 : 30000);
+    window.addEventListener("focus", syncIfVisible);
+    document.addEventListener("visibilitychange", syncIfVisible);
+    window.addEventListener("sauti:data-changed", syncIfVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", syncIfVisible);
+      document.removeEventListener("visibilitychange", syncIfVisible);
+      window.removeEventListener("sauti:data-changed", syncIfVisible);
+    };
   }, [authMode, isAuthenticated]);
 
   useEffect(() => {
