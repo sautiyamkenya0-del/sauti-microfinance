@@ -8,6 +8,7 @@ import {
   markMpesaWithdrawalTimeout,
   recordMpesaConfirmationEvent,
   recordMpesaValidationEvent,
+  validateMpesaDepositRequest,
 } from "@/lib/app-data.functions";
 import { logErrorToServer } from "@/lib/error-logging.server";
 import { listConfiguredMpesaShortcodes } from "@/lib/mpesa-config.server";
@@ -444,6 +445,14 @@ export async function handleMpesaValidationRequest(request: Request) {
       }
     }
 
+    const validation = await validateMpesaDepositRequest({ account, amount });
+    if (!validation.accepted) {
+      return Response.json(
+        { ResultCode: 1, ResultDesc: validation.reason ?? "Rejected" },
+        { headers: NO_STORE_HEADERS },
+      );
+    }
+
     return Response.json({ ResultCode: 0, ResultDesc: "Accepted" }, { headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error("mpesa validation parse error", error);
@@ -550,7 +559,9 @@ export async function handleMpesaConfirmationRequest(request: Request) {
 
     if (processedResult?.matched) {
       try {
-        const member = await findMemberByMembershipInput(normalized.account);
+        const member = await findMemberByMembershipInput(
+          processedResult.memberId ?? normalized.account,
+        );
         await sendMpesaReceiptSms({
           member,
           amount: normalized.amount,

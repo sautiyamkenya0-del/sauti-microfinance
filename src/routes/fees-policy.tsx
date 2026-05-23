@@ -1492,8 +1492,8 @@ function PolicyCenterPage() {
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                   The editor below now controls the preprocessing order before the fixed split
                   happens. Required fees and penalties can still be re-ordered by scenario, but
-                  loan-member collections always branch into a daily savings leg and a loan
-                  repayment leg in parallel.
+                  loan-member collections reserve the KSh 50 or KSh 100 compliance contribution,
+                  then send the remainder to loan repayment.
                 </div>
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
                   <div className="mb-1 font-medium text-foreground">Current path</div>
@@ -2976,10 +2976,10 @@ function describeWaterfallPreview(rule: WaterfallRule) {
     rule.steps.map((step) => WATERFALL_DESTINATION_LABELS[step]).join(" -> ") ||
     "No pre-processing deductions";
   if (rule.scenario === "member_with_loan") {
-    return `${steps} -> Parallel split: daily savings waterfall + loan repayment remainder`;
+    return `${steps} -> Premium upfront if needed -> Compliance basket -> Loan repayment remainder`;
   }
   if (rule.scenario === "member_without_loan") {
-    return `${steps} -> Threshold tree: savings, then shares, then purpose pool`;
+    return `${steps} -> 60/40 compliance basket -> 80/20 post-compliance split`;
   }
   return steps || WATERFALL_SCENARIO_LABELS[rule.scenario];
 }
@@ -3242,8 +3242,9 @@ function GuidedCompletedLoanCard({
         <MetricCard label="Cash through cycle" value={fmtKES(summary.totalExpectedCollected)} />
       </div>
       <div className="mt-3 text-xs text-muted-foreground">
-        The redistribution deducts the closed loan repayment total from the client record. The daily
-        savings leg should still be reflected in savings, shares, or purpose pool above.
+        The redistribution deducts the closed loan repayment total from the client record. The
+        compliance contribution should still be reflected in savings, shares, purpose pool, or loan
+        savings above.
       </div>
     </div>
   );

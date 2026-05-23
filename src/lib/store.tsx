@@ -37,6 +37,7 @@ import {
   isInvestorCategory,
   isMemberCategory,
   isInvestorOnlyCategory,
+  isSpecialMemberCategory,
   nextMembershipNumber,
   membershipIdCandidates,
   membershipSequenceValue,
@@ -77,6 +78,7 @@ export type Member = {
   joinedAt: string;
   status: "active" | "dormant";
   shares: number;
+  shareReserveBalance?: number;
   savingsBalance: number;
   fees: MandatoryFees;
   category: MemberCategory;
@@ -109,6 +111,7 @@ export type Member = {
 export type LoanTermDays = 7 | 14 | 30 | 60 | 90;
 export type LoanChargeMode = "upfront" | "financed";
 export type LoanProductType = PolicyLoanType;
+export type LoanKind = "financial" | "fuel" | "stock" | "service";
 
 export type LoanFixedFeeModes = {
   membershipFeeAmount?: number;
@@ -140,6 +143,10 @@ export type Loan = {
   insuranceFeeMode?: LoanChargeMode;
   disbursementStatus?: "not_requested" | "requested" | "paid" | "failed" | "timeout";
   purpose?: string;
+  loanKind?: LoanKind;
+  supplierPayload?: Record<string, unknown>;
+  supplierId?: string;
+  supplierRequestStatus?: string;
   reviewedBy?: string;
   reviewNote?: string;
 };
@@ -414,6 +421,7 @@ export {
   isInvestorCategory,
   isMemberCategory,
   isInvestorOnlyCategory,
+  isSpecialMemberCategory,
   nextMembershipNumber,
   membershipSequenceValue,
   memberCategoryLabel,
@@ -829,6 +837,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             status,
             officerId: l.officerId,
             purpose: l.purpose,
+            loanKind: l.loanKind,
+            supplierPayload: l.supplierPayload,
           },
         });
         await refreshFromDatabase();
@@ -1503,6 +1513,29 @@ export function upfrontRequirementForAmount(amount: number) {
     sharesAmount,
     savingsAmount,
     total: sharesAmount + savingsAmount,
+  };
+}
+
+export function upfrontRequirementForMemberAmount(
+  amount: number,
+  member?: Pick<Member, "savingsBalance" | "shares" | "shareReserveBalance"> | null,
+) {
+  const base = upfrontRequirementForAmount(amount);
+  const currentSavings = Math.max(0, Number(member?.savingsBalance ?? 0));
+  const currentSharesValue =
+    Math.max(0, Number(member?.shares ?? 0)) * SHARE_PRICE +
+    Math.max(0, Number(member?.shareReserveBalance ?? 0));
+  const savingsGap = Math.max(0, base.savingsAmount - currentSavings);
+  const sharesGap = Math.max(0, base.sharesAmount - currentSharesValue);
+
+  return {
+    ...base,
+    currentSavings,
+    currentSharesValue,
+    savingsGap,
+    sharesGap,
+    total: savingsGap + sharesGap,
+    originalTotal: base.total,
   };
 }
 

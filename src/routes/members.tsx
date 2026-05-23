@@ -6,6 +6,8 @@ import {
   useStore,
   fmtKES,
   formatMembershipNumber,
+  isInvestorCategory,
+  isInvestorOnlyCategory,
   memberCategoryLabel,
   nextMembershipNumber,
   normalizeMembershipNumber,
@@ -124,15 +126,15 @@ function MembersPage() {
     currentUser.role === "manager" ||
     currentUser.role === "director";
   const memberRegistry = useMemo(
-    () => members.filter((member) => member.category !== "investor"),
+    () => members.filter((member) => !isInvestorOnlyCategory(member.category)),
     [members],
   );
 
   const filtered = memberRegistry.filter(
     (m) => m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q),
   );
-  const showMemberFields = form.category !== "investor";
-  const showInvestorFields = form.category !== "member";
+  const showMemberFields = !isInvestorOnlyCategory(form.category);
+  const showInvestorFields = isInvestorCategory(form.category);
 
   return (
     <>
@@ -330,6 +332,9 @@ function MembersPage() {
                           { value: "member", label: "Member" },
                           { value: "investor", label: "Investor" },
                           { value: "both", label: "Both" },
+                          { value: "locomotive", label: "Locomotive" },
+                          { value: "stock", label: "Stock" },
+                          { value: "service", label: "Service" },
                         ] as const
                       ).map((option) => (
                         <button
@@ -526,7 +531,9 @@ function MembersPage() {
               {showInvestorFields && (
                 <section className="border-t border-border pt-4">
                   <p className="text-sm font-medium">
-                    {form.category === "investor" ? "Investor account" : "Member-investor details"}
+                    {isInvestorOnlyCategory(form.category)
+                      ? "Investor account"
+                      : "Member-investor details"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Investor-only accounts route Paybill payments to investments. For Both, normal
@@ -656,9 +663,9 @@ function MembersPage() {
                         investorNotes: showInvestorFields ? form.investorNotes : undefined,
                       });
                       toast.success(
-                        form.category === "investor"
+                        isInvestorOnlyCategory(form.category)
                           ? "Investor registered"
-                          : form.category === "both"
+                          : isInvestorCategory(form.category)
                             ? "Member-investor registered"
                             : "Member registered",
                       );

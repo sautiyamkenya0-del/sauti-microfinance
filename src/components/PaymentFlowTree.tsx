@@ -25,15 +25,15 @@ export function PaymentFlowTree({
         </div>
         <div className="mt-2 text-sm text-muted-foreground">
           Fees clear first, penalties follow if they already exist, then member money moves through
-          the threshold tree below. Loan-member collections split into a savings leg and a loan
-          repayment leg at the same time.
+          the compliance basket below. Loan-member collections reserve the selected compliance
+          contribution and send the remainder to the active loan.
         </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
         <FlowBoard
           title="Non-loan member flow"
-          subtitle="A full contribution keeps walking down one classic threshold tree."
+          subtitle="A full contribution fills the compliance basket, then splits into pool and loan savings."
           accentClass="border-primary/25 bg-primary/5"
         >
           <StepCard
@@ -54,7 +54,7 @@ export function PaymentFlowTree({
           />
           <Connector />
           <ThresholdTree
-            title="Mandatory contribution waterfall"
+            title="Mandatory compliance basket"
             mandatorySavingsThreshold={mandatorySavingsThreshold}
             mandatorySharesThreshold={mandatorySharesThreshold}
           />
@@ -62,13 +62,13 @@ export function PaymentFlowTree({
 
         <FlowBoard
           title="Member with active loan"
-          subtitle="After the fee gate, one payment splits into two working branches."
+          subtitle="After the fee gate, upfront and compliance are handled before the loan remainder."
           accentClass="border-accent/30 bg-accent/10"
         >
           <StepCard
             eyebrow="Start"
             title="Incoming loan-member payment"
-            detail="The same receipt can settle due fees, daily savings, and loan balance together."
+            detail="The same receipt can settle due fees, premium upfront, compliance, and loan balance."
           />
           <Connector />
           <FeeGate
@@ -111,7 +111,7 @@ function FlowBoard({
           <div className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</div>
         </div>
         <div className="rounded-full border border-border bg-card px-3 py-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-          Classic tree
+          SBC flow
         </div>
       </div>
       <div className="mt-5">{children}</div>
@@ -184,20 +184,20 @@ function ThresholdTree({
       <div className="mt-4 space-y-3">
         <ThresholdNode
           step="1"
-          title="Mandatory savings fills first"
-          detail={`Grow savings until ${fmtKES(mandatorySavingsThreshold)} is fully covered.`}
+          title="60% to mandatory savings"
+          detail={`Savings contributions continue until ${fmtKES(mandatorySavingsThreshold)} is covered.`}
         />
         <Connector compact />
         <ThresholdNode
           step="2"
-          title="Mandatory shares fills next"
-          detail={`After savings is full, contributions fill shares until ${fmtKES(mandatorySharesThreshold)}.`}
+          title="40% to mandatory shares"
+          detail={`Share contributions continue until ${fmtKES(mandatorySharesThreshold)} is covered.`}
         />
         <Connector compact />
         <ThresholdNode
           step="3"
-          title="Purpose pool"
-          detail="Any balance above both thresholds becomes an internal company-purpose contribution and stays off member-facing pages."
+          title="80/20 post-compliance split"
+          detail="Once both thresholds are full, 80% goes to purpose pool and 20% goes to loan savings / multiplier savings."
           tone="warning"
         />
       </div>
@@ -218,18 +218,17 @@ function SplitStage({
         Parallel Split
       </div>
       <div className="mt-1 text-sm font-semibold text-foreground">
-        One payment runs two branches at once
+        One payment reserves compliance then repays the loan
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
         <div className="rounded-2xl border border-border bg-muted/15 p-4">
-          <div className="text-xs font-semibold text-foreground">Daily savings leg</div>
+          <div className="text-xs font-semibold text-foreground">Compliance contribution</div>
           <div className="mt-1 text-xs leading-5 text-muted-foreground">
-            One daily savings slice of KSh 50 or KSh 100 follows the same threshold waterfall as a
-            normal non-loan contribution.
+            One selected slice of KSh 50 or KSh 100 fills the 60/40 savings and shares basket.
           </div>
           <div className="mt-4">
             <ThresholdTree
-              title="Savings leg tree"
+              title="Compliance basket"
               mandatorySavingsThreshold={mandatorySavingsThreshold}
               mandatorySharesThreshold={mandatorySharesThreshold}
             />
@@ -243,12 +242,12 @@ function SplitStage({
           <div className="mt-4 space-y-3">
             <StepCard
               title="Apply repayment remainder"
-              detail="Everything left after the daily savings slice reduces the outstanding active loan."
+              detail="Everything left after the compliance contribution reduces the outstanding active loan."
             />
             <Connector compact />
             <StepCard
               title="If the loan closes"
-              detail="Any leftover amount loops back into the non-loan contribution tree: savings, then shares, then purpose pool."
+              detail="Any leftover amount loops back into the compliance basket, then the 80/20 post-compliance split."
             />
           </div>
         </div>

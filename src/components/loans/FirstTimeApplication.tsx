@@ -13,8 +13,9 @@ import {
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
-  upfrontRequirementForAmount,
+  upfrontRequirementForMemberAmount,
   type LoanChargeMode,
+  type LoanKind,
 } from "@/lib/store";
 import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import { Input, Select, Row, inputCss } from "./atoms";
@@ -75,7 +76,17 @@ export function FirstTimeApplication({
     kinRelationship: "",
     kinAddress: "",
     loanAmount: 5000,
+    loanKind: "financial" as LoanKind,
     purpose: "Stock/Goods",
+    vehiclePlate: "",
+    fuelType: "Petrol",
+    fuelLitres: 0,
+    fuelUnitPrice: 0,
+    stockItem: "",
+    stockQuantity: 0,
+    stockUnitPrice: 0,
+    serviceType: "",
+    supplierNotes: "",
     repaymentPlan: "Daily" as "Daily" | "Weekly" | "Monthly",
     repaymentDays: 14,
     contacts: [{ ...blankContact }, { ...blankContact }, { ...blankContact }],
@@ -94,6 +105,16 @@ export function FirstTimeApplication({
   const loanType = useMemo(() => loanProductTypeForAmount(f.loanAmount), [f.loanAmount]);
   const loanCategory = loanType === "premium" ? "Premium" : "Normal";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+  const loanKindOptions = useMemo<LoanKind[]>(() => {
+    if (existing?.category === "locomotive") return ["financial", "fuel"];
+    if (existing?.category === "stock") return ["financial", "stock"];
+    if (existing?.category === "service") return ["financial", "service"];
+    return ["financial", "fuel", "stock", "service"];
+  }, [existing?.category]);
+
+  useEffect(() => {
+    if (!loanKindOptions.includes(f.loanKind)) set("loanKind", "financial");
+  }, [f.loanKind, loanKindOptions]);
 
   useEffect(() => {
     if (existing) {
@@ -178,7 +199,7 @@ export function FirstTimeApplication({
       },
     });
     const ded = pricing.deductions;
-    const upfrontBase = upfrontRequirementForAmount(f.loanAmount);
+    const upfrontBase = upfrontRequirementForMemberAmount(f.loanAmount, existing);
     return {
       ratePct: pricing.ratePct,
       termDays,
@@ -187,8 +208,8 @@ export function FirstTimeApplication({
       ded,
       upfront: {
         range: upfrontBase.tier?.range ?? "",
-        minShares: upfrontBase.sharesAmount,
-        minSavings: upfrontBase.savingsAmount,
+        minShares: upfrontBase.sharesGap,
+        minSavings: upfrontBase.savingsGap,
       },
       upfrontBase,
       fixedFeeRows: pricing.fixedFees.rows,
@@ -213,6 +234,9 @@ export function FirstTimeApplication({
     f.stickerFeeMode,
     loanType,
     membershipFeeDue,
+    existing?.savingsBalance,
+    existing?.shares,
+    existing?.shareReserveBalance,
     stickerApplicable,
     stickerFeeDue,
   ]);
@@ -250,6 +274,30 @@ export function FirstTimeApplication({
         businessName: f.tradingName || undefined,
         businessAddress: f.businessLocation || undefined,
       });
+    const supplierPayload =
+      f.loanKind === "fuel"
+        ? {
+            vehiclePlate: f.vehiclePlate,
+            fuelType: f.fuelType,
+            litres: f.fuelLitres,
+            unitPrice: f.fuelUnitPrice,
+            estimatedTotal: f.fuelLitres * f.fuelUnitPrice || f.loanAmount,
+            notes: f.supplierNotes,
+          }
+        : f.loanKind === "stock"
+          ? {
+              item: f.stockItem || f.purpose,
+              quantity: f.stockQuantity,
+              unitPrice: f.stockUnitPrice,
+              estimatedTotal: f.stockQuantity * f.stockUnitPrice || f.loanAmount,
+              notes: f.supplierNotes,
+            }
+          : f.loanKind === "service"
+            ? {
+                serviceType: f.serviceType || f.purpose,
+                notes: f.supplierNotes,
+              }
+            : undefined;
     const loanId = await addLoan({
       memberId: mid,
       principal: f.loanAmount,
@@ -268,6 +316,8 @@ export function FirstTimeApplication({
       insuranceFeeMode: f.insuranceFeeMode,
       disbursementStatus: "not_requested",
       purpose: f.purpose,
+      loanKind: f.loanKind,
+      supplierPayload,
     });
     toast.success("Application submitted — awaiting appraisal & review.");
     onSubmitted?.(loanId);
@@ -402,6 +452,18 @@ export function FirstTimeApplication({
             disabled
             options={["Normal", "Premium"]}
           />
+          <Select
+            label="Loan Type"
+            value={f.loanKind}
+            onChange={(v) => {
+              const next = v as LoanKind;
+              set("loanKind", next);
+              if (next === "fuel") set("purpose", "Fuel Credit");
+              if (next === "stock") set("purpose", "Stock/Goods");
+              if (next === "service") set("purpose", "Other");
+            }}
+            options={loanKindOptions}
+          />
           <Input
             type="number"
             label="Amount Requested (KSh)"
@@ -414,6 +476,70 @@ export function FirstTimeApplication({
             onChange={(v) => set("purpose", v)}
             options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
           />
+          {f.loanKind === "fuel" && (
+            <>
+              <Input
+                label="Vehicle / Plate"
+                value={f.vehiclePlate}
+                onChange={(v) => set("vehiclePlate", v)}
+              />
+              <Select
+                label="Fuel Type"
+                value={f.fuelType}
+                onChange={(v) => set("fuelType", v)}
+                options={["Petrol", "Diesel", "Kerosene", "Other"]}
+              />
+              <Input
+                type="number"
+                label="Litres"
+                value={String(f.fuelLitres)}
+                onChange={(v) => set("fuelLitres", Number(v))}
+              />
+              <Input
+                type="number"
+                label="Unit Price"
+                value={String(f.fuelUnitPrice)}
+                onChange={(v) => set("fuelUnitPrice", Number(v))}
+              />
+            </>
+          )}
+          {f.loanKind === "stock" && (
+            <>
+              <Input label="Stock Item" value={f.stockItem} onChange={(v) => set("stockItem", v)} />
+              <Input
+                type="number"
+                label="Quantity"
+                value={String(f.stockQuantity)}
+                onChange={(v) => set("stockQuantity", Number(v))}
+              />
+              <Input
+                type="number"
+                label="Unit Price"
+                value={String(f.stockUnitPrice)}
+                onChange={(v) => set("stockUnitPrice", Number(v))}
+              />
+            </>
+          )}
+          {f.loanKind === "service" && (
+            <Input
+              label="Service Type"
+              value={f.serviceType}
+              onChange={(v) => set("serviceType", v)}
+            />
+          )}
+          {f.loanKind !== "financial" && (
+            <label className="block md:col-span-2 lg:col-span-3">
+              <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                Supplier Notes
+              </span>
+              <textarea
+                rows={2}
+                value={f.supplierNotes}
+                onChange={(event) => set("supplierNotes", event.target.value)}
+                className="loan-input mt-1"
+              />
+            </label>
+          )}
           <Select
             label="Repayment Plan"
             value={f.repaymentPlan}
@@ -741,12 +867,12 @@ export function FirstTimeApplication({
                 </div>
                 {calc.upfrontBase.tier ? (
                   <div>
-                    Min Shares: {fmtKES(calc.upfront.minShares)} · Min Savings:{" "}
+                    Remaining shares: {fmtKES(calc.upfront.minShares)} · Remaining savings:{" "}
                     {fmtKES(calc.upfront.minSavings)}
                   </div>
                 ) : null}
                 <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">Tiered upfront base</span>
+                  <span className="text-muted-foreground">Remaining upfront base</span>
                   <span>{fmtKES(calc.upfrontBase.total)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-3">

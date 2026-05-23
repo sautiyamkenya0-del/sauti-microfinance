@@ -18,6 +18,7 @@ import {
   FileBarChart,
   BookOpen,
   HandCoins,
+  Landmark,
 } from "lucide-react";
 
 export type Tab = { to: string; label: string; icon: ComponentType<{ className?: string }> };
@@ -33,6 +34,7 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
   capital: [
     { to: "/savings", label: "Savings", icon: PiggyBank },
+    { to: "/withdrawals", label: "Withdrawals", icon: Landmark },
     { to: "/shares", label: "Shares", icon: PieChart },
     { to: "/transactions", label: "Transactions", icon: ArrowLeftRight },
     { to: "/pettycash", label: "Petty Cash", icon: Wallet },

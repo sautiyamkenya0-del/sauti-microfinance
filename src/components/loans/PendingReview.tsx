@@ -18,7 +18,9 @@ export function PendingReview() {
     );
   }
 
-  const pending = loans.filter((l) => l.status === "pending");
+  const pending = loans.filter(
+    (l) => l.status === "pending" && l.supplierRequestStatus !== "approved",
+  );
 
   return (
     <Section title={`Applications Awaiting Review (${pending.length})`}>
@@ -27,6 +29,7 @@ export function PendingReview() {
           <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
             <tr>
               <th className="text-left px-5 py-3">Loan</th>
+              <th className="text-left px-5 py-3">Type</th>
               <th className="text-left px-5 py-3">Member</th>
               <th className="text-right px-5 py-3">Amount Applied</th>
               <th className="text-right px-5 py-3">Term</th>
@@ -38,7 +41,7 @@ export function PendingReview() {
           <tbody className="divide-y divide-border">
             {pending.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground text-sm">
+                <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground text-sm">
                   No pending applications.
                 </td>
               </tr>
@@ -51,6 +54,11 @@ export function PendingReview() {
               return (
                 <tr key={l.id} className="hover:bg-muted/30">
                   <td className="px-5 py-3 font-mono text-xs">{l.id}</td>
+                  <td className="px-5 py-3">
+                    <Badge tone={l.loanKind && l.loanKind !== "financial" ? "warning" : "muted"}>
+                      {l.loanKind ?? "financial"}
+                    </Badge>
+                  </td>
                   <td className="px-5 py-3 font-medium">{m?.name}</td>
                   <td className="px-5 py-3 text-right">{fmtKES(l.principal)}</td>
                   <td className="px-5 py-3 text-right">{termDays} days</td>
@@ -96,6 +104,7 @@ export function PendingReview() {
           const l = loans.find((x) => x.id === reviewing)!;
           const m = members.find((x) => x.id === l.memberId);
           const termDays = loanTermDaysOf(l);
+          const supplierBacked = l.loanKind != null && l.loanKind !== "financial";
           const pricing = loanPricingPreview({
             netAmount: adjAmount,
             termDays,
@@ -170,12 +179,16 @@ export function PendingReview() {
                         if (adjAmount <= 0)
                           return toast.error("Approved amount must be above zero.");
                         await approveLoan(l.id, adjAmount, currentUser.id, note);
-                        toast.success("Loan approved & disbursed");
+                        toast.success(
+                          supplierBacked
+                            ? "Loan approved for supplier fulfillment"
+                            : "Loan approved & disbursed",
+                        );
                         setReviewing(null);
                       }}
                       className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                     >
-                      Approve & Disburse
+                      {supplierBacked ? "Approve for Supplier" : "Approve & Disburse"}
                     </button>
                   </div>
                 </div>

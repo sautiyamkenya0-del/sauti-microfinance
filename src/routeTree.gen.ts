@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WithdrawalsRouteImport } from './routes/withdrawals'
 import { Route as TransactionsRouteImport } from './routes/transactions'
 import { Route as SupportInboxRouteImport } from './routes/support-inbox'
 import { Route as StaffMgmtRouteImport } from './routes/staff-mgmt'
@@ -47,6 +48,11 @@ import { Route as ApiAdminMpesaRegisterC2bUrlsRouteImport } from './routes/api/a
 import { Route as ApiPublicMpesaB2cTimeoutRouteImport } from './routes/api/public/mpesa.b2c.timeout'
 import { Route as ApiPublicMpesaB2cResultRouteImport } from './routes/api/public/mpesa.b2c.result'
 
+const WithdrawalsRoute = WithdrawalsRouteImport.update({
+  id: '/withdrawals',
+  path: '/withdrawals',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TransactionsRoute = TransactionsRouteImport.update({
   id: '/transactions',
   path: '/transactions',
@@ -262,6 +268,7 @@ export interface FileRoutesByFullPath {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/withdrawals': typeof WithdrawalsRoute
   '/api/confirmation': typeof ApiConfirmationRoute
   '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
@@ -301,6 +308,7 @@ export interface FileRoutesByTo {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/withdrawals': typeof WithdrawalsRoute
   '/api/confirmation': typeof ApiConfirmationRoute
   '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
@@ -341,6 +349,7 @@ export interface FileRoutesById {
   '/staff-mgmt': typeof StaffMgmtRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
+  '/withdrawals': typeof WithdrawalsRoute
   '/api/confirmation': typeof ApiConfirmationRoute
   '/api/validation': typeof ApiValidationRoute
   '/api/ai/chat': typeof ApiAiChatRoute
@@ -382,6 +391,7 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/withdrawals'
     | '/api/confirmation'
     | '/api/validation'
     | '/api/ai/chat'
@@ -421,6 +431,7 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/withdrawals'
     | '/api/confirmation'
     | '/api/validation'
     | '/api/ai/chat'
@@ -460,6 +471,7 @@ export interface FileRouteTypes {
     | '/staff-mgmt'
     | '/support-inbox'
     | '/transactions'
+    | '/withdrawals'
     | '/api/confirmation'
     | '/api/validation'
     | '/api/ai/chat'
@@ -500,6 +512,7 @@ export interface RootRouteChildren {
   StaffMgmtRoute: typeof StaffMgmtRoute
   SupportInboxRoute: typeof SupportInboxRoute
   TransactionsRoute: typeof TransactionsRoute
+  WithdrawalsRoute: typeof WithdrawalsRoute
   ApiConfirmationRoute: typeof ApiConfirmationRoute
   ApiValidationRoute: typeof ApiValidationRoute
   ApiAiChatRoute: typeof ApiAiChatRoute
@@ -519,6 +532,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/withdrawals': {
+      id: '/withdrawals'
+      path: '/withdrawals'
+      fullPath: '/withdrawals'
+      preLoaderRoute: typeof WithdrawalsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/transactions': {
       id: '/transactions'
       path: '/transactions'
@@ -804,6 +824,7 @@ const rootRouteChildren: RootRouteChildren = {
   StaffMgmtRoute: StaffMgmtRoute,
   SupportInboxRoute: SupportInboxRoute,
   TransactionsRoute: TransactionsRoute,
+  WithdrawalsRoute: WithdrawalsRoute,
   ApiConfirmationRoute: ApiConfirmationRoute,
   ApiValidationRoute: ApiValidationRoute,
   ApiAiChatRoute: ApiAiChatRoute,

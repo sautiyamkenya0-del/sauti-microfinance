@@ -10,6 +10,7 @@ import {
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
   type LoanChargeMode,
+  type LoanKind,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
 import { useMemo, useState } from "react";
@@ -37,8 +38,18 @@ export function RepeatApplication({
         ) / memberLoans.length;
 
   const [loanCategory, setLoanCategory] = useState<"Normal" | "Premium">("Premium");
+  const [loanKind, setLoanKind] = useState<LoanKind>("financial");
   const [loanAmount, setLoanAmount] = useState(10000);
   const [purpose, setPurpose] = useState("Stock/Goods");
+  const [vehiclePlate, setVehiclePlate] = useState("");
+  const [fuelType, setFuelType] = useState("Petrol");
+  const [fuelLitres, setFuelLitres] = useState(0);
+  const [fuelUnitPrice, setFuelUnitPrice] = useState(0);
+  const [stockItem, setStockItem] = useState("");
+  const [stockQuantity, setStockQuantity] = useState(0);
+  const [stockUnitPrice, setStockUnitPrice] = useState(0);
+  const [serviceType, setServiceType] = useState("");
+  const [supplierNotes, setSupplierNotes] = useState("");
   const [repaymentPlan, setRepaymentPlan] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
   const [repaymentDays, setRepaymentDays] = useState(30);
   const [savingsPlan, setSavingsPlan] = useState<"50" | "100">("100");
@@ -51,6 +62,14 @@ export function RepeatApplication({
   const [changesSinceLast, setChangesSinceLast] = useState("");
   const loanType = loanCategory === "Premium" ? "premium" : "standard";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
+  const loanKindOptions: LoanKind[] =
+    member?.category === "locomotive"
+      ? ["financial", "fuel"]
+      : member?.category === "stock"
+        ? ["financial", "stock"]
+        : member?.category === "service"
+          ? ["financial", "service"]
+          : ["financial", "fuel", "stock", "service"];
 
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDaysForType(repaymentDays, loanType);
@@ -80,6 +99,27 @@ export function RepeatApplication({
   const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
+    const supplierPayload =
+      loanKind === "fuel"
+        ? {
+            vehiclePlate,
+            fuelType,
+            litres: fuelLitres,
+            unitPrice: fuelUnitPrice,
+            estimatedTotal: fuelLitres * fuelUnitPrice || loanAmount,
+            notes: supplierNotes,
+          }
+        : loanKind === "stock"
+          ? {
+              item: stockItem || purpose,
+              quantity: stockQuantity,
+              unitPrice: stockUnitPrice,
+              estimatedTotal: stockQuantity * stockUnitPrice || loanAmount,
+              notes: supplierNotes,
+            }
+          : loanKind === "service"
+            ? { serviceType: serviceType || purpose, notes: supplierNotes }
+            : undefined;
     const loanId = await addLoan({
       memberId: member.id,
       principal: loanAmount,
@@ -98,6 +138,8 @@ export function RepeatApplication({
       insuranceFeeMode,
       disbursementStatus: "not_requested",
       purpose,
+      loanKind,
+      supplierPayload,
     });
     toast.success("Repeat application submitted for review.");
     onSubmitted?.(loanId);
@@ -166,6 +208,18 @@ export function RepeatApplication({
             onChange={(v) => setLoanCategory(v as "Normal" | "Premium")}
             options={["Normal", "Premium"]}
           />
+          <Select
+            label="Loan Type"
+            value={loanKindOptions.includes(loanKind) ? loanKind : "financial"}
+            onChange={(v) => {
+              const next = v as LoanKind;
+              setLoanKind(next);
+              if (next === "fuel") setPurpose("Fuel Credit");
+              if (next === "stock") setPurpose("Stock/Goods");
+              if (next === "service") setPurpose("Other");
+            }}
+            options={loanKindOptions}
+          />
           <Input
             type="number"
             label="Amount Requested (KSh)"
@@ -184,6 +238,62 @@ export function RepeatApplication({
             onChange={setPurpose}
             options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
           />
+          {loanKind === "fuel" && (
+            <>
+              <Input label="Vehicle / Plate" value={vehiclePlate} onChange={setVehiclePlate} />
+              <Select
+                label="Fuel Type"
+                value={fuelType}
+                onChange={setFuelType}
+                options={["Petrol", "Diesel", "Kerosene", "Other"]}
+              />
+              <Input
+                type="number"
+                label="Litres"
+                value={String(fuelLitres)}
+                onChange={(v) => setFuelLitres(Number(v))}
+              />
+              <Input
+                type="number"
+                label="Unit Price"
+                value={String(fuelUnitPrice)}
+                onChange={(v) => setFuelUnitPrice(Number(v))}
+              />
+            </>
+          )}
+          {loanKind === "stock" && (
+            <>
+              <Input label="Stock Item" value={stockItem} onChange={setStockItem} />
+              <Input
+                type="number"
+                label="Quantity"
+                value={String(stockQuantity)}
+                onChange={(v) => setStockQuantity(Number(v))}
+              />
+              <Input
+                type="number"
+                label="Unit Price"
+                value={String(stockUnitPrice)}
+                onChange={(v) => setStockUnitPrice(Number(v))}
+              />
+            </>
+          )}
+          {loanKind === "service" && (
+            <Input label="Service Type" value={serviceType} onChange={setServiceType} />
+          )}
+          {loanKind !== "financial" && (
+            <label className="block md:col-span-2 lg:col-span-3">
+              <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                Supplier Notes
+              </span>
+              <textarea
+                rows={2}
+                className="loan-input mt-1"
+                value={supplierNotes}
+                onChange={(event) => setSupplierNotes(event.target.value)}
+              />
+            </label>
+          )}
           <Select
             label="Repayment Plan"
             value={repaymentPlan}

@@ -315,12 +315,42 @@ const SHARE_PRICE = 100;
 const ROUNDING_BASE = DEFAULT_POLICY_SETTINGS.percentages.roundOffStep;
 const MANDATORY_SAVINGS_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySavingsThreshold;
 const MANDATORY_SHARES_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatorySharesThreshold;
+const COMPLIANCE_SAVINGS_PCT = 0.6;
+const COMPLIANCE_SHARES_PCT = 0.4;
+const POST_COMPLIANCE_LOAN_SAVINGS_PCT = 0.2;
+const SPECIAL_MEMBER_TRANSACTION_INTEREST = 100;
+const SPECIAL_MEMBER_BUFFER_TARGET = 3000;
 const MAX_FIELD_VISIT_PHOTOS = 6;
 const MAX_FIELD_VISIT_TOTAL_BYTES = 8 * 1024 * 1024;
+
+const PREMIUM_UPFRONT_TABLE = [
+  { min: 5000, max: 10000, minShares: 900, minSavings: 1000 },
+  { min: 10001, max: 20000, minShares: 1500, minSavings: 2500 },
+  { min: 20001, max: 30000, minShares: 2100, minSavings: 3500 },
+  { min: 30001, max: 40000, minShares: 3000, minSavings: 4000 },
+  { min: 40001, max: 50000, minShares: 3000, minSavings: 5000 },
+];
 
 function roundUpKES(amount: number, step: number = ROUNDING_BASE) {
   if (amount <= 0) return 0;
   return Math.ceil(amount / step) * step;
+}
+
+function roundMoney(amount: number) {
+  return Math.round((Number(amount) + Number.EPSILON) * 100) / 100;
+}
+
+function premiumUpfrontRequirementForAmount(amount: number) {
+  const normalized = Math.max(0, Number(amount ?? 0));
+  if (normalized <= 5000) return { minShares: 0, minSavings: 0, total: 0 };
+  const tier =
+    PREMIUM_UPFRONT_TABLE.find((row) => normalized >= row.min && normalized <= row.max) ??
+    PREMIUM_UPFRONT_TABLE[PREMIUM_UPFRONT_TABLE.length - 1];
+  return {
+    minShares: tier?.minShares ?? 0,
+    minSavings: tier?.minSavings ?? 0,
+    total: (tier?.minShares ?? 0) + (tier?.minSavings ?? 0),
+  };
 }
 
 function normalizeLoanTermDays(termDays?: number) {
@@ -414,6 +444,19 @@ function loanBalanceSummary(loan: {
     paid,
     balance: Math.max(0, total - paid),
   };
+}
+
+function loanDailyRepaymentObligation(loan: {
+  principal: number | string | null;
+  approved_amount?: number | string | null;
+  financed_principal_amount?: number | string | null;
+  rate?: number | string | null;
+  term_days?: number | null;
+  term_months?: number | null;
+  paid?: number | string | null;
+}) {
+  const summary = loanBalanceSummary(loan);
+  return Math.min(summary.balance, summary.total / Math.max(1, summary.termDays));
 }
 
 function memberNeedsStickerRow(member: {
@@ -1142,6 +1185,66 @@ export async function recordMpesaValidationEvent(args: {
   if (error) throw new Error(error.message);
 }
 
+export async function validateMpesaDepositRequest(args: { account: string; amount?: number }) {
+  const amount = Number(args.amount ?? 0);
+  if (amount <= 0) {
+    return { accepted: false, reason: "Payment amount must be above zero." };
+  }
+
+  const accountContext = parseMpesaAccountDocket(args.account);
+  if (!accountContext.account) {
+    return { accepted: true };
+  }
+
+  const member = await findMemberByMembershipInput(accountContext.account);
+  if (!member) {
+    return { accepted: true };
+  }
+
+  const runtimeDb = (await requireSupabaseAdmin()) as any;
+  const { data: outstandingPenalties, error: penaltiesError } = await runtimeDb
+    .from("penalties")
+    .select("id")
+    .eq("member_id", member.id)
+    .eq("status", "outstanding")
+    .limit(1);
+  if (penaltiesError) throw new Error(penaltiesError.message);
+
+  if ((outstandingPenalties ?? []).length > 0 && accountContext.docket !== "penalty_payment") {
+    return {
+      accepted: false,
+      reason: "Outstanding penalties must be paid through the penalty payment option first.",
+    };
+  }
+
+  const { data: defaultedLoans, error: defaultedError } = await runtimeDb
+    .from("loans")
+    .select("id")
+    .eq("member_id", member.id)
+    .eq("status", "defaulted")
+    .limit(1);
+  if (defaultedError) throw new Error(defaultedError.message);
+
+  if ((defaultedLoans ?? []).length > 0 && accountContext.docket) {
+    return {
+      accepted: false,
+      reason: "This member has a defaulted loan; payments must route to the defaulted loan.",
+    };
+  }
+
+  if (accountContext.docket === "loan_savings") {
+    const compliance = await memberMeetsComplianceThreshold(runtimeDb, member);
+    if (!compliance.ok) {
+      return {
+        accepted: false,
+        reason: `Loan savings opens after savings reach ${compliance.savingsThreshold}/= and shares reach ${compliance.sharesThreshold}/=.`,
+      };
+    }
+  }
+
+  return { accepted: true };
+}
+
 export async function applyMpesaPaymentToDatabase(args: {
   account: string;
   amount: number;
@@ -1150,7 +1253,9 @@ export async function applyMpesaPaymentToDatabase(args: {
   eventId?: string;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
-  const norm = args.account.trim().toUpperCase();
+  const accountContext = parseMpesaAccountDocket(args.account);
+  const norm = accountContext.account.trim().toUpperCase();
+  const targetedDocket = accountContext.docket;
   const amount = Number(args.amount ?? 0);
   const notes: string[] = [];
   let paymentCreatedAt: string | undefined;
@@ -1436,15 +1541,19 @@ export async function applyMpesaPaymentToDatabase(args: {
     .order("date", { ascending: true });
   if (penaltiesError) throw new Error(penaltiesError.message);
 
-  const { data: activeLoan, error: activeLoanError } = await supabaseAdmin
+  const { data: loanRows, error: activeLoanError } = await supabaseAdmin
     .from("loans")
     .select("*")
     .eq("member_id", memberId)
-    .eq("status", "active")
+    .in("status", ["defaulted", "active"])
     .order("start_date", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(10);
   if (activeLoanError) throw new Error(activeLoanError.message);
+  const activeLoan =
+    (loanRows ?? []).find((loan: any) => loan.status === "defaulted") ??
+    (loanRows ?? []).find((loan: any) => loan.status === "active") ??
+    null;
+  const hasDefaultedLoan = activeLoan?.status === "defaulted";
 
   const feeApplies = (key: string) => {
     const policy = normalizedFeePolicies.find((row) => row.key === key);
@@ -1518,6 +1627,14 @@ export async function applyMpesaPaymentToDatabase(args: {
     return currentShareUnits() * SHARE_PRICE;
   }
 
+  function currentShareReserveBalance() {
+    return Number(memberPatch.share_reserve_balance ?? matchedMember.share_reserve_balance ?? 0);
+  }
+
+  function currentShareBasketValue() {
+    return currentShareValue() + currentShareReserveBalance();
+  }
+
   function queueTransaction(
     row: {
       date?: string;
@@ -1542,14 +1659,24 @@ export async function applyMpesaPaymentToDatabase(args: {
     });
   }
 
-  function queueSavingsDeposit(applied: number, notePrefix: string) {
+  function queueSavingsDeposit(
+    applied: number,
+    notePrefix: string,
+    options?: {
+      note?: string;
+      allocationType?: string;
+      primaryNote?: string;
+      trackMandatoryThreshold?: boolean;
+      roundOff?: boolean;
+    },
+  ) {
     if (applied <= 0) return;
-    const rounded = roundUpKES(applied, roundOffStep);
+    const rounded = options?.roundOff === false ? applied : roundUpKES(applied, roundOffStep);
     const surplus = Math.max(0, rounded - applied);
     setPrimaryIfMissing(
       "deposit",
       applied,
-      `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+      options?.primaryNote ?? `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
     queueTransaction(
       {
@@ -1562,12 +1689,13 @@ export async function applyMpesaPaymentToDatabase(args: {
         ref: args.mpesaRef,
         account: norm,
         payer_name: args.payerName,
-        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
+        note: options?.note ?? `Paybill ${norm} - ${args.payerName ?? ""}`,
       },
-      "deposit",
+      options?.allocationType ?? "deposit",
     );
-    memberPatch.savings_balance = currentSavingsBalance() + applied;
+    memberPatch.savings_balance = roundMoney(currentSavingsBalance() + applied);
     if (surplus > 0) toRoundOff += surplus;
+    if (options?.trackMandatoryThreshold === false) return;
     if (currentSavingsBalance() < mandatorySavingsThreshold) {
       notes.push(
         `${notePrefix} Member is still below the mandatory savings threshold of ${mandatorySavingsThreshold}/=.`,
@@ -1577,15 +1705,12 @@ export async function applyMpesaPaymentToDatabase(args: {
     }
   }
 
-  function queueSharePurchase(applied: number, notePrefix: string) {
+  function queueShareContribution(applied: number, notePrefix: string, note?: string) {
     if (applied <= 0) return;
-    const wholeUnits = Math.floor(applied / SHARE_PRICE);
-    const actualApplied = wholeUnits * SHARE_PRICE;
-    if (actualApplied <= 0) return;
 
     setPrimaryIfMissing(
       "share_purchase",
-      actualApplied,
+      applied,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
     queueTransaction(
@@ -1593,31 +1718,47 @@ export async function applyMpesaPaymentToDatabase(args: {
         date: paymentDate,
         created_at: paymentCreatedAt ?? null,
         type: "share_purchase",
-        amount: actualApplied,
+        amount: applied,
         member_id: memberId,
         by_staff: MPESA_SYSTEM_STAFF_ID,
         ref: args.mpesaRef,
         account: norm,
         payer_name: args.payerName,
-        note: `Mandatory shares via Paybill ${norm}`,
+        note: note ?? `Mandatory shares via Paybill ${norm}`,
       },
       "share_purchase",
     );
-    memberPatch.shares = currentShareUnits() + wholeUnits;
-    notes.push(
-      `${notePrefix} Converted ${actualApplied}/= into ${wholeUnits} mandatory share unit(s).`,
-    );
+
+    const shareGapAmount = Math.max(0, mandatorySharesThreshold - currentShareValue());
+    let nextReserve = roundMoney(currentShareReserveBalance() + applied);
+    const convertibleAmount =
+      Math.floor(Math.min(nextReserve, shareGapAmount) / SHARE_PRICE) * SHARE_PRICE;
+    const convertedUnits = Math.floor(convertibleAmount / SHARE_PRICE);
+    if (convertedUnits > 0) {
+      memberPatch.shares = currentShareUnits() + convertedUnits;
+      nextReserve = roundMoney(nextReserve - convertedUnits * SHARE_PRICE);
+    }
+    memberPatch.share_reserve_balance = nextReserve;
+
+    if (convertedUnits > 0) {
+      notes.push(
+        `${notePrefix} Added ${applied}/= to mandatory shares and converted ${convertedUnits} share unit(s).`,
+      );
+    } else {
+      notes.push(`${notePrefix} Added ${applied}/= to mandatory share reserve.`);
+    }
   }
 
   function queuePurposePoolContribution(applied: number, reason: string) {
-    if (applied <= 0) return;
-    setPrimaryIfMissing("fee_payment", applied, `Purpose pool via Paybill ${norm}`);
+    const amount = roundMoney(applied);
+    if (amount <= 0) return;
+    setPrimaryIfMissing("fee_payment", amount, `Purpose pool via Paybill ${norm}`);
     queueTransaction(
       {
         date: paymentDate,
         created_at: paymentCreatedAt ?? null,
         type: "fee_payment",
-        amount: applied,
+        amount,
         member_id: memberId,
         by_staff: MPESA_SYSTEM_STAFF_ID,
         ref: args.mpesaRef,
@@ -1627,7 +1768,90 @@ export async function applyMpesaPaymentToDatabase(args: {
       },
       "purpose_pool",
     );
-    notes.push(`Routed ${applied}/= into the internal purpose pool (${reason}).`);
+    notes.push(`Routed ${amount}/= into the internal purpose pool (${reason}).`);
+  }
+
+  function allocatePostComplianceSplit(applied: number, reason: string) {
+    const amount = roundMoney(applied);
+    if (amount <= 0) return;
+    if (
+      currentSavingsBalance() < mandatorySavingsThreshold ||
+      currentShareBasketValue() < mandatorySharesThreshold
+    ) {
+      allocateComplianceBasket(amount, "Compliance gate before loan savings:");
+      return;
+    }
+    const loanSavingsAmount = roundMoney(amount * POST_COMPLIANCE_LOAN_SAVINGS_PCT);
+    const purposePoolAmount = roundMoney(amount - loanSavingsAmount);
+
+    if (purposePoolAmount > 0) {
+      queuePurposePoolContribution(purposePoolAmount, reason);
+    }
+    if (loanSavingsAmount > 0) {
+      queueSavingsDeposit(loanSavingsAmount, "Post-compliance savings:", {
+        note: `Loan savings / multiplier savings via Paybill ${norm}`,
+        allocationType: "loan_savings",
+        primaryNote: `Loan savings via Paybill ${norm}`,
+        trackMandatoryThreshold: false,
+        roundOff: false,
+      });
+      notes.push(`Routed ${loanSavingsAmount}/= to loan savings / multiplier savings (${reason}).`);
+    }
+  }
+
+  function allocateComplianceBasket(applied: number, notePrefix: string) {
+    let amount = roundMoney(applied);
+    if (amount <= 0) return;
+
+    const savingsGap = Math.max(0, mandatorySavingsThreshold - currentSavingsBalance());
+    const shareGap = Math.max(0, mandatorySharesThreshold - currentShareBasketValue());
+    const complianceCapacity = roundMoney(savingsGap + shareGap);
+
+    if (complianceCapacity <= 0) {
+      allocatePostComplianceSplit(amount, "mandatory compliance basket is already full");
+      return;
+    }
+
+    const complianceApplied = Math.min(amount, complianceCapacity);
+    let savingsTarget = Math.min(
+      savingsGap,
+      roundMoney(complianceApplied * COMPLIANCE_SAVINGS_PCT),
+    );
+    let shareTarget = Math.min(shareGap, roundMoney(complianceApplied * COMPLIANCE_SHARES_PCT));
+    let unassigned = roundMoney(complianceApplied - savingsTarget - shareTarget);
+
+    if (unassigned > 0 && savingsTarget < savingsGap) {
+      const extraSavings = Math.min(unassigned, roundMoney(savingsGap - savingsTarget));
+      savingsTarget = roundMoney(savingsTarget + extraSavings);
+      unassigned = roundMoney(unassigned - extraSavings);
+    }
+    if (unassigned > 0 && shareTarget < shareGap) {
+      const extraShares = Math.min(unassigned, roundMoney(shareGap - shareTarget));
+      shareTarget = roundMoney(shareTarget + extraShares);
+      unassigned = roundMoney(unassigned - extraShares);
+    }
+
+    if (savingsTarget > 0) {
+      queueSavingsDeposit(savingsTarget, notePrefix, {
+        note: `Mandatory compliance savings via Paybill ${norm}`,
+        roundOff: false,
+      });
+    }
+    if (shareTarget > 0) {
+      queueShareContribution(
+        shareTarget,
+        notePrefix,
+        `Mandatory compliance shares via Paybill ${norm}`,
+      );
+    }
+
+    amount = roundMoney(amount - complianceApplied);
+    if (amount > 0 || unassigned > 0) {
+      allocatePostComplianceSplit(
+        roundMoney(amount + unassigned),
+        "amount above mandatory savings and shares thresholds",
+      );
+    }
   }
 
   async function applyLoanRepayment(applied: number) {
@@ -1679,120 +1903,355 @@ export async function applyMpesaPaymentToDatabase(args: {
       status: nextStatus,
     };
 
-    if (!matchedMember.fee_first_upfront_paid) {
-      memberPatch.fee_first_upfront_paid = true;
-    }
-
     notes.push(
       `Applied ${safeApplied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
     );
     return Math.max(0, applied - safeApplied);
   }
 
-  function allocateSavingsWaterfall(applied: number, notePrefix: string) {
-    let remainingSavingsPortion = Math.max(0, applied);
-    if (remainingSavingsPortion <= 0) return;
+  function allocatePremiumUpfrontRequirement(applied: number) {
+    if (!activeLoan || applied <= 0) return applied;
+    const approvedAmount = Number(activeLoan.approved_amount ?? activeLoan.principal ?? 0);
+    const requirement = premiumUpfrontRequirementForAmount(approvedAmount);
+    if (requirement.total <= 0 || matchedMember.fee_first_upfront_paid) return applied;
 
-    const savingsGap = Math.max(0, mandatorySavingsThreshold - currentSavingsBalance());
-    const savingsApplied = Math.min(remainingSavingsPortion, savingsGap);
+    let available = applied;
+    const savingsGap = Math.max(0, requirement.minSavings - currentSavingsBalance());
+    const savingsApplied = Math.min(available, savingsGap);
     if (savingsApplied > 0) {
-      queueSavingsDeposit(savingsApplied, notePrefix);
-      remainingSavingsPortion -= savingsApplied;
+      queueSavingsDeposit(savingsApplied, "Premium upfront:", {
+        note: `Premium upfront savings via Paybill ${norm}`,
+      });
+      available = roundMoney(available - savingsApplied);
     }
 
-    const shareGapAmount = Math.max(0, mandatorySharesThreshold - currentShareValue());
-    const desiredShareAmount = Math.min(remainingSavingsPortion, shareGapAmount);
-    const shareApplied = Math.floor(desiredShareAmount / SHARE_PRICE) * SHARE_PRICE;
+    const shareGap = Math.max(0, requirement.minShares - currentShareBasketValue());
+    const shareApplied = Math.min(available, shareGap);
     if (shareApplied > 0) {
-      queueSharePurchase(shareApplied, notePrefix);
-      remainingSavingsPortion -= shareApplied;
+      queueShareContribution(
+        shareApplied,
+        "Premium upfront:",
+        `Premium upfront shares via Paybill ${norm}`,
+      );
+      available = roundMoney(available - shareApplied);
     }
 
-    if (remainingSavingsPortion > 0) {
-      const stillBelowShares = currentShareValue() < mandatorySharesThreshold;
-      queuePurposePoolContribution(
-        remainingSavingsPortion,
-        stillBelowShares
-          ? `share-stage remainder below a full ${SHARE_PRICE} share block`
-          : "amount above mandatory savings and shares thresholds",
+    const upfrontMet =
+      currentSavingsBalance() >= requirement.minSavings &&
+      currentShareBasketValue() >= requirement.minShares;
+    if (upfrontMet) {
+      memberPatch.fee_first_upfront_paid = true;
+      notes.push(
+        `Premium upfront requirement met: savings ${requirement.minSavings}/=, shares ${requirement.minShares}/=.`,
       );
-      remainingSavingsPortion = 0;
+    } else if (savingsApplied > 0 || shareApplied > 0) {
+      notes.push(
+        `Premium upfront still pending: savings target ${requirement.minSavings}/=, shares target ${requirement.minShares}/=.`,
+      );
     }
+
+    return available;
+  }
+
+  async function loadSpecialBufferBalance(kind: "locomotive" | "stock") {
+    const prefix = kind === "locomotive" ? "Locomotive fuel buffer" : "Stock buffer";
+    const { data, error } = await supabaseAdmin
+      .from("transactions")
+      .select("amount")
+      .eq("member_id", memberId)
+      .eq("type", "deposit")
+      .ilike("note", `${prefix}%`);
+    if (error) throw new Error(error.message);
+    return (data ?? []).reduce((sum: number, row: { amount?: number | string | null }) => {
+      return sum + Number(row.amount ?? 0);
+    }, 0);
+  }
+
+  function queueSpecialInterest(applied: number, kind: "locomotive" | "stock") {
+    const amount = roundMoney(applied);
+    if (amount <= 0) return;
+    const label = kind === "locomotive" ? "Locomotive fuel" : "Stock";
+    setPrimaryIfMissing("fee_payment", amount, `${label} loan transaction interest via Paybill`);
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "fee_payment",
+        amount,
+        member_id: memberId,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `${label} loan transaction interest (auto)`,
+      },
+      `${kind}_loan_interest`,
+    );
+    notes.push(`Deducted ${amount}/= ${label.toLowerCase()} loan transaction interest.`);
+  }
+
+  async function allocateSpecialMemberPayment(kind: "locomotive" | "stock") {
+    if (remaining <= 0) return;
+    const label = kind === "locomotive" ? "Locomotive fuel" : "Stock";
+    const activeBalance = activeLoan ? loanBalanceSummary(activeLoan).balance : 0;
+
+    if (activeLoan && activeBalance > 0) {
+      const interest = Math.min(remaining, SPECIAL_MEMBER_TRANSACTION_INTEREST);
+      queueSpecialInterest(interest, kind);
+      remaining = roundMoney(remaining - interest);
+
+      if (remaining > 0) {
+        const overflow = await applyLoanRepayment(remaining);
+        remaining = roundMoney(overflow);
+      }
+    }
+
+    if (remaining <= 0) return;
+
+    const existingBuffer = await loadSpecialBufferBalance(kind);
+    const pendingBuffer = txBatch
+      .filter(
+        (row) =>
+          row.type === "deposit" &&
+          String(row.note ?? "").startsWith(
+            kind === "locomotive" ? "Locomotive fuel buffer" : "Stock buffer",
+          ),
+      )
+      .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+    const bufferGap = Math.max(0, SPECIAL_MEMBER_BUFFER_TARGET - existingBuffer - pendingBuffer);
+    const bufferApplied = Math.min(remaining, bufferGap);
+    if (bufferApplied > 0) {
+      queueSavingsDeposit(bufferApplied, `${label} buffer:`, {
+        note: `${label} buffer via Paybill ${norm}`,
+        allocationType: `${kind}_buffer`,
+        primaryNote: `${label} buffer via Paybill ${norm}`,
+        trackMandatoryThreshold: false,
+        roundOff: false,
+      });
+      notes.push(`Filled ${label.toLowerCase()} buffer by ${bufferApplied}/=.`);
+      remaining = roundMoney(remaining - bufferApplied);
+    }
+
+    if (remaining > 0) {
+      allocatePostComplianceSplit(remaining, `${label.toLowerCase()} loan and buffer are complete`);
+      remaining = 0;
+    }
+  }
+
+  function allocateServiceMemberPayment() {
+    if (remaining <= 0) return;
+    const amount = roundMoney(remaining);
+    setPrimaryIfMissing("fee_payment", amount, `Service payment via Paybill ${norm}`);
+    queueTransaction(
+      {
+        date: paymentDate,
+        created_at: paymentCreatedAt ?? null,
+        type: "fee_payment",
+        amount,
+        member_id: memberId,
+        by_staff: MPESA_SYSTEM_STAFF_ID,
+        ref: args.mpesaRef,
+        account: norm,
+        payer_name: args.payerName,
+        note: `Service payment (auto) via Paybill ${norm}`,
+      },
+      "service_payment",
+    );
+    notes.push(
+      `Routed ${amount}/= to the member service account for admin-applied service fees and interest.`,
+    );
+    remaining = 0;
   }
 
   async function allocateMemberPaymentAfterFeesAndPenalties() {
     if (remaining <= 0) return;
 
-    if (!activeLoan) {
-      allocateSavingsWaterfall(remaining, "Non-loan flow:");
+    if (memberCategory === "service") {
+      allocateServiceMemberPayment();
+      return;
+    }
+
+    if (memberCategory === "locomotive" || memberCategory === "stock") {
+      await allocateSpecialMemberPayment(memberCategory);
+      return;
+    }
+
+    if (!activeLoan || memberCategory === "both") {
+      allocateComplianceBasket(remaining, "Non-loan flow:");
       remaining = 0;
       return;
     }
 
     const approvedAmount = Number(activeLoan.approved_amount ?? activeLoan.principal ?? 0);
-    const dailySavingsPortion = Math.min(remaining, approvedAmount <= 5000 ? 50 : 100);
-    if (dailySavingsPortion > 0) {
-      allocateSavingsWaterfall(dailySavingsPortion, "Loan savings leg:");
-      remaining -= dailySavingsPortion;
+    remaining = allocatePremiumUpfrontRequirement(remaining);
+
+    const complianceContribution = Math.min(remaining, approvedAmount <= 5000 ? 50 : 100);
+    if (complianceContribution > 0) {
+      allocateComplianceBasket(complianceContribution, "Loan compliance contribution:");
+      remaining = roundMoney(remaining - complianceContribution);
     }
 
     if (remaining > 0) {
       const overflow = await applyLoanRepayment(remaining);
       remaining = 0;
       if (overflow > 0) {
-        allocateSavingsWaterfall(overflow, "Post-loan remainder:");
+        allocateComplianceBasket(overflow, "Post-loan remainder:");
       }
     }
   }
 
-  for (const step of preprocessingSteps) {
-    if (remaining <= 0) break;
+  if (
+    targetedDocket &&
+    targetedDocket !== "penalty_payment" &&
+    !hasDefaultedLoan &&
+    (outstandingPenalties ?? []).length === 0
+  ) {
+    await adjustMemberDocketBalance({
+      runtimeDb: supabaseAdmin,
+      member: matchedMember,
+      docket: targetedDocket,
+      delta: amount,
+      protected: true,
+    });
 
-    if (step === "membership_fee" || step === "card_fee" || step === "sticker_fee") {
-      const fee = feeQueue[step];
-      if (!fee || !fee.required || fee.amount <= 0) continue;
-      if (member[fee.key] || memberPatch[fee.key]) continue;
-      if (remaining < fee.amount) continue;
-      remaining -= fee.amount;
-      memberPatch[fee.key] = true;
-      setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
-      queueTransaction(
-        {
-          date: paymentDate,
-          created_at: paymentCreatedAt ?? null,
-          type: "fee_payment",
-          amount: fee.amount,
-          member_id: memberId,
-          by_staff: MPESA_SYSTEM_STAFF_ID,
-          ref: args.mpesaRef,
-          account: norm,
-          payer_name: args.payerName,
-          note: `${fee.label} (auto)`,
-        },
-        "fee_payment",
-      );
-      notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
-      continue;
-    }
-
-    if (step === "penalties") {
-      for (const penalty of outstandingPenalties ?? []) {
-        const amount = Number(penalty.amount ?? 0);
-        if (remaining < amount) continue;
-        remaining -= amount;
-        penaltiesCleared.push({ id: penalty.id, amount });
-        notes.push(`Cleared penalty ${penalty.id} (${penalty.reason}) - ${amount}/=.`);
-      }
-      continue;
-    }
+    const targetedTxType =
+      targetedDocket === "shares" || targetedDocket === "share_reserve"
+        ? "share_purchase"
+        : targetedDocket === "investment"
+          ? "investor_contribution"
+          : targetedDocket === "purpose_pool"
+            ? "fee_payment"
+            : "deposit";
+    primary = {
+      type: targetedTxType,
+      amount,
+      note: `Protected ${targetedDocket.replace(/_/g, " ")} deposit via Paybill ${norm}`,
+    };
+    primaryTransactionId = await insertTransactionRow({
+      date: paymentDate,
+      created_at: paymentCreatedAt ?? null,
+      type: targetedTxType,
+      amount,
+      member_id: memberId,
+      by_staff: MPESA_SYSTEM_STAFF_ID,
+      ref: args.mpesaRef,
+      account: norm,
+      payer_name: args.payerName,
+      note: primary.note,
+    });
+    await insertMpesaReceiptAllocationRow({
+      eventId: args.eventId,
+      mpesaRef: args.mpesaRef,
+      memberId,
+      transactionId: primaryTransactionId,
+      allocationType: targetedDocket,
+      amount,
+      note: primary.note,
+      createdAt: paymentCreatedAt ?? null,
+    });
+    const { error: movementError } = await supabaseAdmin.from("member_docket_movements").insert({
+      id: makeId("MDM"),
+      member_id: memberId,
+      to_docket: targetedDocket,
+      amount,
+      reason: `Protected M-Pesa targeted deposit (${accountContext.raw})`,
+      by_staff: MPESA_SYSTEM_STAFF_ID,
+      protected: true,
+    });
+    if (movementError) throw new Error(movementError.message);
+    notes.push(
+      `Protected ${amount}/= in ${targetedDocket.replace(/_/g, " ")}; redistribution and carryover resets will not move it.`,
+    );
+    await markMpesaEventProcessed(args.eventId, primaryTransactionId);
+    return {
+      matched: true,
+      memberId,
+      account: norm,
+      primary,
+      transactionId: primaryTransactionId,
+      toRoundOff: 0,
+      penaltiesCleared: [],
+      notes,
+    };
   }
 
-  await allocateMemberPaymentAfterFeesAndPenalties();
+  if (hasDefaultedLoan && activeLoan) {
+    const overflow = await applyLoanRepayment(remaining);
+    remaining = 0;
+    if (overflow > 0) {
+      allocateComplianceBasket(overflow, "Post-defaulted loan remainder:");
+    }
+  } else {
+    for (const step of preprocessingSteps) {
+      if (remaining <= 0) break;
+
+      if (step === "membership_fee" || step === "card_fee" || step === "sticker_fee") {
+        const fee = feeQueue[step];
+        if (!fee || !fee.required || fee.amount <= 0) continue;
+        if (member[fee.key] || memberPatch[fee.key]) continue;
+        if (remaining < fee.amount) continue;
+        remaining -= fee.amount;
+        memberPatch[fee.key] = true;
+        setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
+        queueTransaction(
+          {
+            date: paymentDate,
+            created_at: paymentCreatedAt ?? null,
+            type: "fee_payment",
+            amount: fee.amount,
+            member_id: memberId,
+            by_staff: MPESA_SYSTEM_STAFF_ID,
+            ref: args.mpesaRef,
+            account: norm,
+            payer_name: args.payerName,
+            note: `${fee.label} (auto)`,
+          },
+          "fee_payment",
+        );
+        notes.push(`Paid ${fee.label} - ${fee.amount}/=.`);
+        continue;
+      }
+
+      if (step === "penalties") {
+        for (const penalty of outstandingPenalties ?? []) {
+          const amount = Number(penalty.amount ?? 0);
+          if (remaining < amount) continue;
+          remaining -= amount;
+          penaltiesCleared.push({ id: penalty.id, amount });
+          setPrimaryIfMissing(
+            "fee_payment",
+            amount,
+            `Penalty payment ${penalty.id} via Paybill ${norm}`,
+          );
+          queueTransaction(
+            {
+              date: paymentDate,
+              created_at: paymentCreatedAt ?? null,
+              type: "fee_payment",
+              amount,
+              member_id: memberId,
+              loan_id: penalty.loan_id ?? null,
+              by_staff: MPESA_SYSTEM_STAFF_ID,
+              ref: args.mpesaRef,
+              account: norm,
+              payer_name: args.payerName,
+              note: `Penalty payment ${penalty.id} (${penalty.reason})`,
+            },
+            "penalty_payment",
+          );
+          notes.push(`Cleared penalty ${penalty.id} (${penalty.reason}) - ${amount}/=.`);
+        }
+        continue;
+      }
+    }
+
+    await allocateMemberPaymentAfterFeesAndPenalties();
+  }
 
   if (remaining > 0) {
-    allocateSavingsWaterfall(remaining, "Safety fallback:");
+    allocateComplianceBasket(remaining, "Safety fallback:");
     notes.push(
-      "Remaining balance was routed through the savings/shares/purpose-pool flow because the configured preprocessing steps ended before the full amount was allocated.",
+      "Remaining balance was routed through the compliance basket and post-compliance split because the configured preprocessing steps ended before the full amount was allocated.",
     );
     remaining = 0;
   }
@@ -1978,7 +2437,7 @@ async function finalizeSuccessfulWithdrawalRequest(args: {
 
   const { data: member, error: memberError } = await supabaseAdmin
     .from("members")
-    .select("savings_balance")
+    .select("id, savings_balance, shares, share_reserve_balance")
     .eq("id", memberId)
     .maybeSingle();
   if (memberError) throw new Error(memberError.message);
@@ -2008,13 +2467,22 @@ async function finalizeSuccessfulWithdrawalRequest(args: {
     note,
   });
 
-  const { error: balanceError } = await supabaseAdmin
-    .from("members")
-    .update({
-      savings_balance: toNumber(member.savings_balance) - amount,
-    })
-    .eq("id", memberId);
-  if (balanceError) throw new Error(balanceError.message);
+  await adjustMemberDocketBalance({
+    runtimeDb: supabaseAdmin,
+    member,
+    docket: "withdrawable_savings",
+    delta: -amount,
+  });
+  const { error: movementError } = await supabaseAdmin.from("member_docket_movements").insert({
+    id: makeId("MDM"),
+    member_id: memberId,
+    from_docket: "withdrawable_savings",
+    amount,
+    reason: "Client withdrawable savings payout completed",
+    by_staff: requestedBy,
+    protected: true,
+  });
+  if (movementError) throw new Error(movementError.message);
 
   await markMpesaEventProcessed(args.requestEvent.id, transactionId);
   return transactionId;
@@ -2372,6 +2840,7 @@ function mapMemberRow(row: any) {
     joinedAt: row.joined_at,
     status: row.status,
     shares: row.shares,
+    shareReserveBalance: toNumber(row.share_reserve_balance),
     savingsBalance: toNumber(row.savings_balance),
     fees: {
       membership: row.fee_membership,
@@ -2449,6 +2918,13 @@ function mapLoanRow(row: any) {
         ? row.disbursement_status
         : undefined,
     purpose: row.purpose ?? undefined,
+    loanKind:
+      row.loan_kind === "fuel" || row.loan_kind === "stock" || row.loan_kind === "service"
+        ? row.loan_kind
+        : "financial",
+    supplierPayload: asJsonObject(row.supplier_payload),
+    supplierId: row.supplier_id ?? undefined,
+    supplierRequestStatus: row.supplier_request_status ?? undefined,
     reviewedBy: row.reviewed_by ?? undefined,
     reviewNote: row.review_note ?? undefined,
   };
@@ -3881,10 +4357,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
           : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
-      category:
-        data?.category === "investor" || data?.category === "both" || data?.category === "member"
-          ? data.category
-          : "member",
+      category: resolveMemberCategory(data?.category),
       investorContribution: Number(data?.investorContribution ?? 0),
       investorNotes: data?.investorNotes?.trim() || undefined,
     }),
@@ -4086,10 +4559,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
           : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
-      category:
-        data?.category === "investor" || data?.category === "both" || data?.category === "member"
-          ? data.category
-          : "member",
+      category: resolveMemberCategory(data?.category),
     }),
   )
   .handler(async ({ data }) => {
@@ -4831,6 +5301,8 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       status?: "pending" | "active" | "closed" | "defaulted" | "rejected";
       officerId?: string;
       purpose?: string;
+      loanKind?: "financial" | "fuel" | "stock" | "service";
+      supplierPayload?: Record<string, unknown>;
     }) => ({
       memberId: String(data?.memberId ?? "").trim(),
       principal: Number(data?.principal ?? 0),
@@ -4863,6 +5335,11 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       status: data?.status ?? "pending",
       officerId: data?.officerId?.trim() || undefined,
       purpose: data?.purpose?.trim() || undefined,
+      loanKind:
+        data?.loanKind === "fuel" || data?.loanKind === "stock" || data?.loanKind === "service"
+          ? data.loanKind
+          : "financial",
+      supplierPayload: asJsonObject(data?.supplierPayload),
     }),
   )
   .handler(async ({ data }) => {
@@ -4910,6 +5387,9 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       officer_id: officerId,
       paid: 0,
       purpose: data.purpose ?? null,
+      loan_kind: data.loanKind,
+      supplier_payload: data.supplierPayload,
+      supplier_request_status: data.loanKind === "financial" ? null : "draft",
     });
     if (error) throw new Error(error.message);
 
@@ -4943,6 +5423,8 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         termDays: data.termDays ?? null,
         termMonths: data.termMonths,
         purpose: clipAuditText(data.purpose, 160),
+        loanKind: data.loanKind,
+        supplierPayload: data.supplierPayload,
       },
     });
     return { id };
@@ -5090,6 +5572,9 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     if (loanError) throw new Error(loanError.message);
     if (!loan) throw new Error("Loan not found.");
     if (loan.status !== "pending") throw new Error("Loan has already been reviewed.");
+    if (loan.supplier_request_status === "approved") {
+      throw new Error("This supplier-backed loan is already approved and waiting for fulfillment.");
+    }
 
     if (data.decision === "rejected") {
       const { error } = await supabaseAdmin
@@ -5127,6 +5612,44 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
       settings: policySettings,
     });
+    const loanKind = String(loan.loan_kind ?? "financial");
+    if (loanKind !== "financial") {
+      const { error } = await supabaseAdmin
+        .from("loans")
+        .update({
+          approved_amount: approvedAmount,
+          financed_principal_amount: pricing.financedPrincipal,
+          net_disbursed_amount: 0,
+          processing_fee_amount: pricing.processing,
+          insurance_fee_amount: pricing.insurance,
+          transaction_fee_amount: pricing.transactionFee,
+          processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
+          insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
+          supplier_request_status: "approved",
+          disbursement_status: "not_requested",
+          reviewed_by: actor.id,
+          review_note: data.note ?? null,
+        })
+        .eq("id", data.loanId);
+      if (error) throw new Error(error.message);
+
+      await auditAction({
+        actor,
+        action: "loan.supplier_approved",
+        targetType: "loan",
+        targetId: data.loanId,
+        summary: `${actor.name} approved ${loanKind} loan ${data.loanId} for supplier fulfillment`,
+        details: {
+          memberId: loan.member_id,
+          approvedAmount,
+          financedPrincipalAmount: pricing.financedPrincipal,
+          loanKind,
+          note: clipAuditText(data.note, 160),
+        },
+      });
+      return { ok: true, supplierPending: true };
+    }
+
     const cashSummary = await computeSystemCashSummary(supabaseAdmin);
     if (cashSummary.available < approvedAmount) {
       throw new Error(
@@ -5215,16 +5738,20 @@ export const requestWithdrawalPayoutRecord = createServerFn({ method: "POST" })
     const supabaseAdmin = await requireSupabaseAdmin();
     const { data: member, error: memberError } = await supabaseAdmin
       .from("members")
-      .select("id, name, phone, savings_balance")
+      .select("id, name, phone, savings_balance, shares, share_reserve_balance")
       .eq("id", data.memberId)
       .maybeSingle();
     if (memberError) throw new Error(memberError.message);
     if (!member) throw new Error("The selected member could not be found.");
 
-    const currentBalance = toNumber(member.savings_balance);
+    const currentBalance = await getMemberDocketBalance(
+      supabaseAdmin,
+      member,
+      "withdrawable_savings",
+    );
     if (!data.allowOverdraw && currentBalance < data.amount) {
       throw new Error(
-        `Withdrawal exceeds the member's savings balance of ${currentBalance}/=. Confirm overdraft to continue.`,
+        `Withdrawal exceeds the member's withdrawable savings balance of ${currentBalance}/=. Confirm overdraft to continue.`,
       );
     }
 
@@ -5251,6 +5778,7 @@ export const requestWithdrawalPayoutRecord = createServerFn({ method: "POST" })
           requestedByName: actor.name,
           allowOverdraw: data.allowOverdraw,
           remarks: data.remarks ?? null,
+          docket: "withdrawable_savings",
           balanceAtRequest: currentBalance,
           originatorConversationId: payout.originatorConversationId ?? null,
           conversationId: payout.conversationId ?? null,
@@ -5276,6 +5804,7 @@ export const requestWithdrawalPayoutRecord = createServerFn({ method: "POST" })
         originatorConversationId: payout.originatorConversationId ?? null,
         allowOverdraw: data.allowOverdraw,
         remarks: data.remarks ?? null,
+        docket: "withdrawable_savings",
         balanceAtRequest: currentBalance,
       },
     });
@@ -5362,6 +5891,30 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       investorTarget = await ensureInvestorForMember(member);
       if (!investorTarget) {
         throw new Error("The selected membership number is not registered as an investor.");
+      }
+    }
+
+    if (resolvedMemberId && data.type === "deposit") {
+      const { data: defaultedLoans, error: defaultedError } = await supabaseAdmin
+        .from("loans")
+        .select("id")
+        .eq("member_id", resolvedMemberId)
+        .eq("status", "defaulted")
+        .limit(1);
+      if (defaultedError) throw new Error(defaultedError.message);
+      if ((defaultedLoans ?? []).length > 0) {
+        throw new Error("This member has a defaulted loan. Record the money as a loan repayment.");
+      }
+
+      const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
+        .from("penalties")
+        .select("id")
+        .eq("member_id", resolvedMemberId)
+        .eq("status", "outstanding")
+        .limit(1);
+      if (penaltiesError) throw new Error(penaltiesError.message);
+      if ((outstandingPenalties ?? []).length > 0) {
+        throw new Error("This member has outstanding penalties. Use Pay penalties first.");
       }
     }
 
@@ -6348,6 +6901,809 @@ export const deletePerformanceTargetRecord = createServerFn({ method: "POST" })
       },
     });
     return { ok: true };
+  });
+
+type MemberDocket =
+  | "withdrawable_savings"
+  | "mandatory_savings"
+  | "loan_savings"
+  | "shares"
+  | "share_reserve"
+  | "purpose_pool"
+  | "investment"
+  | "penalty_payment";
+
+type SupplierKind = "fuel" | "stock" | "service";
+
+const MEMBER_DOCKETS: MemberDocket[] = [
+  "withdrawable_savings",
+  "mandatory_savings",
+  "loan_savings",
+  "shares",
+  "share_reserve",
+  "purpose_pool",
+  "investment",
+  "penalty_payment",
+];
+
+const DOCKET_ACCOUNT_ALIASES: Record<string, MemberDocket> = {
+  WITHDRAWABLE: "withdrawable_savings",
+  WITHDRAWABLES: "withdrawable_savings",
+  WITHDRAW: "withdrawable_savings",
+  WDS: "withdrawable_savings",
+  SAVINGS: "mandatory_savings",
+  MANDATORY: "mandatory_savings",
+  COMPLIANCE: "mandatory_savings",
+  LOANSAVINGS: "loan_savings",
+  LOAN_SAVINGS: "loan_savings",
+  MULTIPLIER: "loan_savings",
+  SHARES: "shares",
+  SHARE: "shares",
+  RESERVE: "share_reserve",
+  SHARERESERVE: "share_reserve",
+  SHARE_RESERVE: "share_reserve",
+  PURPOSE: "purpose_pool",
+  PURPOSEPOOL: "purpose_pool",
+  PURPOSE_POOL: "purpose_pool",
+  INVESTMENT: "investment",
+  INVEST: "investment",
+  PENALTY: "penalty_payment",
+  PENALTIES: "penalty_payment",
+  PAYPENALTY: "penalty_payment",
+  PAY_PENALTIES: "penalty_payment",
+};
+
+function normalizeMemberDocket(value: unknown): MemberDocket {
+  return MEMBER_DOCKETS.includes(value as MemberDocket)
+    ? (value as MemberDocket)
+    : "withdrawable_savings";
+}
+
+function normalizeDocketAccountToken(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function docketFromAccountToken(value: unknown): MemberDocket | undefined {
+  const token = normalizeDocketAccountToken(value);
+  if (!token) return undefined;
+  return DOCKET_ACCOUNT_ALIASES[token] ?? DOCKET_ACCOUNT_ALIASES[token.replace(/_/g, "")];
+}
+
+function parseMpesaAccountDocket(rawAccount: string) {
+  const raw = String(rawAccount ?? "").trim();
+  const normalized = raw.toUpperCase();
+  const parts = normalized.split(/[\s:#|/\\-]+/).filter(Boolean);
+  const docket = parts
+    .slice(1)
+    .map((part) => docketFromAccountToken(part))
+    .find(Boolean);
+
+  return {
+    raw,
+    account: parts[0] ?? normalized,
+    docket,
+  };
+}
+
+function normalizeSupplierKind(value: unknown): SupplierKind {
+  return value === "fuel" || value === "stock" || value === "service" ? value : "stock";
+}
+
+function systemOutflowKindFor(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  const allowed = new Set([
+    "client_withdrawal",
+    "supplier_payment",
+    "investor_withdrawal",
+    "staff_payment",
+    "loan_disbursement",
+    "petty_cash",
+    "docket_transfer",
+    "other",
+  ]);
+  return allowed.has(normalized) ? normalized : "other";
+}
+
+async function getMemberDocketBalance(
+  runtimeDb: any,
+  member: Record<string, unknown>,
+  docket: MemberDocket,
+) {
+  if (docket === "mandatory_savings") return toNumber(member.savings_balance);
+  if (docket === "shares") return toNumber(member.shares) * SHARE_PRICE;
+  if (docket === "share_reserve") return toNumber(member.share_reserve_balance);
+
+  const { data, error } = await runtimeDb
+    .from("member_docket_balances")
+    .select("amount")
+    .eq("member_id", member.id)
+    .eq("docket", docket)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return toNumber(data?.amount);
+}
+
+async function memberMeetsComplianceThreshold(runtimeDb: any, member: Record<string, unknown>) {
+  const policySettings = await loadRuntimePolicySettings(runtimeDb);
+  const savingsThreshold =
+    policySettings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD;
+  const sharesThreshold =
+    policySettings.percentages.mandatorySharesThreshold || MANDATORY_SHARES_THRESHOLD;
+  const savings = toNumber(member.savings_balance);
+  const sharesValue =
+    toNumber(member.shares) * SHARE_PRICE + toNumber(member.share_reserve_balance);
+
+  return {
+    ok: savings >= savingsThreshold && sharesValue >= sharesThreshold,
+    savings,
+    sharesValue,
+    savingsThreshold,
+    sharesThreshold,
+  };
+}
+
+async function adjustMemberDocketBalance(args: {
+  runtimeDb: any;
+  member: Record<string, unknown>;
+  docket: MemberDocket;
+  delta: number;
+  protected?: boolean;
+}) {
+  const { runtimeDb, member, docket } = args;
+  const delta = roundMoney(args.delta);
+  if (delta === 0) return;
+
+  if (docket === "loan_savings" && delta > 0) {
+    const compliance = await memberMeetsComplianceThreshold(runtimeDb, member);
+    if (!compliance.ok) {
+      throw new Error(
+        `Loan savings opens after compliance is met: savings ${compliance.savings}/${compliance.savingsThreshold}, shares ${compliance.sharesValue}/${compliance.sharesThreshold}.`,
+      );
+    }
+  }
+
+  const current = await getMemberDocketBalance(runtimeDb, member, docket);
+  const next = roundMoney(current + delta);
+  if (next < 0) {
+    throw new Error(`Insufficient ${docket.replace(/_/g, " ")} balance.`);
+  }
+
+  if (docket === "mandatory_savings") {
+    const { error } = await runtimeDb
+      .from("members")
+      .update({ savings_balance: next })
+      .eq("id", member.id);
+    if (error) throw new Error(error.message);
+    member.savings_balance = next;
+    return;
+  }
+
+  if (docket === "shares") {
+    if (Math.abs(delta) % SHARE_PRICE !== 0) {
+      throw new Error(`Share transfers must be in increments of ${SHARE_PRICE}/=.`);
+    }
+    const nextUnits = Math.floor(next / SHARE_PRICE);
+    const { error } = await runtimeDb
+      .from("members")
+      .update({ shares: nextUnits })
+      .eq("id", member.id);
+    if (error) throw new Error(error.message);
+    member.shares = nextUnits;
+    return;
+  }
+
+  if (docket === "share_reserve") {
+    const { error } = await runtimeDb
+      .from("members")
+      .update({ share_reserve_balance: next })
+      .eq("id", member.id);
+    if (error) throw new Error(error.message);
+    member.share_reserve_balance = next;
+    return;
+  }
+
+  const balancePayload: Record<string, unknown> = {
+    member_id: member.id,
+    docket,
+    amount: next,
+    updated_at: new Date().toISOString(),
+  };
+  if (args.protected === true) balancePayload.protected = true;
+
+  const { error } = await runtimeDb.from("member_docket_balances").upsert(balancePayload);
+  if (error) throw new Error(error.message);
+}
+
+async function loadMemberForDocket(runtimeDb: any, memberId: string) {
+  const { data: member, error } = await runtimeDb
+    .from("members")
+    .select("id, name, phone, savings_balance, shares, share_reserve_balance")
+    .eq("id", memberId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!member) throw new Error("Member was not found.");
+  return member as Record<string, unknown>;
+}
+
+async function settlePenaltiesFromDocketDeposit(args: {
+  runtimeDb: any;
+  member: Record<string, unknown>;
+  amount: number;
+  actor: AuditActor;
+  reason?: string;
+}) {
+  const { data: penalties, error } = await args.runtimeDb
+    .from("penalties")
+    .select("*")
+    .eq("member_id", args.member.id)
+    .eq("status", "outstanding")
+    .order("date", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  let remaining = roundMoney(args.amount);
+  for (const penalty of penalties ?? []) {
+    const penaltyAmount = toNumber(penalty.amount);
+    if (remaining < penaltyAmount) break;
+    remaining = roundMoney(remaining - penaltyAmount);
+    const { error: updateError } = await args.runtimeDb
+      .from("penalties")
+      .update({ status: "paid", paid_from: "direct" })
+      .eq("id", penalty.id);
+    if (updateError) throw new Error(updateError.message);
+  }
+
+  const paidAmount = roundMoney(args.amount - remaining);
+  const txId =
+    paidAmount > 0
+      ? await insertTransactionRow({
+          type: "fee_payment",
+          amount: paidAmount,
+          member_id: String(args.member.id),
+          by_staff: args.actor.id,
+          account: formatMembershipNumber(String(args.member.id)),
+          note: args.reason ?? "Penalty payment via protected docket deposit",
+        })
+      : undefined;
+
+  let dailyRepaymentTransactionId: string | undefined;
+  if (remaining > 0 && paidAmount > 0) {
+    const { data: loanRows, error: loanError } = await args.runtimeDb
+      .from("loans")
+      .select("*")
+      .eq("member_id", args.member.id)
+      .in("status", ["defaulted", "active"])
+      .order("start_date", { ascending: true })
+      .limit(10);
+    if (loanError) throw new Error(loanError.message);
+
+    const activeLoan =
+      (loanRows ?? []).find((loan: any) => loan.status === "defaulted") ??
+      (loanRows ?? []).find((loan: any) => loan.status === "active");
+    if (activeLoan) {
+      const dailyDue = roundMoney(loanDailyRepaymentObligation(activeLoan));
+      const repaymentAmount = Math.min(remaining, dailyDue);
+      if (repaymentAmount > 0) {
+        dailyRepaymentTransactionId = await insertTransactionRow({
+          type: "loan_repayment",
+          amount: repaymentAmount,
+          member_id: String(args.member.id),
+          loan_id: activeLoan.id,
+          by_staff: args.actor.id,
+          account: formatMembershipNumber(String(args.member.id)),
+          note: "Daily repayment included with penalty payment",
+        });
+        const summary = loanBalanceSummary(activeLoan);
+        const nextPaid = toNumber(activeLoan.paid) + repaymentAmount;
+        const nextBalance = Math.max(0, summary.total - nextPaid);
+        const { error: updateLoanError } = await args.runtimeDb
+          .from("loans")
+          .update({
+            paid: nextPaid,
+            status: nextBalance <= 0 ? "closed" : activeLoan.status,
+          })
+          .eq("id", activeLoan.id);
+        if (updateLoanError) throw new Error(updateLoanError.message);
+        remaining = roundMoney(remaining - repaymentAmount);
+      }
+    }
+  }
+
+  if (remaining > 0) {
+    await adjustMemberDocketBalance({
+      runtimeDb: args.runtimeDb,
+      member: args.member,
+      docket: "penalty_payment",
+      delta: remaining,
+      protected: true,
+    });
+  }
+
+  return { transactionId: txId, dailyRepaymentTransactionId, remaining };
+}
+
+export const listWithdrawalOperationsRecord = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireStaffActor();
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const [
+      members,
+      investors,
+      staff,
+      suppliers,
+      supplierRequests,
+      docketBalances,
+      docketMovements,
+      outflows,
+      transactions,
+      loans,
+      penalties,
+    ] = await Promise.all([
+      fetchAllRows(() =>
+        runtimeDb
+          .from("members")
+          .select(
+            "id, name, phone, member_category, savings_balance, shares, share_reserve_balance, status",
+          )
+          .order("id"),
+      ),
+      fetchAllRows(() =>
+        runtimeDb.from("investors").select("id, name, phone, contributed, member_id").order("name"),
+      ),
+      fetchAllRows(() => runtimeDb.from("staff").select("id, name, phone, role").order("name")),
+      fetchAllRows(() =>
+        runtimeDb.from("suppliers").select("*").order("created_at", { ascending: false }),
+      ),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("supplier_fulfillment_requests")
+          .select("*")
+          .order("created_at", { ascending: false }),
+      ),
+      fetchAllRows(() => runtimeDb.from("member_docket_balances").select("*")),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("member_docket_movements")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(100),
+      ),
+      fetchAllRows(() =>
+        runtimeDb.from("system_outflows").select("*").order("created_at", { ascending: false }),
+      ),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("transactions")
+          .select("*")
+          .in("type", ["withdrawal", "loan_disbursement", "petty_cash", "staff_payroll"])
+          .order("created_at", { ascending: false })
+          .limit(100),
+      ),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("loans")
+          .select(
+            "id, member_id, principal, approved_amount, financed_principal_amount, rate, term_months, term_days, paid, status, purpose, loan_kind, supplier_id, supplier_request_status, supplier_payload",
+          )
+          .order("created_at", { ascending: false }),
+      ),
+      fetchAllRows(() =>
+        runtimeDb.from("penalties").select("id, member_id, loan_id, amount, reason, status"),
+      ),
+    ]);
+
+    const cashSummary = await computeSystemCashSummary(runtimeDb);
+    return {
+      members,
+      investors,
+      staff,
+      suppliers,
+      supplierRequests,
+      docketBalances,
+      docketMovements,
+      outflows,
+      transactions,
+      loans,
+      penalties,
+      cashSummary,
+    };
+  },
+);
+
+export const recordProtectedDocketDepositRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { memberId: string; docket: MemberDocket; amount: number; reason?: string }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      docket: normalizeMemberDocket(data?.docket),
+      amount: Number(data?.amount ?? 0),
+      reason: data?.reason?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.memberId) throw new Error("Member is required.");
+    if (data.amount <= 0) throw new Error("Amount must be above zero.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const member = await loadMemberForDocket(runtimeDb, data.memberId);
+    const { data: outstandingPenalties, error: penaltyError } = await runtimeDb
+      .from("penalties")
+      .select("id, amount")
+      .eq("member_id", data.memberId)
+      .eq("status", "outstanding");
+    if (penaltyError) throw new Error(penaltyError.message);
+    if ((outstandingPenalties ?? []).length > 0 && data.docket !== "penalty_payment") {
+      throw new Error(
+        "This member has outstanding penalties. Use Pay penalties before depositing to another docket.",
+      );
+    }
+
+    let penaltyResult: { transactionId?: string; remaining?: number } | undefined;
+    if (data.docket === "penalty_payment") {
+      penaltyResult = await settlePenaltiesFromDocketDeposit({
+        runtimeDb,
+        member,
+        amount: data.amount,
+        actor,
+        reason: data.reason,
+      });
+    } else {
+      await adjustMemberDocketBalance({
+        runtimeDb,
+        member,
+        docket: data.docket,
+        delta: data.amount,
+        protected: true,
+      });
+    }
+
+    const movementId = makeId("MDM");
+    const { error: movementError } = await runtimeDb.from("member_docket_movements").insert({
+      id: movementId,
+      member_id: data.memberId,
+      to_docket: data.docket,
+      amount: data.amount,
+      reason: data.reason ?? "Protected targeted deposit",
+      by_staff: actor.id,
+      protected: true,
+    });
+    if (movementError) throw new Error(movementError.message);
+
+    await auditAction({
+      actor,
+      action: "member_docket.deposit",
+      targetType: "member",
+      targetId: data.memberId,
+      summary: `${actor.name} deposited ${data.amount}/= to ${data.docket}`,
+      details: { docket: data.docket, amount: data.amount, reason: data.reason ?? null },
+    });
+    return { ok: true, movementId, ...penaltyResult };
+  });
+
+export const transferMemberDocketRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      fromDocket: MemberDocket;
+      toDocket: MemberDocket;
+      amount: number;
+      reason?: string;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      fromDocket: normalizeMemberDocket(data?.fromDocket),
+      toDocket: normalizeMemberDocket(data?.toDocket),
+      amount: Number(data?.amount ?? 0),
+      reason: data?.reason?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.memberId) throw new Error("Member is required.");
+    if (data.amount <= 0) throw new Error("Amount must be above zero.");
+    if (data.fromDocket === data.toDocket) throw new Error("Choose two different dockets.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const member = await loadMemberForDocket(runtimeDb, data.memberId);
+    await adjustMemberDocketBalance({
+      runtimeDb,
+      member,
+      docket: data.fromDocket,
+      delta: -data.amount,
+    });
+    await adjustMemberDocketBalance({
+      runtimeDb,
+      member,
+      docket: data.toDocket,
+      delta: data.amount,
+      protected: true,
+    });
+
+    const movementId = makeId("MDM");
+    const { error } = await runtimeDb.from("member_docket_movements").insert({
+      id: movementId,
+      member_id: data.memberId,
+      from_docket: data.fromDocket,
+      to_docket: data.toDocket,
+      amount: data.amount,
+      reason: data.reason ?? "Director docket transfer",
+      by_staff: actor.id,
+      protected: true,
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "member_docket.transferred",
+      targetType: "member",
+      targetId: data.memberId,
+      summary: `${actor.name} moved ${data.amount}/= from ${data.fromDocket} to ${data.toDocket}`,
+      details: data,
+    });
+    return { ok: true, movementId };
+  });
+
+export const createSupplierRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      name: string;
+      kind: SupplierKind;
+      phone?: string;
+      contactPerson?: string;
+      location?: string;
+      notes?: string;
+    }) => ({
+      name: String(data?.name ?? "").trim(),
+      kind: normalizeSupplierKind(data?.kind),
+      phone: data?.phone?.trim() || undefined,
+      contactPerson: data?.contactPerson?.trim() || undefined,
+      location: data?.location?.trim() || undefined,
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.name) throw new Error("Supplier name is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("SUP");
+    const { error } = await runtimeDb.from("suppliers").insert({
+      id,
+      name: data.name,
+      kind: data.kind,
+      phone: data.phone ?? null,
+      contact_person: data.contactPerson ?? null,
+      location: data.location ?? null,
+      notes: data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "supplier.created",
+      targetType: "supplier",
+      targetId: id,
+      summary: `${actor.name} registered supplier ${data.name}`,
+      details: data,
+    });
+    return { id };
+  });
+
+export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      supplierId: string;
+      memberId: string;
+      loanId?: string;
+      kind: SupplierKind;
+      amount: number;
+      detail?: Record<string, unknown>;
+    }) => ({
+      supplierId: String(data?.supplierId ?? "").trim(),
+      memberId: String(data?.memberId ?? "").trim(),
+      loanId: data?.loanId?.trim() || undefined,
+      kind: normalizeSupplierKind(data?.kind),
+      amount: Number(data?.amount ?? 0),
+      detail: data?.detail ?? {},
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.supplierId || !data.memberId) throw new Error("Supplier and member are required.");
+    if (data.amount <= 0) throw new Error("Amount must be above zero.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: supplier, error: supplierError } = await runtimeDb
+      .from("suppliers")
+      .select("id, kind, status")
+      .eq("id", data.supplierId)
+      .maybeSingle();
+    if (supplierError) throw new Error(supplierError.message);
+    if (!supplier) throw new Error("Supplier was not found.");
+    if (supplier.status !== "active") throw new Error("Supplier is not active.");
+    if (supplier.kind !== data.kind) {
+      throw new Error(
+        `This request is ${data.kind}, but the selected supplier is ${supplier.kind}.`,
+      );
+    }
+    const id = makeId("SFR");
+    const { error } = await runtimeDb.from("supplier_fulfillment_requests").insert({
+      id,
+      supplier_id: data.supplierId,
+      loan_id: data.loanId ?? null,
+      member_id: data.memberId,
+      kind: data.kind,
+      amount: data.amount,
+      detail: data.detail,
+      status: "sent",
+      requested_by: actor.id,
+    });
+    if (error) throw new Error(error.message);
+    if (data.loanId) {
+      const { error: loanError } = await runtimeDb
+        .from("loans")
+        .update({
+          loan_kind: data.kind,
+          supplier_id: data.supplierId,
+          supplier_request_status: "sent",
+          supplier_payload: data.detail,
+        })
+        .eq("id", data.loanId);
+      if (loanError) throw new Error(loanError.message);
+    }
+    await auditAction({
+      actor,
+      action: "supplier_request.created",
+      targetType: "supplier_fulfillment_request",
+      targetId: id,
+      summary: `${actor.name} sent ${data.kind} request ${id} to supplier`,
+      details: data,
+    });
+    return { id };
+  });
+
+export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { requestId: string; fulfilledByName?: string }) => ({
+    requestId: String(data?.requestId ?? "").trim(),
+    fulfilledByName: data?.fulfilledByName?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.requestId) throw new Error("Supplier request is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: request, error: requestError } = await runtimeDb
+      .from("supplier_fulfillment_requests")
+      .select("*")
+      .eq("id", data.requestId)
+      .maybeSingle();
+    if (requestError) throw new Error(requestError.message);
+    if (!request) throw new Error("Supplier request was not found.");
+
+    const now = new Date().toISOString();
+    const { error } = await runtimeDb
+      .from("supplier_fulfillment_requests")
+      .update({
+        status: "fulfilled",
+        fulfilled_by_name: data.fulfilledByName ?? actor.name,
+        fulfilled_at: now,
+        updated_at: now,
+      })
+      .eq("id", data.requestId);
+    if (error) throw new Error(error.message);
+
+    if (request.loan_id) {
+      const { error: loanError } = await runtimeDb
+        .from("loans")
+        .update({
+          status: "active",
+          approved_amount: request.amount,
+          net_disbursed_amount: 0,
+          supplier_request_status: "fulfilled",
+          disbursement_status: "paid",
+          disbursement_completed_at: now,
+          start_date: now.slice(0, 10),
+        })
+        .eq("id", request.loan_id);
+      if (loanError) throw new Error(loanError.message);
+    }
+
+    await auditAction({
+      actor,
+      action: "supplier_request.fulfilled",
+      targetType: "supplier_fulfillment_request",
+      targetId: data.requestId,
+      summary: `${actor.name} marked supplier request ${data.requestId} fulfilled`,
+      details: { fulfilledByName: data.fulfilledByName ?? actor.name },
+    });
+    return { ok: true };
+  });
+
+export const recordSystemOutflowRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      kind?: string;
+      amount: number;
+      receiverName: string;
+      receiverPhone?: string;
+      method?: string;
+      memberId?: string;
+      staffId?: string;
+      investorId?: string;
+      supplierId?: string;
+      loanId?: string;
+      note?: string;
+      supplierRequestId?: string;
+    }) => ({
+      kind: systemOutflowKindFor(data?.kind),
+      amount: Number(data?.amount ?? 0),
+      receiverName: String(data?.receiverName ?? "").trim(),
+      receiverPhone: data?.receiverPhone?.trim() || undefined,
+      method: data?.method?.trim() || "cash",
+      memberId: data?.memberId?.trim() || undefined,
+      staffId: data?.staffId?.trim() || undefined,
+      investorId: data?.investorId?.trim() || undefined,
+      supplierId: data?.supplierId?.trim() || undefined,
+      loanId: data?.loanId?.trim() || undefined,
+      note: data?.note?.trim() || undefined,
+      supplierRequestId: data?.supplierRequestId?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (data.amount <= 0) throw new Error("Amount must be above zero.");
+    if (!data.receiverName) throw new Error("Receiver name is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+
+    const txType = data.kind === "supplier_payment" ? "loan_disbursement" : "withdrawal";
+    const transactionId = await insertTransactionRow({
+      type: txType,
+      amount: data.amount,
+      member_id: data.memberId ?? null,
+      loan_id: data.loanId ?? null,
+      by_staff: actor.id,
+      ref: data.supplierRequestId ?? null,
+      note: `${data.kind}: ${data.receiverName}. ${data.note ?? ""}`.trim(),
+    });
+
+    const id = makeId("OUT");
+    const { error } = await runtimeDb.from("system_outflows").insert({
+      id,
+      kind: data.kind,
+      amount: data.amount,
+      receiver_name: data.receiverName,
+      receiver_phone: data.receiverPhone ?? null,
+      method: data.method,
+      member_id: data.memberId ?? null,
+      staff_id: data.staffId ?? null,
+      investor_id: data.investorId ?? null,
+      supplier_id: data.supplierId ?? null,
+      loan_id: data.loanId ?? null,
+      transaction_id: transactionId,
+      note: data.note ?? null,
+      by_staff: actor.id,
+    });
+    if (error) throw new Error(error.message);
+
+    if (data.supplierRequestId) {
+      const { error: requestError } = await runtimeDb
+        .from("supplier_fulfillment_requests")
+        .update({
+          status: "paid",
+          paid_transaction_id: transactionId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", data.supplierRequestId);
+      if (requestError) throw new Error(requestError.message);
+    }
+
+    await auditAction({
+      actor,
+      action: "system_outflow.created",
+      targetType: "system_outflow",
+      targetId: id,
+      summary: `${actor.name} recorded ${data.kind} outflow ${id}`,
+      details: data,
+    });
+    return { id, transactionId };
   });
 
 export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST" })

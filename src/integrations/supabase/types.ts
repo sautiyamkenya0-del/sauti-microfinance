@@ -512,6 +512,7 @@ export type Database = {
           savings_balance: number;
           savings_only: boolean;
           second_name: string | null;
+          share_reserve_balance: number;
           shares: number;
           status: Database["public"]["Enums"]["member_status"];
           third_name: string | null;
@@ -549,6 +550,7 @@ export type Database = {
           savings_balance?: number;
           savings_only?: boolean;
           second_name?: string | null;
+          share_reserve_balance?: number;
           shares?: number;
           status?: Database["public"]["Enums"]["member_status"];
           third_name?: string | null;
@@ -586,6 +588,7 @@ export type Database = {
           savings_balance?: number;
           savings_only?: boolean;
           second_name?: string | null;
+          share_reserve_balance?: number;
           shares?: number;
           status?: Database["public"]["Enums"]["member_status"];
           third_name?: string | null;
@@ -959,7 +962,7 @@ export type Database = {
       field_visit_type: "business" | "home" | "live";
       followup_outcome: "promised" | "paid" | "no-show" | "dispute" | "other";
       loan_status: "pending" | "active" | "closed" | "defaulted" | "rejected";
-      member_category: "member" | "investor" | "both";
+      member_category: "member" | "investor" | "both" | "locomotive" | "stock" | "service";
       member_status: "active" | "dormant";
       payment_mode: "cash" | "mpesa" | "bank";
       penalty_source: "round_off_pool" | "direct" | "mpesa";
@@ -1107,7 +1110,7 @@ export const Constants = {
       field_visit_type: ["business", "home", "live"],
       followup_outcome: ["promised", "paid", "no-show", "dispute", "other"],
       loan_status: ["pending", "active", "closed", "defaulted", "rejected"],
-      member_category: ["member", "investor", "both"],
+      member_category: ["member", "investor", "both", "locomotive", "stock", "service"],
       member_status: ["active", "dormant"],
       payment_mode: ["cash", "mpesa", "bank"],
       penalty_source: ["round_off_pool", "direct", "mpesa"],

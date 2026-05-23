@@ -149,9 +149,11 @@ function Policies() {
               mandatorySharesThreshold={mandatorySharesThreshold}
             />
             <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-              Daily savings attached to active loans follows the same threshold waterfall as a
-              normal non-loan contribution: savings first, shares next, then the purpose pool. The
-              remainder of the same payment reduces the active loan balance.
+              Active-loan receipts first clear mandatory fees and premium upfront where applicable.
+              The selected KSh 50 or KSh 100 compliance contribution fills savings and shares at a
+              60/40 split; once both thresholds are full, excess contributions split 80% to purpose
+              pool and 20% to loan savings / multiplier savings. The remaining amount reduces the
+              active loan balance.
             </div>
           </div>
         </Section>
@@ -159,9 +161,9 @@ function Policies() {
         <Section title="Purpose Pool Distribution">
           <div className="p-5 space-y-4">
             <p className="text-sm text-muted-foreground">
-              After a member is compliant, daily contributions route excess purpose-pool money into
-              these internal funds. Minimum daily contribution is KSh 50 for semi-permanent
-              businesses and KSh 100 for permanent or mobile businesses such as Uber and matatu.
+              After a member is compliant, 80% of excess contribution money routes into these
+              internal funds. The other 20% remains as loan savings / multiplier savings for the
+              member.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

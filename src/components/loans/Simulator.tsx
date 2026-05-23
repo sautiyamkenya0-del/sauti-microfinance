@@ -7,7 +7,7 @@ import {
   isMemberCategory,
   loanPricingPreview,
   normalizeLoanTermDaysForType,
-  upfrontRequirementForAmount,
+  upfrontRequirementForMemberAmount,
   useStore,
   type BusinessPermanence,
   type LoanChargeMode,
@@ -157,7 +157,7 @@ export function Simulator() {
       stickerMode,
     ],
   );
-  const baseUpfront = upfrontRequirementForAmount(amount);
+  const baseUpfront = upfrontRequirementForMemberAmount(amount, selectedMember);
 
   const dueDates = Array.from({ length: pricing.termDays }, (_, index) => {
     const dueDate = new Date(startDate);
@@ -391,9 +391,13 @@ export function Simulator() {
                 sub="Repayment + savings over full term"
               />
               <Tile
-                label="Tiered Upfront"
+                label="Remaining Upfront"
                 value={fmtKES(baseUpfront.total)}
-                sub={baseUpfront.tier?.range ?? "No upfront band"}
+                sub={
+                  selectedMember
+                    ? `${fmtKES(baseUpfront.savingsGap)} savings + ${fmtKES(baseUpfront.sharesGap)} shares`
+                    : (baseUpfront.tier?.range ?? "No upfront band")
+                }
               />
               <Tile
                 label="Pay Upfront Now"
