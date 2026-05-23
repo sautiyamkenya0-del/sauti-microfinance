@@ -54,10 +54,10 @@ const PURPOSE_POOL_DISTRIBUTION = [
     purpose: "Enables members to pay business permits flexibly.",
   },
   {
-    key: "biashara_boost",
-    label: "Biashara Boost",
+    key: "business_support",
+    label: "Business Support",
     pct: 20,
-    purpose: "Business growth and expansion.",
+    purpose: "Support for working-capital gaps and urgent business continuity needs.",
   },
   {
     key: "welfare",
@@ -495,7 +495,7 @@ function ReportsPage() {
                   <td className="px-5 py-3 text-right">{fmtKES(purposePoolRevenue)}</td>
                   <td className="px-5 py-3 text-right">{fmtKES(filteredPurposePoolRevenue)}</td>
                   <td className="px-5 py-3 text-xs text-muted-foreground">
-                    Filter a client to view their Biashara Boost and other pool slices.
+                    Filter a client to view their current purpose-pool allocation slices.
                   </td>
                 </tr>
               </tfoot>

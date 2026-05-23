@@ -132,6 +132,14 @@ export const signInMember = createServerFn({ method: "POST" })
     }
 
     await signInMemberSession(memberRow.id);
+    const { data: supplierRow, error: supplierError } = await supabaseAdmin
+      .from("suppliers")
+      .select("id")
+      .eq("member_id", memberRow.id)
+      .maybeSingle();
+    if (supplierError && supplierError.code !== "42P01") {
+      throw new Error(supplierError.message);
+    }
     await recordAudit({
       actor_id: memberRow.id,
       actor_name: memberRow.name,
@@ -149,6 +157,7 @@ export const signInMember = createServerFn({ method: "POST" })
         id: memberRow.id,
         name: memberRow.name,
       },
+      portal: supplierRow ? "supplier" : "member",
     };
   });
 

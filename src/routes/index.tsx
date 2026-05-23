@@ -96,6 +96,26 @@ function Dashboard() {
           </div>
         </DirectorOnly>
 
+        <Section title="Quick Access">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 p-4">
+            {[
+              { to: "/approvals", label: "Director approvals", hint: "Loans, member requests, supplier follow-through" },
+              { to: "/suppliers", label: "Supplier hub", hint: "Dispatch, inventory, fuel codes, supplier debt" },
+              { to: "/savings", label: "Savings dockets", hint: "Compliance contribution, withdrawable and loan savings" },
+              { to: "/withdrawals", label: "Withdrawals", hint: "Client, supplier, investor and staff outflows" },
+            ].map((entry) => (
+              <Link
+                key={entry.to}
+                to={entry.to}
+                className="rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted/40 transition-colors"
+              >
+                <div className="text-sm font-medium">{entry.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{entry.hint}</div>
+              </Link>
+            ))}
+          </div>
+        </Section>
+
         <DirectorOnly>
           <div className="grid lg:grid-cols-3 gap-6">
             <Section title="Disbursements vs Repayments">

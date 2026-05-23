@@ -13,16 +13,18 @@ import {
   type LoanKind,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 type ReconfirmRow = [label: string, checked: boolean, onChange: (value: boolean) => void];
 
 export function RepeatApplication({
   memberId,
+  initialLoanKind = "financial",
   onSubmitted,
 }: {
   memberId: string;
+  initialLoanKind?: LoanKind;
   onSubmitted?: (loanId: string) => void;
 }) {
   const { members, loans, currentUser, addLoan } = useStore();
@@ -38,7 +40,7 @@ export function RepeatApplication({
         ) / memberLoans.length;
 
   const [loanCategory, setLoanCategory] = useState<"Normal" | "Premium">("Premium");
-  const [loanKind, setLoanKind] = useState<LoanKind>("financial");
+  const [loanKind, setLoanKind] = useState<LoanKind>(initialLoanKind);
   const [loanAmount, setLoanAmount] = useState(10000);
   const [purpose, setPurpose] = useState("Stock/Goods");
   const [vehiclePlate, setVehiclePlate] = useState("");
@@ -62,14 +64,25 @@ export function RepeatApplication({
   const [changesSinceLast, setChangesSinceLast] = useState("");
   const loanType = loanCategory === "Premium" ? "premium" : "standard";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
-  const loanKindOptions: LoanKind[] =
-    member?.category === "locomotive"
-      ? ["financial", "fuel"]
-      : member?.category === "stock"
-        ? ["financial", "stock"]
-        : member?.category === "service"
-          ? ["financial", "service"]
-          : ["financial", "fuel", "stock", "service"];
+  const loanKindOptions = useMemo<LoanKind[]>(
+    () =>
+      member?.category === "locomotive"
+        ? ["financial", "fuel"]
+        : member?.category === "stock"
+          ? ["financial", "stock"]
+          : member?.category === "service"
+            ? ["financial", "service"]
+            : ["financial", "fuel", "stock", "service"],
+    [member?.category],
+  );
+
+  useEffect(() => {
+    if (loanKindOptions.includes(initialLoanKind)) {
+      setLoanKind(initialLoanKind);
+      return;
+    }
+    if (!loanKindOptions.includes(loanKind)) setLoanKind("financial");
+  }, [initialLoanKind, loanKind, loanKindOptions]);
 
   const calc = useMemo(() => {
     const termDays = normalizeLoanTermDaysForType(repaymentDays, loanType);

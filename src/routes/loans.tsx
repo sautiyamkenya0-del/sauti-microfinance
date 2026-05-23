@@ -15,10 +15,25 @@ import { Simulator } from "@/components/loans/Simulator";
 import { SectionTabs } from "@/components/SectionTabs";
 import { type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
-import { isMemberCategory, useStore } from "@/lib/store";
+import { isMemberCategory, useStore, type LoanKind } from "@/lib/store";
 import { toast } from "sonner";
 
 type Tab = "book" | "new" | "appraisal" | "simulator" | "review" | "followups" | "visits";
+
+const LOAN_KIND_OPTIONS: { value: LoanKind; label: string; memberHint: string }[] = [
+  { value: "financial", label: "Financial loan", memberHint: "All member categories" },
+  { value: "fuel", label: "Fuel loan", memberHint: "Locomotive members only" },
+  { value: "stock", label: "Stock loan", memberHint: "Stock members only" },
+  { value: "service", label: "Service loan", memberHint: "Service members only" },
+];
+
+function memberMatchesLoanKind(member: { category?: string }, loanKind: LoanKind) {
+  if (loanKind === "financial") return true;
+  if (loanKind === "fuel") return member.category === "locomotive";
+  if (loanKind === "stock") return member.category === "stock";
+  if (loanKind === "service") return member.category === "service";
+  return true;
+}
 
 export const Route = createFileRoute("/loans")({
   head: () => ({ meta: [{ title: "Loans - Sauti Microfinance" }] }),
@@ -29,6 +44,7 @@ function LoansHub() {
   const { currentUser, memberLoanCount, members } = useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const [tab, setTab] = useState<Tab>("book");
+  const [selectedLoanKind, setSelectedLoanKind] = useState<LoanKind>("financial");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
   const [historyMemberId, setHistoryMemberId] = useState<string | null>(null);
@@ -49,16 +65,29 @@ function LoansHub() {
   const isFirstTime = selectedMemberId ? totalLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
+  const eligibleMemberAccounts = useMemo(
+    () => memberAccounts.filter((member) => memberMatchesLoanKind(member, selectedLoanKind)),
+    [memberAccounts, selectedLoanKind],
+  );
   const filteredMemberAccounts = useMemo(() => {
     const query = memberQuery.trim().toLowerCase();
-    if (!query) return memberAccounts;
-    return memberAccounts.filter(
+    if (!query) return eligibleMemberAccounts;
+    return eligibleMemberAccounts.filter(
       (member) =>
         member.name.toLowerCase().includes(query) ||
         member.id.toLowerCase().includes(query) ||
         member.phone.toLowerCase().includes(query),
     );
-  }, [memberAccounts, memberQuery]);
+  }, [eligibleMemberAccounts, memberQuery]);
+
+  useEffect(() => {
+    if (
+      selectedMemberId &&
+      !eligibleMemberAccounts.some((member) => member.id === selectedMemberId)
+    ) {
+      setSelectedMemberId("");
+    }
+  }, [eligibleMemberAccounts, selectedMemberId]);
 
   const tabs: { key: Tab; label: string; hidden?: boolean }[] = [
     { key: "book", label: "Loan Book" },
@@ -102,7 +131,30 @@ function LoansHub() {
         {tab === "new" && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
-              <div className="grid min-w-[320px] flex-1 gap-3 md:grid-cols-[220px,1fr]">
+              <div className="grid min-w-[320px] flex-1 gap-3 lg:grid-cols-[220px_220px_1fr]">
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Loan Type
+                  </span>
+                  <select
+                    value={selectedLoanKind}
+                    onChange={(event) => {
+                      setSelectedLoanKind(event.target.value as LoanKind);
+                      setSelectedMemberId("");
+                    }}
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  >
+                    {LOAN_KIND_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-[11px] text-muted-foreground">
+                    {LOAN_KIND_OPTIONS.find((option) => option.value === selectedLoanKind)
+                      ?.memberHint ?? ""}
+                  </span>
+                </label>
                 <label className="block">
                   <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     Search Member
@@ -131,6 +183,11 @@ function LoansHub() {
                       </option>
                     ))}
                   </select>
+                  {filteredMemberAccounts.length === 0 ? (
+                    <span className="mt-1 block text-[11px] text-destructive">
+                      No eligible members found for this loan type.
+                    </span>
+                  ) : null}
                 </label>
               </div>
               {selectedMemberId && (
@@ -145,10 +202,15 @@ function LoansHub() {
             {!selectedMemberId || isFirstTime ? (
               <FirstTimeApplication
                 memberId={selectedMemberId || undefined}
+                initialLoanKind={selectedLoanKind}
                 onSubmitted={() => setTab("appraisal")}
               />
             ) : (
-              <RepeatApplication memberId={selectedMemberId} onSubmitted={() => setTab("review")} />
+              <RepeatApplication
+                memberId={selectedMemberId}
+                initialLoanKind={selectedLoanKind}
+                onSubmitted={() => setTab("review")}
+              />
             )}
           </div>
         )}

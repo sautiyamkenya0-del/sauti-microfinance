@@ -30,6 +30,7 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
   members: [
     { to: "/members", label: "Members", icon: Users },
+    { to: "/suppliers", label: "Suppliers", icon: Landmark },
     { to: "/investors", label: "Investors", icon: Building2 },
   ],
   capital: [

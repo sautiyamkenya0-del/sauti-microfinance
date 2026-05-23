@@ -46,6 +46,8 @@ type MemberForm = {
   investorNotes: string;
 };
 
+type RegistryView = "all" | "normal" | "locomotive" | "stock" | "service";
+
 export const Route = createFileRoute("/members")({
   head: () => ({ meta: [{ title: "Members — Sauti Microfinance" }] }),
   component: MembersPage,
@@ -91,6 +93,7 @@ function MembersPage() {
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const isEditMode = Boolean(editingMemberId);
   const [q, setQ] = useState("");
+  const [registryView, setRegistryView] = useState<RegistryView>("all");
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [payDialog, setPayDialog] = useState<{ member: Member; mode: "member" | "officer" } | null>(
     null,
@@ -130,9 +133,13 @@ function MembersPage() {
     [members],
   );
 
-  const filtered = memberRegistry.filter(
-    (m) => m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q),
-  );
+  const filtered = memberRegistry.filter((m) => {
+    const matchesSearch = m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q);
+    if (!matchesSearch) return false;
+    if (registryView === "all") return true;
+    if (registryView === "normal") return m.category === "member" || m.category === "both";
+    return m.category === registryView;
+  });
   const showMemberFields = !isInvestorOnlyCategory(form.category);
   const showInvestorFields = isInvestorCategory(form.category);
 
@@ -140,10 +147,33 @@ function MembersPage() {
     <>
       <AppHeader
         title="Members"
-        subtitle="Member registry — click any row to open the full Member 360 (loans, savings, shares, penalties, transactions)."
+        subtitle="Normal, locomotive, stock, and service members in one clean registry, with full Member 360 on each row."
       />
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <SectionTabs section="members" />
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ["all", "All members"],
+              ["normal", "Normal"],
+              ["locomotive", "Locomotive"],
+              ["stock", "Stock"],
+              ["service", "Service"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setRegistryView(value)}
+              className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                registryView === value
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="flex justify-between items-center gap-3">
           <input
             placeholder="Search by name or phone…"

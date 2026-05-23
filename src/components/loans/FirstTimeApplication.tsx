@@ -29,9 +29,11 @@ const blankCollateral = { item: "", model: "", serial: "", estValue: 0, owner: "
 
 export function FirstTimeApplication({
   memberId,
+  initialLoanKind = "financial",
   onSubmitted,
 }: {
   memberId?: string;
+  initialLoanKind?: LoanKind;
   onSubmitted?: (loanId: string) => void;
 }) {
   const { members, currentUser, addLoan, addMember, feePolicies } = useStore();
@@ -76,7 +78,7 @@ export function FirstTimeApplication({
     kinRelationship: "",
     kinAddress: "",
     loanAmount: 5000,
-    loanKind: "financial" as LoanKind,
+    loanKind: initialLoanKind,
     purpose: "Stock/Goods",
     vehiclePlate: "",
     fuelType: "Petrol",
@@ -113,8 +115,12 @@ export function FirstTimeApplication({
   }, [existing?.category]);
 
   useEffect(() => {
+    if (loanKindOptions.includes(initialLoanKind)) {
+      set("loanKind", initialLoanKind);
+      return;
+    }
     if (!loanKindOptions.includes(f.loanKind)) set("loanKind", "financial");
-  }, [f.loanKind, loanKindOptions]);
+  }, [f.loanKind, initialLoanKind, loanKindOptions]);
 
   useEffect(() => {
     if (existing) {

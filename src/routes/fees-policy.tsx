@@ -205,6 +205,7 @@ function PolicyCenterPage() {
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
   const [isRedistributing, setIsRedistributing] = useState(false);
   const [carryoverResetting, setCarryoverResetting] = useState(false);
+  const [showCarryoverAdvanced, setShowCarryoverAdvanced] = useState(false);
 
   useEffect(() => {
     setPercentagesDraft(policySettings.percentages);
@@ -232,6 +233,7 @@ function PolicyCenterPage() {
   }, [refreshAllCarryoverLoans]);
 
   useEffect(() => {
+    setShowCarryoverAdvanced(false);
     if (!clientId) {
       setCarryoverProfile(blankCarryoverProfile(""));
       setCarryoverLoans([]);
@@ -249,9 +251,15 @@ function PolicyCenterPage() {
           profile: LegacyCarryoverProfile | null;
           loans: LegacyCarryoverLoan[];
         };
-        const profile = hydrateCarryoverProfile(
-          typedResult.profile ?? blankCarryoverProfile(clientId),
-        );
+        const selectedMember = memberAccounts.find((member) => member.id === clientId);
+        const blankProfile = blankCarryoverProfile(clientId);
+        if (selectedMember) {
+          blankProfile.membershipFeePaid = !!selectedMember.fees.membership;
+          blankProfile.cardFeePaid = !!selectedMember.fees.card;
+          blankProfile.stickerFeePaid = !!selectedMember.fees.sticker;
+          blankProfile.firstUpfrontPaid = !!selectedMember.fees.firstUpfrontPaid;
+        }
+        const profile = hydrateCarryoverProfile(typedResult.profile ?? blankProfile);
         setCarryoverProfile(profile);
         setCarryoverLoans(typedResult.loans);
         setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
@@ -270,7 +278,7 @@ function PolicyCenterPage() {
     return () => {
       active = false;
     };
-  }, [clientId, loadCarryover]);
+  }, [clientId, loadCarryover, memberAccounts]);
 
   const selectedClient = memberAccounts.find((member) => member.id === clientId) ?? null;
   const selectedClientLoans = loans.filter((loan) => loan.memberId === clientId);
@@ -1984,76 +1992,95 @@ function PolicyCenterPage() {
                         value={fmtKES(carryoverBreakdown.purposePoolBalance)}
                       />
                     </div>
-                    <div className="rounded-xl border border-border bg-card p-4 md:col-span-2 xl:col-span-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium">
-                            Completed loans in redistribution flow
+                    {showCarryoverAdvanced ? (
+                      <div className="rounded-xl border border-border bg-card p-4 md:col-span-2 xl:col-span-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium">
+                              Completed loans in redistribution flow
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Use this only when bringing old completed loan cycles into the live
+                              ledger.
+                            </div>
                           </div>
+                          <select
+                            value={guidedClosedLoans.length}
+                            onChange={(event) => {
+                              const count = Number(event.target.value);
+                              setGuidedClosedLoans((current) =>
+                                Array.from({ length: count }, (_, index) => {
+                                  const existingLoan = current[index];
+                                  return existingLoan
+                                    ? {
+                                        ...existingLoan,
+                                        memberId: selectedClient.id,
+                                        loanCycleNumber: index + 1,
+                                        status: "closed",
+                                        finished: true,
+                                      }
+                                    : {
+                                        ...blankCarryoverLoan(selectedClient.id, index + 1),
+                                        label: `Completed loan ${index + 1}`,
+                                        status: "closed",
+                                        finished: true,
+                                      };
+                                }),
+                              );
+                            }}
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          >
+                            {Array.from({ length: 11 }, (_, index) => index).map((count) => (
+                              <option key={count} value={count}>
+                                {count} loan{count === 1 ? "" : "s"}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                          {guidedClosedLoans.map((loan, index) => (
+                            <GuidedCompletedLoanCard
+                              key={loan.id || `${selectedClient.id}-guided-${index}`}
+                              index={index}
+                              loan={loan}
+                              summary={
+                                guidedClosedLoanSummaries[index]?.summary ??
+                                summarizeLegacyCarryoverLoan(loan, policySettings)
+                              }
+                              onChange={(nextLoan) =>
+                                setGuidedClosedLoans((current) =>
+                                  current.map((item, itemIndex) =>
+                                    itemIndex === index ? nextLoan : item,
+                                  ),
+                                )
+                              }
+                            />
+                          ))}
+                          {guidedClosedLoans.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                              Set the completed-loan count above to expand the loan tiles.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/20 p-4 md:col-span-2 xl:col-span-4">
+                        <div>
+                          <div className="text-sm font-medium">Advanced carryover loan cycles</div>
                           <div className="text-xs text-muted-foreground">
-                            Choose how many finished loan cycles to account for, then fill each tile
-                            independently.
+                            Hidden by default so normal client records stay focused on balances,
+                            fees, penalties, and live history.
                           </div>
                         </div>
-                        <select
-                          value={guidedClosedLoans.length}
-                          onChange={(event) => {
-                            const count = Number(event.target.value);
-                            setGuidedClosedLoans((current) =>
-                              Array.from({ length: count }, (_, index) => {
-                                const existingLoan = current[index];
-                                return existingLoan
-                                  ? {
-                                      ...existingLoan,
-                                      memberId: selectedClient.id,
-                                      loanCycleNumber: index + 1,
-                                      status: "closed",
-                                      finished: true,
-                                    }
-                                  : {
-                                      ...blankCarryoverLoan(selectedClient.id, index + 1),
-                                      label: `Completed loan ${index + 1}`,
-                                      status: "closed",
-                                      finished: true,
-                                    };
-                              }),
-                            );
-                          }}
-                          className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                        <button
+                          type="button"
+                          onClick={() => setShowCarryoverAdvanced(true)}
+                          className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
                         >
-                          {Array.from({ length: 11 }, (_, index) => index).map((count) => (
-                            <option key={count} value={count}>
-                              {count} loan{count === 1 ? "" : "s"}
-                            </option>
-                          ))}
-                        </select>
+                          Show legacy loan tools
+                        </button>
                       </div>
-                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                        {guidedClosedLoans.map((loan, index) => (
-                          <GuidedCompletedLoanCard
-                            key={loan.id || `${selectedClient.id}-guided-${index}`}
-                            index={index}
-                            loan={loan}
-                            summary={
-                              guidedClosedLoanSummaries[index]?.summary ??
-                              summarizeLegacyCarryoverLoan(loan, policySettings)
-                            }
-                            onChange={(nextLoan) =>
-                              setGuidedClosedLoans((current) =>
-                                current.map((item, itemIndex) =>
-                                  itemIndex === index ? nextLoan : item,
-                                ),
-                              )
-                            }
-                          />
-                        ))}
-                        {guidedClosedLoans.length === 0 && (
-                          <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-                            Set the completed-loan count above to expand the loan tiles.
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    )}
                     <Field label="First loan start date">
                       <input
                         type="date"
@@ -2125,314 +2152,319 @@ function PolicyCenterPage() {
                   </div>
                 </Section>
 
-                <Section
-                  title="Carryover loans"
-                  action={
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => clearCarryoverLoanDraft(selectedClient.id)}
-                        className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
-                      >
-                        Clear
-                      </button>
-                      <button
-                        onClick={() => void saveCarryoverLoanDraft()}
-                        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
-                      >
-                        <Save className="h-3.5 w-3.5" />
-                        Save loan
-                      </button>
-                    </div>
-                  }
-                >
-                  <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
-                    <Field label="Label">
-                      <input
-                        value={carryoverLoanDraft.label}
-                        onChange={(event) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            label: event.target.value,
-                          }))
-                        }
-                        className="input"
-                      />
-                    </Field>
-                    <NumberField
-                      label="Loan cycle #"
-                      value={carryoverLoanDraft.loanCycleNumber}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({
-                          ...current,
-                          loanCycleNumber: Math.max(1, Math.floor(value)),
-                          feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                            current.feeBreakdown,
-                            Math.max(1, Math.floor(value)),
-                          ),
-                        }))
-                      }
-                    />
-                    <NumberField
-                      label="Principal"
-                      value={carryoverLoanDraft.principal}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({ ...current, principal: value }))
-                      }
-                    />
-                    <Field label="Term days">
-                      <select
-                        value={carryoverLoanDraft.termDays}
-                        onChange={(event) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            termDays: Number(event.target.value) as 7 | 14 | 30 | 60 | 90,
-                          }))
-                        }
-                        className="input"
-                      >
-                        {[7, 14, 30, 60, 90].map((days) => (
-                          <option key={days} value={days}>
-                            {days} days
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <NumberField
-                      label="Interest rate override %"
-                      value={carryoverLoanDraft.interestRatePct}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({
-                          ...current,
-                          interestRatePct: value,
-                        }))
-                      }
-                    />
-                    <NumberField
-                      label="Daily savings amount"
-                      value={carryoverLoanDraft.dailySavingsAmount}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({
-                          ...current,
-                          dailySavingsAmount: value,
-                        }))
-                      }
-                    />
-                    <CarryoverLoanFeeFields
-                      loan={carryoverLoanDraft}
-                      summary={carryoverLoanDraftSummary}
-                      onChange={setCarryoverLoanDraft}
-                    />
-                    <Field label="Start date">
-                      <input
-                        type="date"
-                        value={carryoverLoanDraft.startDate}
-                        onChange={(event) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            startDate: event.target.value,
-                          }))
-                        }
-                        className="input"
-                      />
-                    </Field>
-                    <Field label="Due date override">
-                      <input
-                        type="date"
-                        value={carryoverLoanDraft.dueDate ?? ""}
-                        onChange={(event) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            dueDate: event.target.value || undefined,
-                          }))
-                        }
-                        className="input"
-                      />
-                    </Field>
-                    <NumberField
-                      label="Amount already paid"
-                      value={carryoverLoanDraft.paidToDate}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({ ...current, paidToDate: value }))
-                      }
-                    />
-                    <NumberField
-                      label="Penalty waived"
-                      value={carryoverLoanDraft.penaltyWaivedAmount}
-                      onChange={(value) =>
-                        setCarryoverLoanDraft((current) => ({
-                          ...current,
-                          penaltyWaivedAmount: value,
-                        }))
-                      }
-                    />
-                    <Field label="Status">
-                      <select
-                        value={carryoverLoanDraft.status}
-                        onChange={(event) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            status: event.target.value as "active" | "closed" | "defaulted",
-                          }))
-                        }
-                        className="input"
-                      >
-                        <option value="active">Active</option>
-                        <option value="closed">Closed</option>
-                        <option value="defaulted">Defaulted</option>
-                      </select>
-                    </Field>
-                    <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
-                      <label className="flex items-center gap-2 text-sm">
+                {showCarryoverAdvanced && (
+                  <Section
+                    title="Carryover loans"
+                    action={
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => clearCarryoverLoanDraft(selectedClient.id)}
+                          className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          onClick={() => void saveCarryoverLoanDraft()}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                          Save loan
+                        </button>
+                      </div>
+                    }
+                  >
+                    <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                      <Field label="Label">
                         <input
-                          type="checkbox"
-                          checked={carryoverLoanDraft.finished}
+                          value={carryoverLoanDraft.label}
                           onChange={(event) =>
                             setCarryoverLoanDraft((current) => ({
                               ...current,
-                              finished: event.target.checked,
-                              status: event.target.checked ? "closed" : current.status,
-                            }))
-                          }
-                        />
-                        Mark this legacy loan as finished
-                      </label>
-                      <Field label="Closed on">
-                        <input
-                          type="date"
-                          value={carryoverLoanDraft.closedOn ?? ""}
-                          onChange={(event) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              closedOn: event.target.value || undefined,
+                              label: event.target.value,
                             }))
                           }
                           className="input"
                         />
                       </Field>
-                    </div>
-                    <Field label="Notes" className="md:col-span-2 xl:col-span-4">
-                      <textarea
-                        rows={3}
-                        value={carryoverLoanDraft.notes ?? ""}
-                        onChange={(event) =>
+                      <NumberField
+                        label="Loan cycle #"
+                        value={carryoverLoanDraft.loanCycleNumber}
+                        onChange={(value) =>
                           setCarryoverLoanDraft((current) => ({
                             ...current,
-                            notes: event.target.value,
+                            loanCycleNumber: Math.max(1, Math.floor(value)),
+                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                              current.feeBreakdown,
+                              Math.max(1, Math.floor(value)),
+                            ),
                           }))
                         }
-                        className="input"
                       />
-                    </Field>
-                    <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <MetricCard
-                        label="Rate used"
-                        value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
+                      <NumberField
+                        label="Principal"
+                        value={carryoverLoanDraft.principal}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({ ...current, principal: value }))
+                        }
                       />
-                      <MetricCard label="Auto due date" value={carryoverLoanDraftSummary.dueDate} />
-                      <MetricCard
-                        label="Repayment total"
-                        value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
+                      <Field label="Term days">
+                        <select
+                          value={carryoverLoanDraft.termDays}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              termDays: Number(event.target.value) as 7 | 14 | 30 | 60 | 90,
+                            }))
+                          }
+                          className="input"
+                        >
+                          {[7, 14, 30, 60, 90].map((days) => (
+                            <option key={days} value={days}>
+                              {days} days
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <NumberField
+                        label="Interest rate override %"
+                        value={carryoverLoanDraft.interestRatePct}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            interestRatePct: value,
+                          }))
+                        }
                       />
-                      <MetricCard
-                        label="Fees and subscriptions"
-                        value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
+                      <NumberField
+                        label="Daily savings amount"
+                        value={carryoverLoanDraft.dailySavingsAmount}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            dailySavingsAmount: value,
+                          }))
+                        }
                       />
-                      <MetricCard
-                        label="Owed now"
-                        value={fmtKES(carryoverLoanDraftSummary.totalOwedNow)}
+                      <CarryoverLoanFeeFields
+                        loan={carryoverLoanDraft}
+                        summary={carryoverLoanDraftSummary}
+                        onChange={setCarryoverLoanDraft}
                       />
+                      <Field label="Start date">
+                        <input
+                          type="date"
+                          value={carryoverLoanDraft.startDate}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              startDate: event.target.value,
+                            }))
+                          }
+                          className="input"
+                        />
+                      </Field>
+                      <Field label="Due date override">
+                        <input
+                          type="date"
+                          value={carryoverLoanDraft.dueDate ?? ""}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              dueDate: event.target.value || undefined,
+                            }))
+                          }
+                          className="input"
+                        />
+                      </Field>
+                      <NumberField
+                        label="Amount already paid"
+                        value={carryoverLoanDraft.paidToDate}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({ ...current, paidToDate: value }))
+                        }
+                      />
+                      <NumberField
+                        label="Penalty waived"
+                        value={carryoverLoanDraft.penaltyWaivedAmount}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            penaltyWaivedAmount: value,
+                          }))
+                        }
+                      />
+                      <Field label="Status">
+                        <select
+                          value={carryoverLoanDraft.status}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              status: event.target.value as "active" | "closed" | "defaulted",
+                            }))
+                          }
+                          className="input"
+                        >
+                          <option value="active">Active</option>
+                          <option value="closed">Closed</option>
+                          <option value="defaulted">Defaulted</option>
+                        </select>
+                      </Field>
+                      <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={carryoverLoanDraft.finished}
+                            onChange={(event) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                finished: event.target.checked,
+                                status: event.target.checked ? "closed" : current.status,
+                              }))
+                            }
+                          />
+                          Mark this legacy loan as finished
+                        </label>
+                        <Field label="Closed on">
+                          <input
+                            type="date"
+                            value={carryoverLoanDraft.closedOn ?? ""}
+                            onChange={(event) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                closedOn: event.target.value || undefined,
+                              }))
+                            }
+                            className="input"
+                          />
+                        </Field>
+                      </div>
+                      <Field label="Notes" className="md:col-span-2 xl:col-span-4">
+                        <textarea
+                          rows={3}
+                          value={carryoverLoanDraft.notes ?? ""}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              notes: event.target.value,
+                            }))
+                          }
+                          className="input"
+                        />
+                      </Field>
+                      <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <MetricCard
+                          label="Rate used"
+                          value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
+                        />
+                        <MetricCard
+                          label="Auto due date"
+                          value={carryoverLoanDraftSummary.dueDate}
+                        />
+                        <MetricCard
+                          label="Repayment total"
+                          value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
+                        />
+                        <MetricCard
+                          label="Fees and subscriptions"
+                          value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
+                        />
+                        <MetricCard
+                          label="Owed now"
+                          value={fmtKES(carryoverLoanDraftSummary.totalOwedNow)}
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-                    Start with principal, term, daily savings, start date, and amount already paid.
-                    Leave the override rate at 0 to use the current policy rate for that term. The
-                    balance, penalties, due date, and completion status are calculated from the
-                    saved carryover loan record.
-                  </div>
-                  <div className="space-y-4 border-t border-border p-5">
-                    {carryoverLoading && (
-                      <div className="text-sm text-muted-foreground">
-                        Loading carryover loans...
-                      </div>
-                    )}
-                    {!carryoverLoading && carryoverLoanSummaries.length === 0 && (
-                      <div className="text-sm text-muted-foreground">
-                        No legacy loans saved for this client yet.
-                      </div>
-                    )}
-                    {carryoverLoanSummaries.map(({ loan, summary }) => (
-                      <div key={loan.id} className="rounded-xl border border-border p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <div className="font-medium">
-                              {loan.label} · Cycle {loan.loanCycleNumber}
+                    <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+                      Start with principal, term, daily savings, start date, and amount already
+                      paid. Leave the override rate at 0 to use the current policy rate for that
+                      term. The balance, penalties, due date, and completion status are calculated
+                      from the saved carryover loan record.
+                    </div>
+                    <div className="space-y-4 border-t border-border p-5">
+                      {carryoverLoading && (
+                        <div className="text-sm text-muted-foreground">
+                          Loading carryover loans...
+                        </div>
+                      )}
+                      {!carryoverLoading && carryoverLoanSummaries.length === 0 && (
+                        <div className="text-sm text-muted-foreground">
+                          No legacy loans saved for this client yet.
+                        </div>
+                      )}
+                      {carryoverLoanSummaries.map(({ loan, summary }) => (
+                        <div key={loan.id} className="rounded-xl border border-border p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="font-medium">
+                                {loan.label} · Cycle {loan.loanCycleNumber}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {fmtKES(loan.principal)} · {summary.ratePct}% · {summary.termDays}{" "}
+                                days · start {loan.startDate}
+                              </div>
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              {fmtKES(loan.principal)} · {summary.ratePct}% · {summary.termDays}{" "}
-                              days · start {loan.startDate}
+                            <div className="flex gap-2">
+                              <Badge
+                                tone={
+                                  loan.status === "closed"
+                                    ? "success"
+                                    : loan.status === "defaulted"
+                                      ? "destructive"
+                                      : "warning"
+                                }
+                              >
+                                {loan.status}
+                              </Badge>
+                              <button
+                                onClick={() => beginEditCarryoverLoan(loan)}
+                                className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  await deleteCarryoverLoan({ data: { id: loan.id } });
+                                  await refreshCarryoverDetails(selectedClient.id);
+                                  await refreshAllCarryoverLoans();
+                                  toast.success("Carryover loan deleted");
+                                }}
+                                className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                              >
+                                Delete
+                              </button>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Badge
-                              tone={
-                                loan.status === "closed"
-                                  ? "success"
-                                  : loan.status === "defaulted"
-                                    ? "destructive"
-                                    : "warning"
-                              }
-                            >
-                              {loan.status}
-                            </Badge>
-                            <button
-                              onClick={() => beginEditCarryoverLoan(loan)}
-                              className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await deleteCarryoverLoan({ data: { id: loan.id } });
-                                await refreshCarryoverDetails(selectedClient.id);
-                                await refreshAllCarryoverLoans();
-                                toast.success("Carryover loan deleted");
-                              }}
-                              className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-                            >
-                              Delete
-                            </button>
+                          <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                            <MetricCard
+                              label="Total Repayment"
+                              value={fmtKES(summary.totalRepayment)}
+                            />
+                            <MetricCard
+                              label="Daily Inclusive"
+                              value={fmtKES(summary.dailyInclusive)}
+                            />
+                            <MetricCard label="Paid To Date" value={fmtKES(loan.paidToDate)} />
+                            <MetricCard label="Balance" value={fmtKES(summary.balance)} />
+                            <MetricCard label="Due Date" value={summary.dueDate} />
+                            <MetricCard label="Owed Now" value={fmtKES(summary.totalOwedNow)} />
+                          </div>
+                          <div className="mt-3 grid gap-3 md:grid-cols-4">
+                            <MetricCard label="Arrears" value={fmtKES(summary.arrears)} />
+                            <MetricCard label="Past Due Days" value={`${summary.daysPastDue}`} />
+                            <MetricCard
+                              label="Penalty Estimate"
+                              value={fmtKES(summary.estimatedPenaltyNow)}
+                            />
+                            <MetricCard
+                              label="Savings Accrued"
+                              value={fmtKES(summary.totalSavingsAccrued)}
+                            />
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                          <MetricCard
-                            label="Total Repayment"
-                            value={fmtKES(summary.totalRepayment)}
-                          />
-                          <MetricCard
-                            label="Daily Inclusive"
-                            value={fmtKES(summary.dailyInclusive)}
-                          />
-                          <MetricCard label="Paid To Date" value={fmtKES(loan.paidToDate)} />
-                          <MetricCard label="Balance" value={fmtKES(summary.balance)} />
-                          <MetricCard label="Due Date" value={summary.dueDate} />
-                          <MetricCard label="Owed Now" value={fmtKES(summary.totalOwedNow)} />
-                        </div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-4">
-                          <MetricCard label="Arrears" value={fmtKES(summary.arrears)} />
-                          <MetricCard label="Past Due Days" value={`${summary.daysPastDue}`} />
-                          <MetricCard
-                            label="Penalty Estimate"
-                            value={fmtKES(summary.estimatedPenaltyNow)}
-                          />
-                          <MetricCard
-                            label="Savings Accrued"
-                            value={fmtKES(summary.totalSavingsAccrued)}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Section>
+                      ))}
+                    </div>
+                  </Section>
+                )}
 
                 <Section title="Penalty control">
                   <div className="grid gap-4 p-5 lg:grid-cols-[280px,1fr]">

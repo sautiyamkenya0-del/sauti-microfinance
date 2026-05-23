@@ -423,3 +423,194 @@ export const listSupportThreads = createServerFn({ method: "POST" }).handler(asy
   const grouped = groupSupportMessages((messagesResult.data ?? []) as DbRow[]);
   return (threads ?? []).map((row) => mapSupportThreadRow(row as DbRow, grouped));
 });
+
+export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireSignedInSession();
+  const supabaseAdmin = requireSupabaseAdmin();
+
+  let mode: "staff" | "supplier" = "staff";
+  let signedSupplierId = "";
+  let signedMemberId = "";
+
+  if (session.authMode === "member") {
+    const member = await requireMemberActor();
+    const { data: supplier, error } = await supabaseAdmin
+      .from("suppliers")
+      .select("*")
+      .eq("member_id", member.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!supplier) {
+      throw new Error("This membership number is not linked to a supplier profile.");
+    }
+    mode = "supplier";
+    signedSupplierId = readText((supplier as DbRow).id);
+    signedMemberId = member.id;
+  } else {
+    await requireStaffActor();
+  }
+
+  const suppliersQuery =
+    mode === "supplier"
+      ? supabaseAdmin.from("suppliers").select("*").eq("id", signedSupplierId)
+      : supabaseAdmin.from("suppliers").select("*").order("created_at", { ascending: false });
+  const supplierInventoryQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("supplier_inventory_items")
+          .select("*")
+          .eq("supplier_id", signedSupplierId)
+          .order("updated_at", { ascending: false })
+      : supabaseAdmin
+          .from("supplier_inventory_items")
+          .select("*")
+          .order("updated_at", { ascending: false });
+  const requestsQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("supplier_fulfillment_requests")
+          .select("*")
+          .eq("supplier_id", signedSupplierId)
+          .order("created_at", { ascending: false })
+      : supabaseAdmin
+          .from("supplier_fulfillment_requests")
+          .select("*")
+          .order("created_at", { ascending: false });
+  const outflowsQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("system_outflows")
+          .select("*")
+          .eq("supplier_id", signedSupplierId)
+          .order("created_at", { ascending: false })
+      : supabaseAdmin
+          .from("system_outflows")
+          .select("*")
+          .eq("kind", "supplier_payment")
+          .order("created_at", { ascending: false });
+  const loansQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("loans")
+          .select(
+            "id, member_id, principal, approved_amount, status, purpose, loan_kind, supplier_id, supplier_request_status, supplier_payload",
+          )
+          .eq("supplier_id", signedSupplierId)
+          .order("created_at", { ascending: false })
+      : supabaseAdmin
+          .from("loans")
+          .select(
+            "id, member_id, principal, approved_amount, status, purpose, loan_kind, supplier_id, supplier_request_status, supplier_payload",
+          )
+          .in("loan_kind", ["fuel", "stock", "service"])
+          .order("created_at", { ascending: false });
+
+  const [
+    suppliersResult,
+    inventoryResult,
+    requestsResult,
+    outflowsResult,
+    loansResult,
+    membersResult,
+    internalStoreResult,
+  ] = await Promise.all([
+    suppliersQuery,
+    supplierInventoryQuery,
+    requestsQuery,
+    outflowsQuery,
+    loansQuery,
+    supabaseAdmin
+      .from("members")
+      .select("id, name, phone, member_category")
+      .order("name", { ascending: true }),
+    mode === "supplier"
+      ? Promise.resolve({ data: [], error: null })
+      : supabaseAdmin
+          .from("internal_store_items")
+          .select("*")
+          .order("updated_at", { ascending: false }),
+  ]);
+
+  const failed = [
+    suppliersResult,
+    inventoryResult,
+    requestsResult,
+    outflowsResult,
+    loansResult,
+    membersResult,
+    internalStoreResult,
+  ].find((result) => result.error);
+  if (failed?.error) throw new Error(failed.error.message);
+
+  return {
+    mode,
+    signedSupplierId,
+    signedMemberId,
+    suppliers: (suppliersResult.data ?? []) as DbRow[],
+    supplierInventory: (inventoryResult.data ?? []) as DbRow[],
+    requests: (requestsResult.data ?? []) as DbRow[],
+    outflows: (outflowsResult.data ?? []) as DbRow[],
+    loans: (loansResult.data ?? []) as DbRow[],
+    members: (membersResult.data ?? []) as DbRow[],
+    internalStore: (internalStoreResult.data ?? []) as DbRow[],
+  };
+});
+
+export const listMemberSupplierRequestsRecord = createServerFn({ method: "GET" })
+  .inputValidator((data: { memberId?: string } | undefined) => ({
+    memberId: data?.memberId?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    const supabaseAdmin = requireSupabaseAdmin();
+
+    let targetMemberId = data.memberId ?? "";
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      targetMemberId = member.id;
+    } else {
+      await requireStaffActor();
+    }
+
+    if (!targetMemberId) return [];
+
+    const [requestsResult, suppliersResult] = await Promise.all([
+      supabaseAdmin
+        .from("supplier_fulfillment_requests")
+        .select("*")
+        .eq("member_id", targetMemberId)
+        .order("created_at", { ascending: false }),
+      supabaseAdmin.from("suppliers").select("id, name"),
+    ]);
+    if (requestsResult.error) throw new Error(requestsResult.error.message);
+    if (suppliersResult.error) throw new Error(suppliersResult.error.message);
+
+    const supplierNames = new Map(
+      (suppliersResult.data ?? []).map((row) => [readText((row as DbRow).id), readText((row as DbRow).name)]),
+    );
+
+    return (requestsResult.data ?? []).map((row) => {
+      const request = row as DbRow;
+      return {
+        id: readText(request.id),
+        supplierId: readText(request.supplier_id),
+        supplierName: supplierNames.get(readText(request.supplier_id)) ?? readText(request.supplier_id),
+        loanId: optionalText(request.loan_id),
+        kind: readText(request.kind),
+        amount: readNumber(request.amount),
+        status: readText(request.status),
+        commodityName: optionalText(request.commodity_name),
+        quantityRequested: readNumber(request.quantity_requested),
+        unitOfMeasure: optionalText(request.unit_of_measure),
+        vehiclePlate: optionalText(request.vehicle_plate),
+        fuelType: optionalText(request.fuel_type),
+        verificationCode: optionalText(request.verification_code),
+        verifiedAt: optionalText(request.verified_at),
+        fulfilledAt: optionalText(request.fulfilled_at),
+        detail:
+          request.detail && typeof request.detail === "object"
+            ? (request.detail as Record<string, unknown>)
+            : {},
+      };
+    });
+  });

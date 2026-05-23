@@ -454,8 +454,11 @@ type Store = {
   feePolicies: FeePolicy[];
   policySettings: PolicySettings;
   sharePrice: number;
-  /** Member auth — membership No. + phone number. Returns the matched member or null. */
-  loginMember: (memberNo: string, phone: string) => Promise<Member | null>;
+  /** Member/supplier auth — membership No. + phone number. Returns the matched member and portal. */
+  loginMember: (
+    memberNo: string,
+    phone: string,
+  ) => Promise<{ member: Member | null; portal: "member" | "supplier" }>;
   /** Staff auth — email + temp password. */
   loginStaff: (email: string, password: string) => Promise<Staff | null>;
   /** Logout — clears the server session and resets local state. */
@@ -991,7 +994,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           data: { memberNo, phone },
         });
         const data = await refreshFromDatabase();
-        return data?.members.find((member) => member.id === result.member.id) ?? null;
+        return {
+          member: data?.members.find((member) => member.id === result.member.id) ?? null,
+          portal: result.portal === "supplier" ? "supplier" : "member",
+        };
       },
       loginStaff: async (email, password) => {
         const result = await authenticateStaff({

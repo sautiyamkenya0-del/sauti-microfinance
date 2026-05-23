@@ -35,11 +35,11 @@ function LoginPage() {
         return;
       }
 
-      const member = await loginMember(id, secret);
-      if (!member) return toast.error("The supplied sign-in details are not valid.");
+      const result = await loginMember(id, secret);
+      if (!result.member) return toast.error("The supplied sign-in details are not valid.");
 
-      toast.success(`Welcome, ${member.name}`);
-      await router.navigate({ to: "/portal" });
+      toast.success(`Welcome, ${result.member.name}`);
+      await router.navigate({ to: result.portal === "supplier" ? "/suppliers" : "/portal" });
     } catch (error: any) {
       toast.error(error?.message ?? "Sign-in failed. Please try again.");
     } finally {
@@ -61,7 +61,7 @@ function LoginPage() {
               Sauti Microfinance
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Secure sign-in for authorized staff and members.
+              Secure sign-in for staff, members, investors, and linked suppliers.
             </p>
           </div>
 

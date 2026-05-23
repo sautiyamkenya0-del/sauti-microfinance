@@ -1,226 +1,462 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { AppHeader } from "@/components/AppHeader";
-import { SectionTabs } from "@/components/SectionTabs";
-import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
-import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
-import { requestWithdrawalPayoutRecord } from "@/lib/app-data.functions";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { PiggyBank, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { ArrowRightLeft, PiggyBank, ShieldCheck, Wallet } from "lucide-react";
+
+import { AppHeader } from "@/components/AppHeader";
+import { SectionTabs } from "@/components/SectionTabs";
+import { Section, StatCard } from "@/components/ui-bits";
+import {
+  listWithdrawalOperationsRecord,
+  recordProtectedDocketDepositRecord,
+  transferMemberDocketRecord,
+} from "@/lib/app-data.functions";
+import { fmtKES, memberCategoryLabel, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/savings")({
-  head: () => ({ meta: [{ title: "Savings — Sauti Microfinance" }] }),
+  head: () => ({ meta: [{ title: "Savings - Sauti Microfinance" }] }),
   component: SavingsPage,
 });
 
+type SavingsDocket = "mandatory_savings" | "withdrawable_savings" | "loan_savings" | "penalty_payment";
+type TransferDocket =
+  | "mandatory_savings"
+  | "withdrawable_savings"
+  | "loan_savings"
+  | "shares"
+  | "share_reserve"
+  | "investment";
+
+const DEPOSIT_DOCKETS: Array<[SavingsDocket, string]> = [
+  ["mandatory_savings", "Compliance contribution"],
+  ["withdrawable_savings", "Withdrawable savings"],
+  ["loan_savings", "Loan savings"],
+  ["penalty_payment", "Pay penalties"],
+];
+
+const TRANSFER_DOCKETS: Array<[TransferDocket, string]> = [
+  ["mandatory_savings", "Compliance contribution"],
+  ["withdrawable_savings", "Withdrawable savings"],
+  ["loan_savings", "Loan savings"],
+  ["shares", "Shares"],
+  ["share_reserve", "Share reserve"],
+  ["investment", "Investment"],
+];
+
 function SavingsPage() {
-  const { members, transactions, recordTransaction, currentUser } = useStore();
-  const requestWithdrawalPayout = useServerFn(requestWithdrawalPayoutRecord);
-  const memberAccounts = useMemo(
-    () => members.filter((member) => isMemberCategory(member.category)),
-    [members],
-  );
-  const [memberId, setMemberId] = useState(memberAccounts[0]?.id ?? "");
-  const [amount, setAmount] = useState(0);
-  const [type, setType] = useState<"deposit" | "withdrawal">("deposit");
-  const [withdrawalRef, setWithdrawalRef] = useState("");
+  const { policySettings } = useStore();
+  const loadCapitalAccounts = useServerFn(listWithdrawalOperationsRecord);
+  const protectedDeposit = useServerFn(recordProtectedDocketDepositRecord);
+  const transferDocket = useServerFn(transferMemberDocketRecord);
+
+  const [data, setData] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [depositForm, setDepositForm] = useState({
+    memberId: "",
+    docket: "mandatory_savings" as SavingsDocket,
+    amount: 0,
+    reason: "",
+  });
+  const [transferForm, setTransferForm] = useState({
+    memberId: "",
+    fromDocket: "mandatory_savings" as TransferDocket,
+    toDocket: "withdrawable_savings" as TransferDocket,
+    amount: 0,
+    reason: "",
+  });
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const next = await loadCapitalAccounts();
+      setData(next);
+      const firstMember = next.members?.[0]?.id ?? "";
+      setDepositForm((current) => ({ ...current, memberId: current.memberId || firstMember }));
+      setTransferForm((current) => ({ ...current, memberId: current.memberId || firstMember }));
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load savings accounts.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
-    if (!memberAccounts.some((member) => member.id === memberId)) {
-      setMemberId(memberAccounts[0]?.id ?? "");
-    }
-  }, [memberAccounts, memberId]);
+    refresh().catch(() => {});
+  }, []);
 
-  const total = memberAccounts.reduce((s, m) => s + m.savingsBalance, 0);
-  const deposits = transactions
-    .filter((t) => t.type === "deposit")
-    .reduce((s, t) => s + t.amount, 0);
-  const withdrawals = transactions
-    .filter((t) => t.type === "withdrawal")
-    .reduce((s, t) => s + t.amount, 0);
-  const selectedMember = memberAccounts.find((member) => member.id === memberId);
+  const members = data?.members ?? [];
+  const docketBalances = data?.docketBalances ?? [];
+  const movements = data?.docketMovements ?? [];
+
+  const selectedDepositMember = members.find((member: any) => member.id === depositForm.memberId);
+  const selectedTransferMember = members.find((member: any) => member.id === transferForm.memberId);
+
+  const policyThreshold = policySettings.percentages.mandatorySavingsThreshold;
+  const shareThreshold = policySettings.percentages.mandatorySharesThreshold;
+
+  const balancesByMember = useMemo(() => {
+    const map = new Map<string, Record<string, number>>();
+    for (const member of members) {
+      map.set(String(member.id ?? ""), {
+        mandatory_savings: Number(member.savings_balance ?? 0),
+        withdrawable_savings: 0,
+        loan_savings: 0,
+        shares: Number(member.shares ?? 0) * 100,
+        share_reserve: Number(member.share_reserve_balance ?? 0),
+        investment: 0,
+      });
+    }
+    for (const row of docketBalances) {
+      const memberId = String(row.member_id ?? "");
+      const entry = map.get(memberId) ?? {
+        mandatory_savings: 0,
+        withdrawable_savings: 0,
+        loan_savings: 0,
+        shares: 0,
+        share_reserve: 0,
+        investment: 0,
+      };
+      entry[String(row.docket ?? "withdrawable_savings")] = Number(row.amount ?? 0);
+      map.set(memberId, entry);
+    }
+    return map;
+  }, [docketBalances, members]);
+
+  const complianceTotal = members.reduce(
+    (sum: number, member: any) => sum + Number(member.savings_balance ?? 0),
+    0,
+  );
+  const withdrawableTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.withdrawable_savings ?? 0),
+    0,
+  );
+  const loanSavingsTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.loan_savings ?? 0),
+    0,
+  );
+
+  const memberRows = members.map((member: any) => {
+    const balances = balancesByMember.get(member.id) ?? {};
+    const compliance = Number(member.savings_balance ?? 0);
+    const withdrawable = Number(balances.withdrawable_savings ?? 0);
+    const loanSavings = Number(balances.loan_savings ?? 0);
+    const shareValue =
+      Number(member.shares ?? 0) * 100 + Number(member.share_reserve_balance ?? 0);
+    const lastMovement = movements.find((row: any) => row.member_id === member.id);
+    return {
+      member,
+      compliance,
+      thresholdGap: Math.max(0, policyThreshold - compliance),
+      withdrawable,
+      loanSavings,
+      shareValue,
+      shareGap: Math.max(0, shareThreshold - shareValue),
+      lastMovement,
+    };
+  });
+
+  async function runAction(action: () => Promise<void>, success: string) {
+    try {
+      setBusy(true);
+      await action();
+      toast.success(success);
+      await refresh();
+    } catch (error: any) {
+      toast.error(error?.message ?? "That action could not be completed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <>
-      <AppHeader title="Savings" subtitle="Member deposit accounts and movements." />
-      <main className="flex-1 p-6 lg:p-8 space-y-6">
+      <AppHeader
+        title="Savings & Dockets"
+        subtitle="Compliance contribution, withdrawable savings, loan savings, and admin-controlled movement between member dockets."
+      />
+      <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="capital" />
-        <DirectorOnly>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            <StatCard
-              label="Total Savings"
-              value={fmtKES(total)}
-              icon={<PiggyBank className="h-5 w-5" />}
-              tone="success"
-            />
-            <StatCard
-              label="Lifetime Deposits"
-              value={fmtKES(deposits)}
-              icon={<ArrowDownToLine className="h-5 w-5" />}
-            />
-            <StatCard
-              label="Lifetime Withdrawals"
-              value={fmtKES(withdrawals)}
-              icon={<ArrowUpFromLine className="h-5 w-5" />}
-              tone="warning"
-            />
-          </div>
-        </DirectorOnly>
 
-        <div className="grid lg:grid-cols-3 gap-6">
-          <Section title="Record movement">
-            <div className="p-5 space-y-3">
-              <div className="flex gap-2">
-                {(["deposit", "withdrawal"] as const).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => {
-                      setType(t);
-                      if (t === "deposit") setWithdrawalRef("");
-                    }}
-                    className={`flex-1 py-2 text-sm rounded-md capitalize ${type === t ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/70"}`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              <select
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                value={memberId}
-                onChange={(e) => setMemberId(e.target.value)}
-              >
-                {memberAccounts.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} — {fmtKES(m.savingsBalance)}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                placeholder="Amount"
-                value={amount}
-                onChange={(e) => setAmount(Number(e.target.value))}
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Compliance contributions"
+            value={fmtKES(complianceTotal)}
+            icon={<ShieldCheck className="h-5 w-5" />}
+            tone="success"
+          />
+          <StatCard
+            label="Mandatory threshold"
+            value={`${fmtKES(policyThreshold)} / ${fmtKES(shareThreshold)}`}
+            icon={<PiggyBank className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Withdrawable savings"
+            value={fmtKES(withdrawableTotal)}
+            icon={<Wallet className="h-5 w-5" />}
+            tone="warning"
+          />
+          <StatCard
+            label="Loan savings"
+            value={fmtKES(loanSavingsTotal)}
+            icon={<ArrowRightLeft className="h-5 w-5" />}
+          />
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Section title="Post direct savings deposit">
+            <div className="space-y-3 p-5">
+              <MemberSelect
+                members={members}
+                value={depositForm.memberId}
+                onChange={(value) => setDepositForm((current) => ({ ...current, memberId: value }))}
               />
-              {type === "withdrawal" ? (
-                <>
-                  <input
-                    value={withdrawalRef}
-                    onChange={(event) => setWithdrawalRef(event.target.value)}
-                    placeholder="Payout note (optional)"
-                    className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  />
-                  {selectedMember ? (
-                    <div className="text-xs text-muted-foreground">
-                      Registered payout phone: {selectedMember.phone}
-                    </div>
-                  ) : null}
-                </>
+              <Select
+                value={depositForm.docket}
+                onChange={(value) =>
+                  setDepositForm((current) => ({ ...current, docket: value as SavingsDocket }))
+                }
+                options={DEPOSIT_DOCKETS}
+              />
+              <Input
+                type="number"
+                value={depositForm.amount || ""}
+                onChange={(value) =>
+                  setDepositForm((current) => ({ ...current, amount: Number(value) }))
+                }
+                placeholder="Amount"
+              />
+              <Input
+                value={depositForm.reason}
+                onChange={(value) => setDepositForm((current) => ({ ...current, reason: value }))}
+                placeholder="Source / note"
+              />
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                {depositForm.docket === "mandatory_savings"
+                  ? `Posts as a direct compliance contribution. Threshold target is ${fmtKES(policyThreshold)} before loan savings can open.`
+                  : depositForm.docket === "withdrawable_savings"
+                    ? "Targeted withdrawable savings stays in that docket and will not be redistributed by carryover resets or automatic redistribution."
+                    : depositForm.docket === "loan_savings"
+                      ? `Loan savings opens only after compliance contribution ${fmtKES(policyThreshold)} and share threshold ${fmtKES(shareThreshold)} are both met.`
+                      : "Penalty payment can clear outstanding penalties first, then include the daily loan obligation where policy requires it."}
+              </div>
+              {selectedDepositMember ? (
+                <div className="text-xs text-muted-foreground">
+                  {selectedDepositMember.id} - {selectedDepositMember.name}
+                </div>
               ) : null}
               <button
-                onClick={async () => {
-                  try {
-                    if (amount <= 0) return;
-                    let allowOverdraw = false;
-                    const confirmedPayoutRef = withdrawalRef.trim();
-                    if (
-                      type === "withdrawal" &&
-                      selectedMember &&
-                      amount > selectedMember.savingsBalance
-                    ) {
-                      allowOverdraw = window.confirm(
-                        `${selectedMember.name} has ${fmtKES(selectedMember.savingsBalance)} available. Confirm withdrawing ${fmtKES(amount)} and leaving a negative balance of ${fmtKES(selectedMember.savingsBalance - amount)}?`,
-                      );
-                      if (!allowOverdraw) return;
-                    }
-                    if (type === "withdrawal" && selectedMember) {
-                      const confirmed = window.confirm(
-                        `Send ${fmtKES(amount)} to ${selectedMember.name} on ${selectedMember.phone}? The ledger will only deduct after M-Pesa confirms success.`,
-                      );
-                      if (!confirmed) return;
-                    }
-                    if (type === "withdrawal") {
-                      await requestWithdrawalPayout({
-                        data: {
-                          memberId,
-                          amount,
-                          remarks: confirmedPayoutRef || undefined,
-                          allowOverdraw,
-                        },
-                      });
-                      toast.success(
-                        "Withdrawal request sent. Savings will update after M-Pesa confirms the payout.",
-                      );
-                    } else {
-                      await recordTransaction({
-                        type,
-                        amount,
-                        memberId,
-                        by: currentUser.id,
-                        allowOverdraw,
-                      });
-                      toast.success("Deposit recorded");
-                    }
-                    setAmount(0);
-                    setWithdrawalRef("");
-                  } catch (error: unknown) {
-                    toast.error(
-                      error instanceof Error
-                        ? error.message
-                        : "Failed to submit the savings movement.",
-                    );
-                  }
-                }}
-                className="w-full bg-primary text-primary-foreground py-2 rounded-md text-sm font-medium hover:bg-primary/90"
+                disabled={busy}
+                onClick={() =>
+                  runAction(async () => {
+                    await protectedDeposit({
+                      data: {
+                        memberId: depositForm.memberId,
+                        docket: depositForm.docket,
+                        amount: depositForm.amount,
+                        reason: depositForm.reason,
+                      },
+                    });
+                    setDepositForm((current) => ({ ...current, amount: 0, reason: "" }));
+                  }, "Targeted deposit posted.")
+                }
+                className="w-full rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                Submit
+                Post deposit
               </button>
             </div>
           </Section>
 
-          <div className="lg:col-span-2">
-            <Section title="Member Balances">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3 text-left">Member</th>
-                      <th className="px-5 py-3 text-right">Balance</th>
-                      <th className="px-5 py-3 text-right">Last Deposit</th>
-                      <th className="px-5 py-3 text-right">Last Withdrawal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {memberAccounts.map((m) => {
-                      const d = transactions.find(
-                        (t) => t.memberId === m.id && t.type === "deposit",
-                      );
-                      const w = transactions.find(
-                        (t) => t.memberId === m.id && t.type === "withdrawal",
-                      );
-                      return (
-                        <tr key={m.id}>
-                          <td className="px-5 py-3 font-medium">{m.name}</td>
-                          <td className="px-5 py-3 text-right font-semibold">
-                            {fmtKES(m.savingsBalance)}
-                          </td>
-                          <td className="px-5 py-3 text-right text-xs text-muted-foreground">
-                            {d ? `${fmtKES(d.amount)} · ${d.date}` : "—"}
-                          </td>
-                          <td className="px-5 py-3 text-right text-xs text-muted-foreground">
-                            {w ? `${fmtKES(w.amount)} · ${w.date}` : "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+          <Section title="Move money between dockets">
+            <div className="space-y-3 p-5">
+              <MemberSelect
+                members={members}
+                value={transferForm.memberId}
+                onChange={(value) =>
+                  setTransferForm((current) => ({ ...current, memberId: value }))
+                }
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Select
+                  value={transferForm.fromDocket}
+                  onChange={(value) =>
+                    setTransferForm((current) => ({
+                      ...current,
+                      fromDocket: value as TransferDocket,
+                    }))
+                  }
+                  options={TRANSFER_DOCKETS}
+                />
+                <Select
+                  value={transferForm.toDocket}
+                  onChange={(value) =>
+                    setTransferForm((current) => ({ ...current, toDocket: value as TransferDocket }))
+                  }
+                  options={TRANSFER_DOCKETS}
+                />
               </div>
-            </Section>
-          </div>
+              <Input
+                type="number"
+                value={transferForm.amount || ""}
+                onChange={(value) =>
+                  setTransferForm((current) => ({ ...current, amount: Number(value) }))
+                }
+                placeholder="Amount"
+              />
+              <Input
+                value={transferForm.reason}
+                onChange={(value) =>
+                  setTransferForm((current) => ({ ...current, reason: value }))
+                }
+                placeholder="Reason for transfer"
+              />
+              {selectedTransferMember ? (
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Admin-controlled transfer for {selectedTransferMember.name}. Use this when moving
+                  funds from shares to withdrawable savings, shares to savings, or any other
+                  authorized docket move.
+                </div>
+              ) : null}
+              <button
+                disabled={busy}
+                onClick={() =>
+                  runAction(async () => {
+                    await transferDocket({
+                      data: {
+                        memberId: transferForm.memberId,
+                        fromDocket: transferForm.fromDocket,
+                        toDocket: transferForm.toDocket,
+                        amount: transferForm.amount,
+                        reason: transferForm.reason,
+                      },
+                    });
+                    setTransferForm((current) => ({ ...current, amount: 0, reason: "" }));
+                  }, "Docket transfer completed.")
+                }
+                className="w-full rounded-md border border-border py-2 text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Move funds
+              </button>
+            </div>
+          </Section>
         </div>
+
+        <Section title="Member savings positions">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Member</th>
+                  <th className="px-5 py-3 text-right">Compliance contribution</th>
+                  <th className="px-5 py-3 text-right">Gap to threshold</th>
+                  <th className="px-5 py-3 text-right">Withdrawable savings</th>
+                  <th className="px-5 py-3 text-right">Loan savings</th>
+                  <th className="px-5 py-3 text-right">Shares basket</th>
+                  <th className="px-5 py-3 text-left">Last docket movement</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {memberRows.map((row) => (
+                  <tr key={row.member.id}>
+                    <td className="px-5 py-3">
+                      <div className="font-medium">{row.member.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.member.id} - {memberCategoryLabel(row.member.member_category)}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 text-right font-semibold">
+                      {fmtKES(row.compliance)}
+                    </td>
+                    <td className="px-5 py-3 text-right text-xs">
+                      {row.thresholdGap > 0 ? fmtKES(row.thresholdGap) : "Met"}
+                    </td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.withdrawable)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.loanSavings)}</td>
+                    <td className="px-5 py-3 text-right">
+                      <div>{fmtKES(row.shareValue)}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.shareGap > 0 ? `Gap ${fmtKES(row.shareGap)}` : "Threshold met"}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {row.lastMovement
+                        ? `${row.lastMovement.from_docket ?? "deposit"} -> ${row.lastMovement.to_docket ?? "-"}`
+                        : "No movement recorded"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
       </main>
     </>
+  );
+}
+
+function Input({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  value: string | number;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+    />
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<readonly [string, string]>;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+    >
+      {options.map(([optionValue, label]) => (
+        <option key={optionValue || label} value={optionValue}>
+          {label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function MemberSelect({
+  members,
+  value,
+  onChange,
+}: {
+  members: any[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Select
+      value={value}
+      onChange={onChange}
+      options={members.map((member: any) => [
+        member.id,
+        `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
+      ])}
+    />
   );
 }

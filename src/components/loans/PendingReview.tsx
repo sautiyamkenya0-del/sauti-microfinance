@@ -9,11 +9,11 @@ export function PendingReview() {
   const [adjAmount, setAdjAmount] = useState(0);
   const [note, setNote] = useState("");
 
-  if (currentUser.role === "loan_officer") {
+  if (currentUser.role !== "director") {
     return (
       <div className="bg-card border border-dashed border-border rounded-xl p-6 text-sm text-muted-foreground">
-        Loan officers cannot review applications. Submit your applications and they will appear here
-        for the manager or director.
+        Loan officers and managers can request and prepare applications here, but only the director
+        can approve or reject them.
       </div>
     );
   }

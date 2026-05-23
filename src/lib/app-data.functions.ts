@@ -5560,7 +5560,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    const actor = await requireManagerOrDirectorActor();
+    const actor = await requireDirectorActor();
     if (!data.loanId) throw new Error("Loan id is required.");
 
     const supabaseAdmin = await requireSupabaseAdmin();
@@ -6993,6 +6993,61 @@ function normalizeSupplierKind(value: unknown): SupplierKind {
   return value === "fuel" || value === "stock" || value === "service" ? value : "stock";
 }
 
+function supplierVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function readSupplierDetailText(
+  detail: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const next = String(detail[key] ?? "").trim();
+    if (next) return next;
+  }
+  return undefined;
+}
+
+function readSupplierDetailNumber(
+  detail: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const next = Number(detail[key] ?? 0);
+    if (Number.isFinite(next) && next > 0) return next;
+  }
+  return undefined;
+}
+
+async function resolveSupplierMutationActor(runtimeDb: any, supplierId?: string) {
+  const session = await requireSignedInSession();
+  if (session.authMode === "staff") {
+    const actor = await requireStaffActor();
+    return { actor, supplierMemberId: undefined };
+  }
+
+  const member = await requireMemberActor();
+  const supplierQuery = runtimeDb
+    .from("suppliers")
+    .select("id")
+    .eq("member_id", member.id);
+  if (supplierId) supplierQuery.eq("id", supplierId);
+  const { data: supplier, error } = await supplierQuery.maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!supplier) {
+    throw new Error("This member sign-in is not linked to the requested supplier profile.");
+  }
+
+  return {
+    actor: {
+      id: member.id,
+      name: member.name,
+      role: "supplier_member",
+    } satisfies AuditActor,
+    supplierMemberId: member.id,
+  };
+}
+
 function systemOutflowKindFor(value: unknown) {
   const normalized = String(value ?? "").trim();
   const allowed = new Set([
@@ -7450,6 +7505,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     (data: {
       name: string;
       kind: SupplierKind;
+      memberId?: string;
       phone?: string;
       contactPerson?: string;
       location?: string;
@@ -7457,6 +7513,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     }) => ({
       name: String(data?.name ?? "").trim(),
       kind: normalizeSupplierKind(data?.kind),
+      memberId: data?.memberId?.trim() || undefined,
       phone: data?.phone?.trim() || undefined,
       contactPerson: data?.contactPerson?.trim() || undefined,
       location: data?.location?.trim() || undefined,
@@ -7467,11 +7524,32 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     const actor = await requireStaffActor();
     if (!data.name) throw new Error("Supplier name is required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    if (data.memberId) {
+      const { data: member, error: memberError } = await runtimeDb
+        .from("members")
+        .select("id")
+        .eq("id", data.memberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      if (!member) throw new Error("Linked membership number was not found.");
+
+      const { data: existingSupplier, error: supplierLookupError } = await runtimeDb
+        .from("suppliers")
+        .select("id")
+        .eq("member_id", data.memberId)
+        .maybeSingle();
+      if (supplierLookupError) throw new Error(supplierLookupError.message);
+      if (existingSupplier) {
+        throw new Error("That membership number is already linked to another supplier profile.");
+      }
+    }
+
     const id = makeId("SUP");
     const { error } = await runtimeDb.from("suppliers").insert({
       id,
       name: data.name,
       kind: data.kind,
+      member_id: data.memberId ?? null,
       phone: data.phone ?? null,
       contact_person: data.contactPerson ?? null,
       location: data.location ?? null,
@@ -7512,6 +7590,7 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
     if (!data.supplierId || !data.memberId) throw new Error("Supplier and member are required.");
     if (data.amount <= 0) throw new Error("Amount must be above zero.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const detail = asJsonObject(data.detail);
     const { data: supplier, error: supplierError } = await runtimeDb
       .from("suppliers")
       .select("id, kind, status")
@@ -7525,6 +7604,20 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
         `This request is ${data.kind}, but the selected supplier is ${supplier.kind}.`,
       );
     }
+    const commodityName =
+      readSupplierDetailText(detail, "item", "commodityName", "serviceType", "purpose") ??
+      (data.kind === "fuel" ? "Fuel" : undefined);
+    const quantityRequested = readSupplierDetailNumber(detail, "quantity", "litres", "amount");
+    const unitOfMeasure =
+      readSupplierDetailText(detail, "unit", "unitOfMeasure") ??
+      (data.kind === "fuel" ? "litres" : "unit");
+    const vehiclePlate = readSupplierDetailText(detail, "vehicle", "vehiclePlate");
+    const fuelType = readSupplierDetailText(detail, "fuelType");
+    const driverMemberId =
+      data.kind === "fuel"
+        ? readSupplierDetailText(detail, "driverMemberId") ?? data.memberId
+        : undefined;
+    const verificationCode = data.kind === "fuel" ? supplierVerificationCode() : undefined;
     const id = makeId("SFR");
     const { error } = await runtimeDb.from("supplier_fulfillment_requests").insert({
       id,
@@ -7533,7 +7626,15 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
       member_id: data.memberId,
       kind: data.kind,
       amount: data.amount,
-      detail: data.detail,
+      detail,
+      commodity_name: commodityName ?? null,
+      quantity_requested: quantityRequested ?? null,
+      unit_of_measure: unitOfMeasure ?? null,
+      vehicle_plate: vehiclePlate ?? null,
+      fuel_type: fuelType ?? null,
+      driver_member_id: driverMemberId ?? null,
+      verification_code: verificationCode ?? null,
+      verification_code_issued_at: verificationCode ? new Date().toISOString() : null,
       status: "sent",
       requested_by: actor.id,
     });
@@ -7545,7 +7646,7 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
           loan_kind: data.kind,
           supplier_id: data.supplierId,
           supplier_request_status: "sent",
-          supplier_payload: data.detail,
+          supplier_payload: detail,
         })
         .eq("id", data.loanId);
       if (loanError) throw new Error(loanError.message);
@@ -7558,16 +7659,24 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
       summary: `${actor.name} sent ${data.kind} request ${id} to supplier`,
       details: data,
     });
-    return { id };
+    return { id, verificationCode };
   });
 
 export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
-  .inputValidator((data: { requestId: string; fulfilledByName?: string }) => ({
-    requestId: String(data?.requestId ?? "").trim(),
-    fulfilledByName: data?.fulfilledByName?.trim() || undefined,
-  }))
+  .inputValidator(
+    (data: {
+      requestId: string;
+      fulfilledByName?: string;
+      verificationCode?: string;
+      verificationNote?: string;
+    }) => ({
+      requestId: String(data?.requestId ?? "").trim(),
+      fulfilledByName: data?.fulfilledByName?.trim() || undefined,
+      verificationCode: data?.verificationCode?.trim() || undefined,
+      verificationNote: data?.verificationNote?.trim() || undefined,
+    }),
+  )
   .handler(async ({ data }) => {
-    const actor = await requireStaffActor();
     if (!data.requestId) throw new Error("Supplier request is required.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const { data: request, error: requestError } = await runtimeDb
@@ -7577,6 +7686,20 @@ export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
       .maybeSingle();
     if (requestError) throw new Error(requestError.message);
     if (!request) throw new Error("Supplier request was not found.");
+    if (request.status !== "sent") {
+      throw new Error(`This supplier request is already ${request.status}.`);
+    }
+
+    const { actor } = await resolveSupplierMutationActor(runtimeDb, String(request.supplier_id));
+    const requestVerificationCode = String(request.verification_code ?? "").trim();
+    if (request.kind === "fuel" && requestVerificationCode) {
+      if (!data.verificationCode) {
+        throw new Error("Enter the driver verification code before confirming fuel delivery.");
+      }
+      if (data.verificationCode !== requestVerificationCode) {
+        throw new Error("The supplied driver verification code is not correct.");
+      }
+    }
 
     const now = new Date().toISOString();
     const { error } = await runtimeDb
@@ -7585,6 +7708,12 @@ export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
         status: "fulfilled",
         fulfilled_by_name: data.fulfilledByName ?? actor.name,
         fulfilled_at: now,
+        verified_at: request.kind === "fuel" ? now : request.verified_at ?? null,
+        verified_by_member_id:
+          request.kind === "fuel"
+            ? (request.driver_member_id ?? request.member_id ?? null)
+            : (request.verified_by_member_id ?? null),
+        verification_note: data.verificationNote ?? null,
         updated_at: now,
       })
       .eq("id", data.requestId);
@@ -7704,6 +7833,226 @@ export const recordSystemOutflowRecord = createServerFn({ method: "POST" })
       details: data,
     });
     return { id, transactionId };
+  });
+
+export const saveSupplierInventoryItemRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      itemId?: string;
+      supplierId: string;
+      itemName: string;
+      itemKind: SupplierKind;
+      unit?: string;
+      quantityAvailable?: number;
+      unitPrice?: number;
+      sku?: string;
+      notes?: string;
+    }) => ({
+      itemId: data?.itemId?.trim() || undefined,
+      supplierId: String(data?.supplierId ?? "").trim(),
+      itemName: String(data?.itemName ?? "").trim(),
+      itemKind: normalizeSupplierKind(data?.itemKind),
+      unit: data?.unit?.trim() || "unit",
+      quantityAvailable: Number(data?.quantityAvailable ?? 0),
+      unitPrice: Number(data?.unitPrice ?? 0),
+      sku: data?.sku?.trim() || undefined,
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.supplierId) throw new Error("Supplier is required.");
+    if (!data.itemName) throw new Error("Commodity name is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { actor } = await resolveSupplierMutationActor(runtimeDb, data.supplierId);
+
+    const id = data.itemId ?? makeId("SIN");
+    const { error } = await runtimeDb.from("supplier_inventory_items").upsert({
+      id,
+      supplier_id: data.supplierId,
+      item_name: data.itemName,
+      item_kind: data.itemKind,
+      unit: data.unit,
+      quantity_available: Math.max(0, data.quantityAvailable),
+      unit_price: Math.max(0, data.unitPrice),
+      sku: data.sku ?? null,
+      notes: data.notes ?? null,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: data.itemId ? "supplier_inventory.updated" : "supplier_inventory.created",
+      targetType: "supplier_inventory_item",
+      targetId: id,
+      summary: `${actor.name} saved supplier inventory item ${data.itemName}`,
+      details: {
+        supplierId: data.supplierId,
+        itemKind: data.itemKind,
+        quantityAvailable: data.quantityAvailable,
+        unitPrice: data.unitPrice,
+      },
+    });
+    return { id };
+  });
+
+export const saveInternalStoreItemRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      itemId?: string;
+      itemName: string;
+      itemKind: SupplierKind;
+      unit?: string;
+      quantityAvailable?: number;
+      reorderLevel?: number;
+      unitPrice?: number;
+      preferredSupplierId?: string;
+      notes?: string;
+    }) => ({
+      itemId: data?.itemId?.trim() || undefined,
+      itemName: String(data?.itemName ?? "").trim(),
+      itemKind: normalizeSupplierKind(data?.itemKind),
+      unit: data?.unit?.trim() || "unit",
+      quantityAvailable: Number(data?.quantityAvailable ?? 0),
+      reorderLevel: Number(data?.reorderLevel ?? 0),
+      unitPrice: Number(data?.unitPrice ?? 0),
+      preferredSupplierId: data?.preferredSupplierId?.trim() || undefined,
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.itemName) throw new Error("Store item name is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = data.itemId ?? makeId("STK");
+    const { error } = await runtimeDb.from("internal_store_items").upsert({
+      id,
+      item_name: data.itemName,
+      item_kind: data.itemKind,
+      unit: data.unit,
+      quantity_available: Math.max(0, data.quantityAvailable),
+      reorder_level: Math.max(0, data.reorderLevel),
+      unit_price: Math.max(0, data.unitPrice),
+      preferred_supplier_id: data.preferredSupplierId ?? null,
+      notes: data.notes ?? null,
+      created_by: actor.id,
+      updated_by: actor.id,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: data.itemId ? "internal_store.updated" : "internal_store.created",
+      targetType: "internal_store_item",
+      targetId: id,
+      summary: `${actor.name} saved internal store item ${data.itemName}`,
+      details: {
+        itemKind: data.itemKind,
+        quantityAvailable: data.quantityAvailable,
+        reorderLevel: data.reorderLevel,
+        unitPrice: data.unitPrice,
+      },
+    });
+    return { id };
+  });
+
+export const issueInternalStoreLoanRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      itemId: string;
+      memberId: string;
+      quantity: number;
+      loanId?: string;
+      note?: string;
+    }) => ({
+      itemId: String(data?.itemId ?? "").trim(),
+      memberId: String(data?.memberId ?? "").trim(),
+      quantity: Number(data?.quantity ?? 0),
+      loanId: data?.loanId?.trim() || undefined,
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.itemId || !data.memberId) throw new Error("Store item and member are required.");
+    if (data.quantity <= 0) throw new Error("Issued quantity must be above zero.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: item, error: itemError } = await runtimeDb
+      .from("internal_store_items")
+      .select("*")
+      .eq("id", data.itemId)
+      .maybeSingle();
+    if (itemError) throw new Error(itemError.message);
+    if (!item) throw new Error("Internal store item was not found.");
+
+    const available = Number(item.quantity_available ?? 0);
+    if (available < data.quantity) {
+      throw new Error(
+        `Only ${available} ${item.unit ?? "units"} are available in the internal store.`,
+      );
+    }
+
+    const nextQuantity = Math.max(0, available - data.quantity);
+    const now = new Date().toISOString();
+    const { error: stockError } = await runtimeDb
+      .from("internal_store_items")
+      .update({
+        quantity_available: nextQuantity,
+        updated_by: actor.id,
+        updated_at: now,
+      })
+      .eq("id", data.itemId);
+    if (stockError) throw new Error(stockError.message);
+
+    if (data.loanId) {
+      const { data: loan, error: loanError } = await runtimeDb
+        .from("loans")
+        .select("*")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (loanError) throw new Error(loanError.message);
+      if (!loan) throw new Error("The linked loan was not found.");
+
+      const amount = roundMoney(data.quantity * Number(item.unit_price ?? 0));
+      const supplierPayload = asJsonObject(loan.supplier_payload);
+      const { error: updateLoanError } = await runtimeDb
+        .from("loans")
+        .update({
+          status: "active",
+          approved_amount: amount || loan.approved_amount || loan.principal,
+          net_disbursed_amount: 0,
+          supplier_request_status: "fulfilled",
+          disbursement_status: "paid",
+          disbursement_completed_at: now,
+          start_date: now.slice(0, 10),
+          supplier_payload: {
+            ...supplierPayload,
+            source: "internal_store",
+            storeItemId: item.id,
+            storeItemName: item.item_name,
+            quantityIssued: data.quantity,
+            unit: item.unit ?? "unit",
+          },
+        })
+        .eq("id", data.loanId);
+      if (updateLoanError) throw new Error(updateLoanError.message);
+    }
+
+    await auditAction({
+      actor,
+      action: "internal_store.issued",
+      targetType: "internal_store_item",
+      targetId: data.itemId,
+      summary: `${actor.name} issued ${data.quantity} ${item.unit ?? "units"} from the internal store`,
+      details: {
+        memberId: data.memberId,
+        loanId: data.loanId ?? null,
+        itemName: item.item_name,
+        note: clipAuditText(data.note, 160),
+      },
+    });
+    return { ok: true };
   });
 
 export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST" })

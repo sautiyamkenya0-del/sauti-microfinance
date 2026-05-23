@@ -1,10 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, Badge } from "@/components/ui-bits";
 import { useStore, fmtKES } from "@/lib/store";
 import { useApprovals, type ApprovalRequest } from "@/lib/approvals";
-import { useState } from "react";
+import { listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle, Clock, Banknote, UserCog } from "lucide-react";
 
@@ -15,14 +17,32 @@ export const Route = createFileRoute("/approvals")({
 
 function ApprovalsPage() {
   const { currentUser, loans, members, approveLoan, rejectLoan } = useStore();
+  const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const { items, decide } = useApprovals();
   const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
+  const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
 
-  const canDecide = currentUser.role === "manager" || currentUser.role === "director";
+  const canDecide = currentUser.role === "director";
   const pendingLoans = loans.filter((l) => l.status === "pending");
   const filteredReqs = items.filter((r) => (filter === "all" ? true : r.status === filter));
+  const supplierReadyLoans = loans.filter(
+    (loan) =>
+      (loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service") &&
+      loan.supplierRequestStatus === "approved",
+  );
+  const supplierRequests = supplierWorkspace?.requests ?? [];
+  const fulfilledSupplierRequests = supplierRequests.filter(
+    (request: any) => request.status === "fulfilled",
+  );
+  const activeSupplierRequests = supplierRequests.filter((request: any) => request.status === "sent");
 
   const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? id;
+
+  useEffect(() => {
+    loadSupplierWorkspace()
+      .then(setSupplierWorkspace)
+      .catch(() => {});
+  }, [loadSupplierWorkspace]);
 
   return (
     <>
@@ -34,8 +54,8 @@ function ApprovalsPage() {
         <SectionTabs section="lending" />
         {!canDecide && (
           <div className="bg-accent/15 border border-accent/40 rounded-md p-3 text-sm">
-            You can <strong>view</strong> approvals but only Managers and Directors can approve or
-            reject.
+            You can <strong>view</strong> approvals here, but only the Director can approve or
+            reject cash, loan, and supplier-control decisions.
           </div>
         )}
 
@@ -145,6 +165,67 @@ function ApprovalsPage() {
             ))}
           </div>
         </Section>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Section title={`Supplier-backed loans waiting for dispatch (${supplierReadyLoans.length})`}>
+            <div className="divide-y divide-border">
+              {supplierReadyLoans.length === 0 ? (
+                <div className="px-5 py-8 text-sm text-muted-foreground">
+                  No approved supplier-backed loans are waiting for dispatch.
+                </div>
+              ) : null}
+              {supplierReadyLoans.map((loan) => (
+                <div key={loan.id} className="px-5 py-4 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium">
+                        {loan.id} / {memberName(loan.memberId)}
+                      </div>
+                      <div className="text-xs text-muted-foreground capitalize">
+                        {loan.loanKind} loan approved and waiting to be sent to a supplier.
+                      </div>
+                    </div>
+                    <Link to="/suppliers" className="text-xs text-primary hover:underline">
+                      Open Supplier Hub
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+
+          <Section
+            title={`Supplier queue needing follow-through (${activeSupplierRequests.length + fulfilledSupplierRequests.length})`}
+          >
+            <div className="divide-y divide-border">
+              {activeSupplierRequests.length === 0 && fulfilledSupplierRequests.length === 0 ? (
+                <div className="px-5 py-8 text-sm text-muted-foreground">
+                  No supplier actions are waiting right now.
+                </div>
+              ) : null}
+              {[...activeSupplierRequests, ...fulfilledSupplierRequests].slice(0, 8).map((request: any) => (
+                <div key={request.id} className="px-5 py-4 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium">
+                        {request.id} / {memberName(request.member_id)}
+                      </div>
+                      <div className="text-xs text-muted-foreground capitalize">
+                        {request.kind} request is {request.status}
+                        {request.status === "fulfilled"
+                          ? " and waiting for payment."
+                          : " and waiting for supplier confirmation."}
+                      </div>
+                    </div>
+                    <Link to="/suppliers" className="text-xs text-primary hover:underline">
+                      Open Supplier Hub
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        </div>
       </main>
     </>
   );

@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
@@ -29,6 +30,10 @@ import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
+import {
+  listMemberSupplierRequestsRecord,
+  listSupplierWorkspaceRecord,
+} from "@/lib/runtime-data.functions";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -113,14 +118,39 @@ function Portal() {
       )
     : fees;
   const { submit } = useApprovalActions();
+  const loadMemberSupplierRequests = useServerFn(listMemberSupplierRequestsRecord);
+  const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
+  const navigate = useNavigate();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
   const [pinOld, setPinOld] = useState("");
   const [pinNew, setPinNew] = useState("");
   const [payMember, setPayMember] = useState<Member | null>(null);
+  const [supplierRequests, setSupplierRequests] = useState<any[]>([]);
+  const [fuelLoanAmount, setFuelLoanAmount] = useState("");
+  const [fuelLoanVehicle, setFuelLoanVehicle] = useState("");
+  const [fuelLoanType, setFuelLoanType] = useState("");
+  const [fuelLoanLitres, setFuelLoanLitres] = useState("");
   useEffect(() => {
     setPhone(member?.phone ?? "");
   }, [member]);
+  useEffect(() => {
+    if (authMode !== "member") return;
+    loadSupplierWorkspace()
+      .then(() => navigate({ to: "/suppliers" }))
+      .catch(() => {});
+  }, [authMode, loadSupplierWorkspace, navigate]);
+  useEffect(() => {
+    if (!memberId) {
+      setSupplierRequests([]);
+      return;
+    }
+    loadMemberSupplierRequests({
+      data: isStaffView ? { memberId } : undefined,
+    })
+      .then((rows) => setSupplierRequests(rows))
+      .catch(() => setSupplierRequests([]));
+  }, [isStaffView, loadMemberSupplierRequests, memberId]);
 
   return (
     <>
@@ -295,6 +325,102 @@ function Portal() {
                     ))}
                   </div>
                 </Section>
+                {supplierRequests.length > 0 && (
+                  <Section title="Supplier-backed requests">
+                    <div className="p-5 space-y-3 text-sm">
+                      {supplierRequests.map((request) => (
+                        <div key={request.id} className="rounded-md border border-border p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-medium capitalize">
+                              {request.kind} request / {request.supplierName}
+                            </div>
+                            <Badge
+                              tone={
+                                request.status === "fulfilled"
+                                  ? "success"
+                                  : request.status === "paid"
+                                    ? "accent"
+                                    : "warning"
+                              }
+                            >
+                              {request.status}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {request.commodityName || request.fuelType || request.kind}
+                            {request.vehiclePlate ? ` / ${request.vehiclePlate}` : ""}
+                          </div>
+                          {request.verificationCode ? (
+                            <div className="mt-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+                              Driver code:{" "}
+                              <span className="font-mono font-semibold text-foreground">
+                                {request.verificationCode}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+                {!isStaffView && member.category === "locomotive" && (
+                  <Section title="Request fuel loan">
+                    <div className="p-5 grid gap-3 sm:grid-cols-2">
+                      <input
+                        value={fuelLoanVehicle}
+                        onChange={(event) => setFuelLoanVehicle(event.target.value)}
+                        placeholder="Vehicle / plate"
+                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={fuelLoanType}
+                        onChange={(event) => setFuelLoanType(event.target.value)}
+                        placeholder="Fuel type"
+                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={fuelLoanLitres}
+                        onChange={(event) => setFuelLoanLitres(event.target.value)}
+                        placeholder="Litres requested"
+                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={fuelLoanAmount}
+                        onChange={(event) => setFuelLoanAmount(event.target.value)}
+                        placeholder="Estimated amount"
+                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                      />
+                      <div className="sm:col-span-2">
+                        <button
+                          onClick={async () => {
+                            await submit({
+                              kind: "other",
+                              title: "Fuel loan request",
+                              detail: `${member.name} requests a fuel loan for ${fuelLoanVehicle || "vehicle"} / ${fuelLoanType || "fuel"} / ${fuelLoanLitres || "0"} litres / ${fuelLoanAmount || "0"} KES.`,
+                              requestedBy: member.id,
+                              requestedByName: member.name,
+                              payload: {
+                                requestType: "fuel_loan",
+                                vehiclePlate: fuelLoanVehicle,
+                                fuelType: fuelLoanType,
+                                litres: fuelLoanLitres,
+                                amount: fuelLoanAmount,
+                              },
+                            });
+                            toast.success("Fuel loan request submitted for director approval");
+                            setFuelLoanVehicle("");
+                            setFuelLoanType("");
+                            setFuelLoanLitres("");
+                            setFuelLoanAmount("");
+                          }}
+                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Submit fuel request
+                        </button>
+                      </div>
+                    </div>
+                  </Section>
+                )}
               </>
             )}
 
