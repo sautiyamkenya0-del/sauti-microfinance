@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { listAuditActorsFromServer, listAuditEntries, recordAudit } from "@/lib/audit.server";
+import { requireDirectorActor, requireSignedInSession } from "@/lib/auth.server";
 
 /** Public wrapper: log an action from the client. */
 export const logAudit = createServerFn({ method: "POST" })
@@ -20,6 +21,7 @@ export const logAudit = createServerFn({ method: "POST" })
     },
   )
   .handler(async ({ data }) => {
+    await requireSignedInSession();
     await recordAudit(data);
     return { ok: true };
   });
@@ -37,9 +39,13 @@ export const listAudit = createServerFn({ method: "POST" })
       } = {},
     ) => d,
   )
-  .handler(async ({ data }) => listAuditEntries(data));
+  .handler(async ({ data }) => {
+    await requireDirectorActor();
+    return listAuditEntries(data);
+  });
 
 /** Distinct actors for the filter dropdown. */
-export const listAuditActors = createServerFn({ method: "GET" }).handler(async () =>
-  listAuditActorsFromServer(),
-);
+export const listAuditActors = createServerFn({ method: "GET" }).handler(async () => {
+  await requireDirectorActor();
+  return listAuditActorsFromServer();
+});

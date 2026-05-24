@@ -5,6 +5,7 @@ import {
   listRuntimeSecretsFromServer,
   saveRuntimeSecretOnServer,
 } from "@/lib/runtime-secrets.server";
+import { requireDirectorActor } from "@/lib/auth.server";
 
 type RuntimeSecretListResult = {
   items: Array<{ key: string; preview: string; length: number; updated_at: string }>;
@@ -15,7 +16,10 @@ type RuntimeSecretListResult = {
 /** List all runtime secret keys with redacted previews. */
 export const listRuntimeSecrets = createServerFn({ method: "GET" }).handler<
   Promise<RuntimeSecretListResult>
->(async () => listRuntimeSecretsFromServer());
+>(async () => {
+  await requireDirectorActor();
+  return listRuntimeSecretsFromServer();
+});
 
 /** Upsert a runtime secret. */
 export const setRuntimeSecret = createServerFn({ method: "POST" })
@@ -43,10 +47,11 @@ export const setRuntimeSecret = createServerFn({ method: "POST" })
     },
   )
   .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
     await saveRuntimeSecretOnServer(data.key, data.value, {
-      actorId: data.actorId,
-      actorName: data.actorName,
-      actorRole: data.actorRole,
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
     });
 
     return { ok: true };
@@ -65,10 +70,11 @@ export const deleteRuntimeSecret = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
     await deleteRuntimeSecretOnServer(data.key, {
-      actorId: data.actorId,
-      actorName: data.actorName,
-      actorRole: data.actorRole,
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
     });
 
     return { ok: true };

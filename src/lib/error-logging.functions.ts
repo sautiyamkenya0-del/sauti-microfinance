@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 
+import { requireDirectorActor, requireSignedInSession } from "@/lib/auth.server";
 import { clearOldErrorLogs, getErrorLogs, logErrorToServer } from "@/lib/error-logging.server";
 
 export const listErrorLogs = createServerFn({ method: "GET" })
@@ -12,15 +13,16 @@ export const listErrorLogs = createServerFn({ method: "GET" })
       days?: number;
     }) => data,
   )
-  .handler(async ({ data }) =>
-    getErrorLogs({
+  .handler(async ({ data }) => {
+    await requireDirectorActor();
+    return getErrorLogs({
       limit: data.limit ?? 50,
       offset: data.offset ?? 0,
       level: data.level,
       category: data.category,
       days: data.days ?? 7,
-    }),
-  );
+    });
+  });
 
 export const recordErrorLog = createServerFn({ method: "POST" })
   .inputValidator(
@@ -35,6 +37,7 @@ export const recordErrorLog = createServerFn({ method: "POST" })
     }) => data,
   )
   .handler(async ({ data }) => {
+    await requireSignedInSession();
     await logErrorToServer({
       level: data.level,
       category: data.category,
@@ -50,6 +53,7 @@ export const recordErrorLog = createServerFn({ method: "POST" })
 export const deleteOldErrorLogs = createServerFn({ method: "POST" })
   .inputValidator((data: { daysOld?: number }) => data)
   .handler(async ({ data }) => {
+    await requireDirectorActor();
     const success = await clearOldErrorLogs(data.daysOld ?? 30);
     return { ok: success };
   });

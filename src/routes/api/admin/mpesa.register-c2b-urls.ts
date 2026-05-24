@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { requireManagerOrDirectorActor } from "@/lib/auth.server";
+import { requireDirectorActor } from "@/lib/auth.server";
 import { fetchMpesaDaraja } from "@/lib/mpesa-config.server";
 import { readServerEnv } from "@/lib/server-env";
 import { logErrorToServer } from "@/lib/error-logging.server";
@@ -36,8 +36,8 @@ export const Route = createFileRoute("/api/admin/mpesa/register-c2b-urls")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        // Require admin/director authentication
-        await requireManagerOrDirectorActor();
+        // Live payment routing is director-only.
+        await requireDirectorActor();
 
         try {
           const consumerKey = readServerEnv("MPESA_CONSUMER_KEY");

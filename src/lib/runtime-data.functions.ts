@@ -542,6 +542,18 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
   ].find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
 
+  const visibleSupplierMemberIds = new Set([
+    signedMemberId,
+    ...((requestsResult.data ?? []) as DbRow[]).map((request) => readText(request.member_id)),
+    ...((loansResult.data ?? []) as DbRow[]).map((loan) => readText(loan.member_id)),
+  ]);
+  const memberRows =
+    mode === "supplier"
+      ? ((membersResult.data ?? []) as DbRow[]).filter((row) =>
+          visibleSupplierMemberIds.has(readText(row.id)),
+        )
+      : ((membersResult.data ?? []) as DbRow[]);
+
   return {
     mode,
     signedSupplierId,
@@ -551,7 +563,7 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
     requests: (requestsResult.data ?? []) as DbRow[],
     outflows: (outflowsResult.data ?? []) as DbRow[],
     loans: (loansResult.data ?? []) as DbRow[],
-    members: (membersResult.data ?? []) as DbRow[],
+    members: memberRows,
     internalStore: (internalStoreResult.data ?? []) as DbRow[],
   };
 });
@@ -586,7 +598,10 @@ export const listMemberSupplierRequestsRecord = createServerFn({ method: "GET" }
     if (suppliersResult.error) throw new Error(suppliersResult.error.message);
 
     const supplierNames = new Map(
-      (suppliersResult.data ?? []).map((row) => [readText((row as DbRow).id), readText((row as DbRow).name)]),
+      (suppliersResult.data ?? []).map((row) => [
+        readText((row as DbRow).id),
+        readText((row as DbRow).name),
+      ]),
     );
 
     return (requestsResult.data ?? []).map((row) => {
@@ -594,7 +609,8 @@ export const listMemberSupplierRequestsRecord = createServerFn({ method: "GET" }
       return {
         id: readText(request.id),
         supplierId: readText(request.supplier_id),
-        supplierName: supplierNames.get(readText(request.supplier_id)) ?? readText(request.supplier_id),
+        supplierName:
+          supplierNames.get(readText(request.supplier_id)) ?? readText(request.supplier_id),
         loanId: optionalText(request.loan_id),
         kind: readText(request.kind),
         amount: readNumber(request.amount),

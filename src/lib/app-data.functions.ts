@@ -3964,7 +3964,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         .toLowerCase() || undefined,
   }))
   .handler(async ({ data }) => {
-    await requireStaffActor();
+    await requireDirectorActor();
     const supabaseAdmin = await requireSupabaseAdmin();
 
     const [events, allocations, linkedTransactions, members, payoutRequests] = await Promise.all([
@@ -7041,10 +7041,7 @@ async function resolveSupplierMutationActor(runtimeDb: any, supplierId?: string)
   }
 
   const member = await requireMemberActor();
-  const supplierQuery = runtimeDb
-    .from("suppliers")
-    .select("id")
-    .eq("member_id", member.id);
+  const supplierQuery = runtimeDb.from("suppliers").select("id").eq("member_id", member.id);
   if (supplierId) supplierQuery.eq("id", supplierId);
   const { data: supplier, error } = await supplierQuery.maybeSingle();
   if (error) throw new Error(error.message);
@@ -7640,7 +7637,7 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
     const fuelType = readSupplierDetailText(detail, "fuelType");
     const driverMemberId =
       data.kind === "fuel"
-        ? readSupplierDetailText(detail, "driverMemberId") ?? data.memberId
+        ? (readSupplierDetailText(detail, "driverMemberId") ?? data.memberId)
         : undefined;
     const verificationCode = data.kind === "fuel" ? supplierVerificationCode() : undefined;
     const id = makeId("SFR");
@@ -7733,7 +7730,7 @@ export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
         status: "fulfilled",
         fulfilled_by_name: data.fulfilledByName ?? actor.name,
         fulfilled_at: now,
-        verified_at: request.kind === "fuel" ? now : request.verified_at ?? null,
+        verified_at: request.kind === "fuel" ? now : (request.verified_at ?? null),
         verified_by_member_id:
           request.kind === "fuel"
             ? (request.driver_member_id ?? request.member_id ?? null)
