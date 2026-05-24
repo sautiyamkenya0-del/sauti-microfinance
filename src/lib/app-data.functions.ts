@@ -318,6 +318,7 @@ const MANDATORY_SHARES_THRESHOLD = DEFAULT_POLICY_SETTINGS.percentages.mandatory
 const COMPLIANCE_SAVINGS_PCT = 0.6;
 const COMPLIANCE_SHARES_PCT = 0.4;
 const POST_COMPLIANCE_LOAN_SAVINGS_PCT = 0.2;
+const PURPOSE_POOL_TRANSFERABLE_SOURCE_PCT = 0.75;
 const SPECIAL_MEMBER_TRANSACTION_INTEREST = 100;
 const SPECIAL_MEMBER_BUFFER_TARGET = 3000;
 const MAX_FIELD_VISIT_PHOTOS = 6;
@@ -3755,6 +3756,7 @@ async function buildAppData(version?: string) {
     const [
       memberResult,
       staffResult,
+      investorRows,
       loansResult,
       transactionRows,
       penaltiesResult,
@@ -3764,6 +3766,13 @@ async function buildAppData(version?: string) {
     ] = await Promise.all([
       supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
       supabaseAdmin.from("staff").select("id, name, role").order("id"),
+      fetchAllRows(() =>
+        supabaseAdmin
+          .from("investors")
+          .select("*")
+          .eq("member_id", session.memberId)
+          .order("joined_at", { ascending: false }),
+      ),
       supabaseAdmin
         .from("loans")
         .select("*")
@@ -3812,6 +3821,7 @@ async function buildAppData(version?: string) {
       portalMemberId: memberResult.data.id,
       staff: (staffResult.data ?? []).map(mapStaffRow),
       members: [mapMemberRow(memberResult.data)],
+      investors: investorRows.map(mapInvestorRow),
       loans: (loansResult.data ?? []).map(mapLoanRow),
       transactions: transactionRows.map(mapTransactionRow),
       penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
@@ -7462,6 +7472,17 @@ export const transferMemberDocketRecord = createServerFn({ method: "POST" })
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const member = await loadMemberForDocket(runtimeDb, data.memberId);
+    if (data.fromDocket === "purpose_pool") {
+      const currentPurposePool = await getMemberDocketBalance(runtimeDb, member, "purpose_pool");
+      const transferablePurposePool = roundMoney(
+        currentPurposePool * PURPOSE_POOL_TRANSFERABLE_SOURCE_PCT,
+      );
+      if (data.amount > transferablePurposePool) {
+        throw new Error(
+          `Full purpose pool as a source excludes Operations/Admin. Available to transfer is ${transferablePurposePool}/=; ${roundMoney(currentPurposePool - transferablePurposePool)}/= remains reserved for Operations/Admin.`,
+        );
+      }
+    }
     await adjustMemberDocketBalance({
       runtimeDb,
       member,

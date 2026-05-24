@@ -6,6 +6,7 @@ import {
   loanSummary,
   loanTermDaysOf,
   type Loan,
+  type LoanKind,
 } from "@/lib/store";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { useMemo, useState } from "react";
@@ -21,6 +22,8 @@ type Filter =
   | "defaulted"
   | "overdue";
 
+type ProductFilter = "all" | LoanKind;
+
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All Loans" },
   { key: "active", label: "Active Loans" },
@@ -32,6 +35,21 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "overdue", label: "Overdue Loans" },
 ];
 
+const PRODUCT_FILTERS: { key: ProductFilter; label: string }[] = [
+  { key: "all", label: "All products" },
+  { key: "financial", label: "Financial loans" },
+  { key: "fuel", label: "Fuel loans" },
+  { key: "stock", label: "Stock loans" },
+  { key: "service", label: "Service loans" },
+];
+
+function loanKindLabel(kind?: LoanKind) {
+  if (kind === "fuel") return "Fuel";
+  if (kind === "stock") return "Stock";
+  if (kind === "service") return "Service";
+  return "Financial";
+}
+
 function termDaysOf(l: Loan): number {
   return loanTermDaysOf(l);
 }
@@ -40,7 +58,7 @@ function dueDateOf(l: Loan): string {
   return loanSummary(l).dueDate;
 }
 
-/** Daily savings tier as per common SBC plans: small loans → 50/day, larger → 100/day. */
+/** Daily compliance contribution tier as per common SBC plans. */
 function dailyTotalOf(l: Loan): number {
   return loanSummary(l).dailyCollectionAmount;
 }
@@ -58,6 +76,7 @@ export function LoanBook({
 }) {
   const { loans, members, staff, currentUser, recordTransaction, policySettings } = useStore();
   const [filter, setFilter] = useState<Filter>("all");
+  const [productFilter, setProductFilter] = useState<ProductFilter>("all");
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
   const [repayFor, setRepayFor] = useState<string | null>(null);
@@ -80,6 +99,9 @@ export function LoanBook({
     ];
 
     list = list.filter((row) => {
+      const rowLoanKind = row.kind === "live" ? (row.loan.loanKind ?? "financial") : "financial";
+      if (productFilter !== "all" && rowLoanKind !== productFilter) return false;
+
       const status = row.loan.status;
       const isFinished =
         row.kind === "carryover"
@@ -128,7 +150,17 @@ export function LoanBook({
       });
     }
     return list.sort((a, b) => String(b.sortKey).localeCompare(String(a.sortKey)));
-  }, [loans, members, filter, activeQuery, currentUser, today, carryoverLoans, policySettings]);
+  }, [
+    loans,
+    members,
+    filter,
+    productFilter,
+    activeQuery,
+    currentUser,
+    today,
+    carryoverLoans,
+    policySettings,
+  ]);
 
   const empty = loans.length === 0 && carryoverLoans.length === 0;
 
@@ -157,6 +189,21 @@ export function LoanBook({
         })}
       </div>
 
+      <div className="px-5 pt-3 flex flex-wrap gap-2">
+        {PRODUCT_FILTERS.map((product) => {
+          const active = productFilter === product.key;
+          return (
+            <button
+              key={product.key}
+              onClick={() => setProductFilter(product.key)}
+              className={`px-3.5 py-1.5 rounded-md text-xs font-medium border transition ${active ? "bg-accent text-accent-foreground border-accent" : "bg-card border-border text-foreground hover:bg-muted"}`}
+            >
+              {product.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Search */}
       <div className="px-5 pt-3 pb-4 flex gap-2">
         <input
@@ -177,6 +224,7 @@ export function LoanBook({
             setQuery("");
             setActiveQuery("");
             setFilter("all");
+            setProductFilter("all");
           }}
           className="px-4 py-2 rounded-md bg-card border border-border text-sm font-medium hover:bg-muted"
         >
@@ -189,6 +237,7 @@ export function LoanBook({
           <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
             <tr>
               <th className="text-left px-5 py-3">Loan #</th>
+              <th className="text-left px-5 py-3">Type</th>
               <th className="text-left px-5 py-3">Client</th>
               <th className="text-left px-5 py-3">Business</th>
               <th className="text-left px-5 py-3">Status</th>
@@ -203,14 +252,14 @@ export function LoanBook({
           <tbody className="divide-y divide-border">
             {empty && (
               <tr>
-                <td colSpan={10} className="px-5 py-10 text-center text-sm text-muted-foreground">
+                <td colSpan={11} className="px-5 py-10 text-center text-sm text-muted-foreground">
                   No loans yet — applications you create will appear here.
                 </td>
               </tr>
             )}
             {!empty && visible.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-5 py-10 text-center text-sm text-muted-foreground">
+                <td colSpan={11} className="px-5 py-10 text-center text-sm text-muted-foreground">
                   No loans match this filter.
                 </td>
               </tr>
@@ -253,6 +302,19 @@ export function LoanBook({
                     ) : null}
                   </td>
                   <td className="px-5 py-3">
+                    <Badge
+                      tone={
+                        row.kind === "live" &&
+                        liveLoan.loanKind &&
+                        liveLoan.loanKind !== "financial"
+                          ? "warning"
+                          : "muted"
+                      }
+                    >
+                      {loanKindLabel(row.kind === "live" ? liveLoan.loanKind : "financial")}
+                    </Badge>
+                  </td>
+                  <td className="px-5 py-3">
                     <div className="font-medium uppercase text-xs">
                       {(m?.name ?? "—").toUpperCase()}
                     </div>
@@ -288,7 +350,7 @@ export function LoanBook({
                   <td className="px-5 py-3 text-xs leading-tight">
                     <div>{summary.termDays} days</div>
                     <div className="text-[11px] text-muted-foreground">
-                      Savings{" "}
+                      Compliance{" "}
                       {fmtKES(
                         row.kind === "live"
                           ? loanDailySavingsAmount(

@@ -8,11 +8,10 @@ import { Section } from "@/components/ui-bits";
 import { SBC_FEES, SBC_UPFRONT_TABLE, fmtKES, useStore } from "@/lib/store";
 
 const PURPOSE_POOL_DISTRIBUTION = [
-  ["Levies & Permits Fund", "35%", "Enables members to pay business permits flexibly."],
-  ["Biashara Boost", "20%", "Business growth and expansion."],
-  ["Welfare Fund", "10%", "Emergencies such as accidents, sickness, and funerals."],
-  ["Legal Fund", "15%", "Legal aid and representation."],
-  ["Operations/Admin", "20%", "Running SBC, staff, IT systems, and growth."],
+  ["Levies & Permits Fund", "40%", "Enables members to pay business permits flexibly."],
+  ["Welfare Fund", "15%", "Emergencies such as accidents, sickness, and funerals."],
+  ["Legal Fund", "20%", "Legal aid and representation."],
+  ["Operations/Admin", "25%", "Running SBC, staff, IT systems, and growth."],
 ] as const;
 
 export const Route = createFileRoute("/policies")({

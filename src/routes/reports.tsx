@@ -50,31 +50,25 @@ const PURPOSE_POOL_DISTRIBUTION = [
   {
     key: "levies_permits",
     label: "Levies & Permits Fund",
-    pct: 35,
+    pct: 40,
     purpose: "Enables members to pay business permits flexibly.",
-  },
-  {
-    key: "business_support",
-    label: "Business Support",
-    pct: 20,
-    purpose: "Support for working-capital gaps and urgent business continuity needs.",
   },
   {
     key: "welfare",
     label: "Welfare Fund",
-    pct: 10,
+    pct: 15,
     purpose: "Emergencies such as accidents, sickness, and funerals.",
   },
   {
     key: "legal",
     label: "Legal Fund",
-    pct: 15,
+    pct: 20,
     purpose: "Legal aid and representation.",
   },
   {
     key: "operations_admin",
     label: "Operations/Admin",
-    pct: 20,
+    pct: 25,
     purpose: "Running SBC, staff, IT systems, and growth.",
   },
 ];

@@ -330,7 +330,7 @@ export function RepeatApplication({
             at {calc.ratePct}%.
           </div>
           <Select
-            label="Daily Savings Plan"
+            label="Daily Compliance Contribution Plan"
             value={savingsPlan}
             onChange={(v) => setSavingsPlan(v as "50" | "100")}
             options={["50", "100"]}

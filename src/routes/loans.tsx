@@ -41,7 +41,7 @@ export const Route = createFileRoute("/loans")({
 });
 
 function LoansHub() {
-  const { currentUser, memberLoanCount, members } = useStore();
+  const { currentUser, memberLoanCount, members, loans } = useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const [tab, setTab] = useState<Tab>("book");
   const [selectedLoanKind, setSelectedLoanKind] = useState<LoanKind>("financial");
@@ -64,6 +64,18 @@ function LoansHub() {
     memberLoanCount(memberId) + carryoverLoanCount(memberId);
   const isFirstTime = selectedMemberId ? totalLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
+  const loanKindCounts = useMemo(
+    () =>
+      LOAN_KIND_OPTIONS.reduce<Record<LoanKind, number>>(
+        (counts, option) => ({
+          ...counts,
+          [option.value]: loans.filter((loan) => (loan.loanKind ?? "financial") === option.value)
+            .length,
+        }),
+        { financial: 0, fuel: 0, stock: 0, service: 0 },
+      ),
+    [loans],
+  );
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const eligibleMemberAccounts = useMemo(
     () => memberAccounts.filter((member) => memberMatchesLoanKind(member, selectedLoanKind)),
@@ -107,6 +119,29 @@ function LoansHub() {
       />
       <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="lending" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {LOAN_KIND_OPTIONS.map((option) => {
+            const active = selectedLoanKind === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  setSelectedLoanKind(option.value);
+                  setSelectedMemberId("");
+                  setTab("new");
+                }}
+                className={`rounded-lg border p-4 text-left transition ${active ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-muted/50"}`}
+              >
+                <div className="text-sm font-semibold">{option.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{option.memberHint}</div>
+                <div className="mt-3 text-xs font-medium">
+                  {loanKindCounts[option.value]} record(s)
+                </div>
+              </button>
+            );
+          })}
+        </div>
         <div className="flex flex-wrap items-center gap-1 border-b border-border">
           {tabs
             .filter((item) => !item.hidden)

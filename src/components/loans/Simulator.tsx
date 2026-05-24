@@ -295,7 +295,7 @@ export function Simulator() {
               band at {pricing.ratePct}% for pricing.
             </p>
 
-            <Field label="Daily Savings Inclusive">
+            <Field label="Daily Compliance Contribution Inclusive">
               <select
                 value={dailySavings}
                 onChange={(event) => setDailySavings(Number(event.target.value))}
@@ -308,8 +308,8 @@ export function Simulator() {
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                Over {pricing.termDays} days: {fmtKES(dailySavings * pricing.termDays)} added to
-                member savings.
+                Over {pricing.termDays} days: {fmtKES(dailySavings * pricing.termDays)} credited to
+                the member compliance contribution.
               </p>
             </Field>
 

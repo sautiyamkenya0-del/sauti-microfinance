@@ -1,7 +1,297 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { requireSignedInSession } from "@/lib/auth.server";
+import { getSupabaseAdminOrNull } from "@/integrations/supabase/client.server";
+import { requireSignedInSession, requireStaffActor } from "@/lib/auth.server";
 import { streamGroqChat } from "@/lib/groq.server";
+
+type AiTableSpec = {
+  key: string;
+  table: string;
+  columns?: string;
+  limit?: number;
+  build?: (query: any) => any;
+};
+
+function missingTableOrColumn(error: any) {
+  const message = String(error?.message ?? "").toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    message.includes("does not exist") ||
+    message.includes("column")
+  );
+}
+
+async function readAiTable(db: any, spec: AiTableSpec) {
+  let query = db.from(spec.table).select(spec.columns ?? "*");
+  if (spec.build) query = spec.build(query);
+  if (spec.limit) query = query.limit(spec.limit);
+
+  const { data, error } = await query;
+  if (error) {
+    if (missingTableOrColumn(error)) {
+      return { key: spec.key, rows: [], warning: `${spec.table}: ${error.message}` };
+    }
+    throw new Error(error.message);
+  }
+  return { key: spec.key, rows: data ?? [], warning: undefined };
+}
+
+async function buildStaffAiSnapshot(clientSnapshot: unknown) {
+  const actor = await requireStaffActor();
+  const db = getSupabaseAdminOrNull() as any;
+  if (!db) {
+    return {
+      clientSnapshot,
+      serverSnapshotUnavailable:
+        "Supabase admin client is not configured, so SautiAI is using the client snapshot only.",
+    };
+  }
+
+  const specs: AiTableSpec[] = [
+    {
+      key: "staff",
+      table: "staff",
+      columns:
+        "id, name, role, email, phone, national_id, address, notes, photo, can_mark_attendance, fingerprint_enrolled, created_at, updated_at",
+      build: (query) => query.order("id", { ascending: true }),
+    },
+    { key: "members", table: "members", build: (query) => query.order("id", { ascending: true }) },
+    {
+      key: "investors",
+      table: "investors",
+      build: (query) => query.order("joined_at", { ascending: false }),
+    },
+    {
+      key: "loans",
+      table: "loans",
+      limit: 20000,
+      build: (query) => query.order("start_date", { ascending: false }),
+    },
+    {
+      key: "transactions",
+      table: "transactions",
+      limit: 30000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "mpesaEvents",
+      table: "mpesa_events",
+      limit: 30000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "mpesaReceiptAllocations",
+      table: "mpesa_receipt_allocations",
+      limit: 30000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "pettyCash",
+      table: "petty_cash",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "penalties",
+      table: "penalties",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "roundOff",
+      table: "round_off",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "attendance",
+      table: "attendance",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "appraisals",
+      table: "appraisals",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "fieldVisits",
+      table: "field_visits",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "followups",
+      table: "followups",
+      build: (query) => query.order("date", { ascending: false }),
+    },
+    {
+      key: "feePolicies",
+      table: "fee_policies",
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    { key: "policySettings", table: "policy_settings" },
+    {
+      key: "performanceTargets",
+      table: "performance_targets",
+      build: (query) => query.order("start_on", { ascending: false }),
+    },
+    {
+      key: "memberCarryoverLoans",
+      table: "member_carryover_loans",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "suppliers",
+      table: "suppliers",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "supplierFulfillmentRequests",
+      table: "supplier_fulfillment_requests",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "supplierInventory",
+      table: "supplier_inventory_items",
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    {
+      key: "internalStore",
+      table: "internal_store_items",
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    { key: "memberDocketBalances", table: "member_docket_balances" },
+    {
+      key: "memberDocketMovements",
+      table: "member_docket_movements",
+      limit: 20000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "systemOutflows",
+      table: "system_outflows",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "systemPayoutRequests",
+      table: "system_payout_requests",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    { key: "staffPayrollProfiles", table: "staff_payroll_profiles" },
+    {
+      key: "staffPayrollPayments",
+      table: "staff_payroll_payments",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "staffMemos",
+      table: "staff_memos",
+      build: (query) => query.order("memo_date", { ascending: false }),
+    },
+    {
+      key: "approvalRequests",
+      table: "approval_requests",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "supportThreads",
+      table: "support_threads",
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    {
+      key: "supportMessages",
+      table: "support_messages",
+      limit: 20000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "auditLog",
+      table: "audit_log",
+      limit: 10000,
+      build: (query) => query.order("ts", { ascending: false }),
+    },
+  ];
+
+  const entries = await Promise.all(specs.map((spec) => readAiTable(db, spec)));
+  const tables: Record<string, unknown[]> = {};
+  const counts: Record<string, number> = {};
+  const warnings: string[] = [];
+  for (const entry of entries) {
+    tables[entry.key] = entry.rows;
+    counts[entry.key] = entry.rows.length;
+    if (entry.warning) warnings.push(entry.warning);
+  }
+
+  return {
+    audience: "staff",
+    currentStaff: actor,
+    access: "director-grade read context for SautiAI analysis; money movement still needs a human-confirmed system action.",
+    generatedAt: new Date().toISOString(),
+    counts,
+    warnings,
+    tables,
+    clientSnapshot,
+  };
+}
+
+async function buildMemberAiSnapshot(memberId: string, clientSnapshot: unknown) {
+  const db = getSupabaseAdminOrNull() as any;
+  if (!db) return clientSnapshot;
+
+  const specs: AiTableSpec[] = [
+    {
+      key: "member",
+      table: "members",
+      build: (query) => query.eq("id", memberId).limit(1),
+    },
+    {
+      key: "loans",
+      table: "loans",
+      build: (query) => query.eq("member_id", memberId).order("start_date", { ascending: false }),
+    },
+    {
+      key: "transactions",
+      table: "transactions",
+      limit: 500,
+      build: (query) =>
+        query.eq("member_id", memberId).order("created_at", { ascending: false }),
+    },
+    {
+      key: "penalties",
+      table: "penalties",
+      build: (query) => query.eq("member_id", memberId).order("date", { ascending: false }),
+    },
+    {
+      key: "roundOff",
+      table: "round_off",
+      build: (query) => query.eq("member_id", memberId).order("date", { ascending: false }),
+    },
+    {
+      key: "supplierRequests",
+      table: "supplier_fulfillment_requests",
+      build: (query) => query.eq("member_id", memberId).order("created_at", { ascending: false }),
+    },
+    {
+      key: "feePolicies",
+      table: "fee_policies",
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    { key: "policySettings", table: "policy_settings" },
+  ];
+
+  const entries = await Promise.all(specs.map((spec) => readAiTable(db, spec)));
+  const tables: Record<string, unknown[]> = {};
+  const warnings: string[] = [];
+  for (const entry of entries) {
+    tables[entry.key] = entry.rows;
+    if (entry.warning) warnings.push(entry.warning);
+  }
+
+  return {
+    audience: "member",
+    generatedAt: new Date().toISOString(),
+    warnings,
+    tables,
+    clientSnapshot,
+  };
+}
 
 export const Route = createFileRoute("/api/ai/chat")({
   server: {
@@ -12,6 +302,10 @@ export const Route = createFileRoute("/api/ai/chat")({
           const { messages, snapshot, role, mode } = await request.json();
           const safeMode = session.authMode === "member" ? "customer" : mode;
           const safeRole = session.authMode === "member" ? "member" : role;
+          const enrichedSnapshot =
+            session.authMode === "member" && session.memberId
+              ? await buildMemberAiSnapshot(session.memberId, snapshot)
+              : await buildStaffAiSnapshot(snapshot);
 
           const system =
             safeMode === "customer"
@@ -28,8 +322,8 @@ Voice and style:
 
 You can help with:
 - How to pay using Paybill and the account number format.
-- Their savings, shares, active loans, and fees using the snapshot below.
-- Loan eligibility basics: members first build KSh 5,000 in mandatory savings and KSh 3,000 in mandatory shares, mandatory fees clear first, and the sticker fee only applies to members with a permanent business or physical shop.
+- Their daily compliance contribution, shares, active loans, and fees using the snapshot below.
+- Loan eligibility basics: members first build KSh 5,000 in daily compliance contribution / mandatory savings and KSh 3,000 in mandatory shares, mandatory fees clear first, and the sticker fee only applies to members with a permanent business or physical shop.
 - Loan terms, penalties, round-off, and general Sauti questions.
 
 Boundaries:
@@ -40,9 +334,9 @@ Boundaries:
 - Do not reveal staff names, internal IDs, or other members' data.
 
 Member context:
-${JSON.stringify(snapshot).slice(0, 4000)}`
+${JSON.stringify(enrichedSnapshot).slice(0, 12000)}`
               : `You are SautiAI, the in-app assistant for Sauti Microfinance, a Kenyan SACCO running on M-Pesa Paybill (account format SBC###).
-You are speaking to internal staff. You have read-only access to a JSON snapshot of the live app state and may propose actions, but the human must confirm before anything is written.
+You are speaking to internal staff. You have director-grade read access to the included live system snapshot and may propose actions, but the human must confirm before anything is written.
 
 Voice and style:
 - Sound warm, calm, capable, and easy to talk to.
@@ -53,8 +347,9 @@ Voice and style:
 - Do not dump role, counts, Current State, or Issues detected blocks unless they help answer the question.
 
 Working rules:
-- Use the snapshot below as your source for Sauti data.
+- Use the server-built snapshot below as your source for Sauti data. It includes members, investors, loans, transactions, M-Pesa records, suppliers, stock, fuel/service requests, money dockets, outflows, payroll, approvals, support, policy settings, and audit history when those tables exist.
 - When asked about a member, loan, or transaction, find it by id, name, or phone.
+- When asked about money movement dockets, remember Full purpose pool as a source excludes Operations/Admin, while Full purpose pool as a receiver includes Operations/Admin.
 - If you detect anomalies such as overdue loans, savings shortfalls, unusual outflows, or mis-allocated M-Pesa payments, call them out clearly under the plain label: Issues detected:
 - For action requests such as approvals, postings, or disbursements, respond with a short proposal and end with: Confirm to apply.
 - Never claim an action is already done unless the snapshot explicitly shows it already happened.
@@ -65,7 +360,7 @@ Off-topic handling:
 - If the request is general non-time-sensitive knowledge, answer briefly, then pivot back naturally.
 
 Snapshot:
-${JSON.stringify(snapshot).slice(0, 12000)}`;
+${JSON.stringify(enrichedSnapshot).slice(0, 60000)}`;
 
           const fullMessages = [{ role: "system", content: system }, ...messages];
           return await streamGroqChat(fullMessages);

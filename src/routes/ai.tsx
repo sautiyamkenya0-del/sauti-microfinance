@@ -19,7 +19,7 @@ function AiPage() {
     {
       role: "assistant",
       content:
-        "Hello, I'm SautiAI. Ask me about members, loans, payments, or anything that looks unusual and I'll keep it short and useful.",
+        "Hello, I'm SautiAI. Ask me about members, investors, suppliers, loans, dockets, payments, or anything that looks unusual and I'll keep it short and useful.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -135,7 +135,7 @@ function AiPage() {
     <>
       <AppHeader
         title="SautiAI"
-        subtitle="Read-only assistant for members, loans and payments. It can suggest actions, but nothing posts until you confirm."
+        subtitle="Director-grade read assistant across members, loans, M-Pesa, suppliers, dockets, payroll, approvals, support, and audit logs. Nothing posts until a human confirms."
       />
       <main className="flex-1 p-6 lg:p-8 flex flex-col gap-4 max-w-4xl w-full mx-auto">
         <div className="flex-1 bg-card border border-border rounded-xl p-4 overflow-y-auto space-y-4 min-h-[55vh]">

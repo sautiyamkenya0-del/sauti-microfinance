@@ -54,6 +54,7 @@ function Portal() {
   const {
     staff,
     members,
+    investors,
     loans,
     transactions,
     penalties,
@@ -87,6 +88,9 @@ function Portal() {
   const [tab, setTab] = useState<Tab>("overview");
 
   const member = members.find((m) => m.id === memberId);
+  const investorProfile = member
+    ? investors.find((row) => row.id === member.investorId || row.memberId === member.id)
+    : undefined;
   const fieldOfficerName =
     member?.fieldOfficerId && staff.find((person) => person.id === member.fieldOfficerId)?.name;
   const myLoans = loans.filter((l) => l.memberId === memberId);
@@ -170,7 +174,8 @@ function Portal() {
                 Member Portal
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Track your savings, loans, fees, and support in one secure place.
+                Track your daily compliance contribution, loans, fees, and support in one secure
+                place.
               </p>
             </div>
             <button
@@ -274,7 +279,7 @@ function Portal() {
               <>
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <StatCard
-                    label="Savings"
+                    label="Daily compliance contribution"
                     value={fmtKES(member.savingsBalance)}
                     hint={
                       member.savingsBalance < 1000 ? "Below mandatory 1,000" : "Above threshold"
@@ -301,6 +306,16 @@ function Portal() {
                     tone="success"
                   />
                 </div>
+                {investorProfile && (
+                  <Section title="My Investment">
+                    <div className="grid gap-3 p-5 text-sm sm:grid-cols-4">
+                      <Stat label="Investor ID" value={investorProfile.id} />
+                      <Stat label="Contributed" value={fmtKES(investorProfile.contributed)} />
+                      <Stat label="Equity" value={`${investorProfile.sharePct}%`} />
+                      <Stat label="Joined" value={investorProfile.joinedAt} />
+                    </div>
+                  </Section>
+                )}
                 <Section title="My Penalties">
                   <div className="p-5 space-y-2 text-sm">
                     {myPen.length === 0 && (

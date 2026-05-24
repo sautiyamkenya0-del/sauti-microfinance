@@ -23,7 +23,7 @@ export function MemberAIChat({ member }: { member: Member }) {
   const [msgs, setMsgs] = useState<Msg[]>([
     {
       role: "assistant",
-      content: `Hi ${member.firstName ?? member.name.split(" ")[0]}! I'm SautiAI. Ask me about your savings, loans, M-Pesa Paybill, fees, or anything about Sauti Microfinance. If you want a real person, tap Talk to a real person any time.`,
+      content: `Hi ${member.firstName ?? member.name.split(" ")[0]}! I'm SautiAI. Ask me about your daily compliance contribution, loans, M-Pesa Paybill, fees, or anything about Sauti Microfinance. If you want a real person, tap Talk to a real person any time.`,
     },
   ]);
   const [input, setInput] = useState("");

@@ -19,30 +19,29 @@ export const Route = createFileRoute("/savings")({
   component: SavingsPage,
 });
 
-type SavingsDocket = "mandatory_savings" | "withdrawable_savings" | "loan_savings" | "penalty_payment";
-type TransferDocket =
+type MoneyDocket =
   | "mandatory_savings"
   | "withdrawable_savings"
   | "loan_savings"
   | "shares"
   | "share_reserve"
-  | "investment";
+  | "purpose_pool"
+  | "investment"
+  | "penalty_payment";
 
-const DEPOSIT_DOCKETS: Array<[SavingsDocket, string]> = [
-  ["mandatory_savings", "Compliance contribution"],
-  ["withdrawable_savings", "Withdrawable savings"],
-  ["loan_savings", "Loan savings"],
-  ["penalty_payment", "Pay penalties"],
-];
-
-const TRANSFER_DOCKETS: Array<[TransferDocket, string]> = [
-  ["mandatory_savings", "Compliance contribution"],
+const MONEY_DOCKETS: Array<[MoneyDocket, string]> = [
+  ["mandatory_savings", "Daily compliance contribution"],
   ["withdrawable_savings", "Withdrawable savings"],
   ["loan_savings", "Loan savings"],
   ["shares", "Shares"],
   ["share_reserve", "Share reserve"],
+  ["purpose_pool", "Full purpose pool"],
   ["investment", "Investment"],
+  ["penalty_payment", "Penalty payment reserve"],
 ];
+
+const DEPOSIT_DOCKETS = MONEY_DOCKETS;
+const TRANSFER_DOCKETS = MONEY_DOCKETS;
 
 function SavingsPage() {
   const { policySettings } = useStore();
@@ -54,14 +53,14 @@ function SavingsPage() {
   const [busy, setBusy] = useState(false);
   const [depositForm, setDepositForm] = useState({
     memberId: "",
-    docket: "mandatory_savings" as SavingsDocket,
+    docket: "mandatory_savings" as MoneyDocket,
     amount: 0,
     reason: "",
   });
   const [transferForm, setTransferForm] = useState({
     memberId: "",
-    fromDocket: "mandatory_savings" as TransferDocket,
-    toDocket: "withdrawable_savings" as TransferDocket,
+    fromDocket: "mandatory_savings" as MoneyDocket,
+    toDocket: "withdrawable_savings" as MoneyDocket,
     amount: 0,
     reason: "",
   });
@@ -104,7 +103,9 @@ function SavingsPage() {
         loan_savings: 0,
         shares: Number(member.shares ?? 0) * 100,
         share_reserve: Number(member.share_reserve_balance ?? 0),
+        purpose_pool: 0,
         investment: 0,
+        penalty_payment: 0,
       });
     }
     for (const row of docketBalances) {
@@ -115,7 +116,9 @@ function SavingsPage() {
         loan_savings: 0,
         shares: 0,
         share_reserve: 0,
+        purpose_pool: 0,
         investment: 0,
+        penalty_payment: 0,
       };
       entry[String(row.docket ?? "withdrawable_savings")] = Number(row.amount ?? 0);
       map.set(memberId, entry);
@@ -135,12 +138,27 @@ function SavingsPage() {
     (sum, row) => sum + Number(row.loan_savings ?? 0),
     0,
   );
+  const purposePoolTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.purpose_pool ?? 0),
+    0,
+  );
+  const investmentTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.investment ?? 0),
+    0,
+  );
+  const penaltyPaymentTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.penalty_payment ?? 0),
+    0,
+  );
 
   const memberRows = members.map((member: any) => {
     const balances = balancesByMember.get(member.id) ?? {};
     const compliance = Number(member.savings_balance ?? 0);
     const withdrawable = Number(balances.withdrawable_savings ?? 0);
     const loanSavings = Number(balances.loan_savings ?? 0);
+    const purposePool = Number(balances.purpose_pool ?? 0);
+    const investment = Number(balances.investment ?? 0);
+    const penaltyPayment = Number(balances.penalty_payment ?? 0);
     const shareValue =
       Number(member.shares ?? 0) * 100 + Number(member.share_reserve_balance ?? 0);
     const lastMovement = movements.find((row: any) => row.member_id === member.id);
@@ -150,6 +168,9 @@ function SavingsPage() {
       thresholdGap: Math.max(0, policyThreshold - compliance),
       withdrawable,
       loanSavings,
+      purposePool,
+      investment,
+      penaltyPayment,
       shareValue,
       shareGap: Math.max(0, shareThreshold - shareValue),
       lastMovement,
@@ -172,15 +193,15 @@ function SavingsPage() {
   return (
     <>
       <AppHeader
-        title="Savings & Dockets"
-        subtitle="Compliance contribution, withdrawable savings, loan savings, and admin-controlled movement between member dockets."
+        title="Savings & Money Dockets"
+        subtitle="Daily compliance contribution, withdrawable savings, loan savings, purpose pool, investments, and director-controlled docket movement."
       />
       <main className="flex-1 space-y-6 p-6 lg:p-8">
         <SectionTabs section="capital" />
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
-            label="Compliance contributions"
+            label="Daily compliance contribution"
             value={fmtKES(complianceTotal)}
             icon={<ShieldCheck className="h-5 w-5" />}
             tone="success"
@@ -201,10 +222,13 @@ function SavingsPage() {
             value={fmtKES(loanSavingsTotal)}
             icon={<ArrowRightLeft className="h-5 w-5" />}
           />
+          <StatCard label="Full purpose pool" value={fmtKES(purposePoolTotal)} />
+          <StatCard label="Investment docket" value={fmtKES(investmentTotal)} />
+          <StatCard label="Penalty reserve" value={fmtKES(penaltyPaymentTotal)} />
         </div>
 
         <div className="grid gap-6 xl:grid-cols-2">
-          <Section title="Post direct savings deposit">
+          <Section title="Post direct docket deposit">
             <div className="space-y-3 p-5">
               <MemberSelect
                 members={members}
@@ -214,7 +238,7 @@ function SavingsPage() {
               <Select
                 value={depositForm.docket}
                 onChange={(value) =>
-                  setDepositForm((current) => ({ ...current, docket: value as SavingsDocket }))
+                  setDepositForm((current) => ({ ...current, docket: value as MoneyDocket }))
                 }
                 options={DEPOSIT_DOCKETS}
               />
@@ -233,12 +257,18 @@ function SavingsPage() {
               />
               <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                 {depositForm.docket === "mandatory_savings"
-                  ? `Posts as a direct compliance contribution. Threshold target is ${fmtKES(policyThreshold)} before loan savings can open.`
+                  ? `Posts as a direct daily compliance contribution. Threshold target is ${fmtKES(policyThreshold)} before loan savings can open.`
                   : depositForm.docket === "withdrawable_savings"
                     ? "Targeted withdrawable savings stays in that docket and will not be redistributed by carryover resets or automatic redistribution."
                     : depositForm.docket === "loan_savings"
                       ? `Loan savings opens only after compliance contribution ${fmtKES(policyThreshold)} and share threshold ${fmtKES(shareThreshold)} are both met.`
-                      : "Penalty payment can clear outstanding penalties first, then include the daily loan obligation where policy requires it."}
+                      : depositForm.docket === "purpose_pool"
+                        ? "Receiving into full purpose pool includes Operations/Admin as part of the pool."
+                        : depositForm.docket === "shares"
+                          ? "Share deposits must be in exact share-price increments."
+                          : depositForm.docket === "penalty_payment"
+                            ? "Penalty payment can clear outstanding penalties first, then include the daily loan obligation where policy requires it."
+                            : "Posts directly to the selected money-holding docket."}
               </div>
               {selectedDepositMember ? (
                 <div className="text-xs text-muted-foreground">
@@ -282,7 +312,7 @@ function SavingsPage() {
                   onChange={(value) =>
                     setTransferForm((current) => ({
                       ...current,
-                      fromDocket: value as TransferDocket,
+                      fromDocket: value as MoneyDocket,
                     }))
                   }
                   options={TRANSFER_DOCKETS}
@@ -290,7 +320,7 @@ function SavingsPage() {
                 <Select
                   value={transferForm.toDocket}
                   onChange={(value) =>
-                    setTransferForm((current) => ({ ...current, toDocket: value as TransferDocket }))
+                    setTransferForm((current) => ({ ...current, toDocket: value as MoneyDocket }))
                   }
                   options={TRANSFER_DOCKETS}
                 />
@@ -313,8 +343,9 @@ function SavingsPage() {
               {selectedTransferMember ? (
                 <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                   Admin-controlled transfer for {selectedTransferMember.name}. Use this when moving
-                  funds from shares to withdrawable savings, shares to savings, or any other
-                  authorized docket move.
+                  funds between any money-holding docket. If Full purpose pool is the source,
+                  Operations/Admin is excluded and remains reserved; if Full purpose pool is
+                  receiving, Operations/Admin is included.
                 </div>
               ) : null}
               <button
@@ -341,7 +372,7 @@ function SavingsPage() {
           </Section>
         </div>
 
-        <Section title="Member savings positions">
+        <Section title="Member docket positions">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
@@ -352,6 +383,7 @@ function SavingsPage() {
                   <th className="px-5 py-3 text-right">Withdrawable savings</th>
                   <th className="px-5 py-3 text-right">Loan savings</th>
                   <th className="px-5 py-3 text-right">Shares basket</th>
+                  <th className="px-5 py-3 text-right">Other dockets</th>
                   <th className="px-5 py-3 text-left">Last docket movement</th>
                 </tr>
               </thead>
@@ -377,6 +409,11 @@ function SavingsPage() {
                       <div className="text-xs text-muted-foreground">
                         {row.shareGap > 0 ? `Gap ${fmtKES(row.shareGap)}` : "Threshold met"}
                       </div>
+                    </td>
+                    <td className="px-5 py-3 text-right text-xs">
+                      <div>Purpose {fmtKES(row.purposePool)}</div>
+                      <div>Investment {fmtKES(row.investment)}</div>
+                      <div>Penalty {fmtKES(row.penaltyPayment)}</div>
                     </td>
                     <td className="px-5 py-3 text-xs text-muted-foreground">
                       {row.lastMovement

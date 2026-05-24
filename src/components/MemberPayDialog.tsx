@@ -111,7 +111,7 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const purposeOptions: { value: Purpose; label: string; disabled?: boolean }[] = useMemo(() => {
     const opts: { value: Purpose; label: string; disabled?: boolean }[] = [
-      { value: "savings", label: "Savings deposit" },
+      { value: "savings", label: "Daily compliance contribution" },
       { value: "loan", label: "Loan repayment", disabled: !activeLoan },
       { value: "shares", label: "Buy shares" },
       { value: "fees", label: "Mandatory fees" },

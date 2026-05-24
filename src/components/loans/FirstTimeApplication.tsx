@@ -274,7 +274,15 @@ export function FirstTimeApplication({
         status: "active",
         shares: 0,
         savingsBalance: 0,
-        category: existing?.category ?? "member",
+        category:
+          existing?.category ??
+          (f.loanKind === "fuel"
+            ? "locomotive"
+            : f.loanKind === "stock"
+              ? "stock"
+              : f.loanKind === "service"
+                ? "service"
+                : "member"),
         businessType: f.businessType || undefined,
         businessPermanence,
         businessName: f.tradingName || undefined,
@@ -569,7 +577,7 @@ export function FirstTimeApplication({
             at {calc.ratePct}%.
           </div>
           <Select
-            label="Daily Savings Plan"
+            label="Daily Compliance Contribution Plan"
             value={f.dailySavingsPlan}
             onChange={(v) => set("dailySavingsPlan", v as "50" | "100")}
             options={["50", "100"]}

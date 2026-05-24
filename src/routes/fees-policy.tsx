@@ -107,6 +107,8 @@ type CarryoverCollectionBreakdown = {
   preCarryoverLiveState?: Record<string, unknown>;
 };
 
+type CarryoverMemberMode = "loan" | "none";
+
 const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
 const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
@@ -200,7 +202,10 @@ function PolicyCenterPage() {
   const [carryoverLoanDraft, setCarryoverLoanDraft] = useState<LegacyCarryoverLoan>(() =>
     blankCarryoverLoan("", 1),
   );
+  const [carryoverMemberMode, setCarryoverMemberMode] = useState<CarryoverMemberMode>("none");
   const [guidedClosedLoans, setGuidedClosedLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [guidedDefaultedLoans, setGuidedDefaultedLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [guidedActiveLoans, setGuidedActiveLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [waiverNote, setWaiverNote] = useState("");
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
   const [isRedistributing, setIsRedistributing] = useState(false);
@@ -238,7 +243,10 @@ function PolicyCenterPage() {
       setCarryoverProfile(blankCarryoverProfile(""));
       setCarryoverLoans([]);
       setCarryoverLoanDraft(blankCarryoverLoan("", 1));
+      setCarryoverMemberMode("none");
       setGuidedClosedLoans([]);
+      setGuidedDefaultedLoans([]);
+      setGuidedActiveLoans([]);
       return;
     }
 
@@ -263,8 +271,15 @@ function PolicyCenterPage() {
         setCarryoverProfile(profile);
         setCarryoverLoans(typedResult.loans);
         setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
+        setCarryoverMemberMode(typedResult.loans.length > 0 ? "loan" : "none");
         setGuidedClosedLoans(
           typedResult.loans.filter((loan) => loan.status === "closed" || loan.finished),
+        );
+        setGuidedDefaultedLoans(
+          typedResult.loans.filter((loan) => loan.status === "defaulted" && !loan.finished),
+        );
+        setGuidedActiveLoans(
+          typedResult.loans.filter((loan) => loan.status === "active" && !loan.finished),
         );
       })
       .catch((error: any) => {
@@ -323,6 +338,25 @@ function PolicyCenterPage() {
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
+  const guidedDefaultedLoanSummaries = guidedDefaultedLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
+  const guidedActiveLoanSummaries = guidedActiveLoans.map((loan) => ({
+    loan,
+    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
+  }));
+  const guidedOpenLoanSummaries = [...guidedDefaultedLoanSummaries, ...guidedActiveLoanSummaries];
+  const completedLoanComplianceTotal = guidedClosedLoanSummaries.reduce(
+    (sum, row) => sum + row.summary.totalSavingsAccrued,
+    0,
+  );
+  const guidedComplianceAllocation = allocateComplianceContribution(
+    completedLoanComplianceTotal,
+    policySettings.percentages.mandatorySavingsThreshold,
+    policySettings.percentages.mandatorySharesThreshold,
+    sharePrice,
+  );
   const hasClosedCarryoverLoanRecords = carryoverLoans.some(
     (loan) => loan.status === "closed" || loan.finished,
   );
@@ -330,9 +364,12 @@ function PolicyCenterPage() {
     ({ loan }) => loan.status !== "closed" && !loan.finished,
   );
   const carryoverLoanRepaymentsRecorded =
-    hasClosedCarryoverLoanRecords || openCarryoverLoanSummaries.length > 0
+    hasClosedCarryoverLoanRecords ||
+    openCarryoverLoanSummaries.length > 0 ||
+    guidedClosedLoans.length > 0 ||
+    guidedOpenLoanSummaries.length > 0
       ? guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalRepayment, 0) +
-        openCarryoverLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
+        guidedOpenLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
       : carryoverProfile.loanRepaymentsTotal;
   const carryoverShareValue = carryoverProfile.shareUnits * sharePrice;
   const derivedCarryoverAllocatedTotal =
@@ -354,6 +391,45 @@ function PolicyCenterPage() {
     hasClosedCarryoverLoanRecords || guidedClosedLoans.length > 0
       ? guidedClosedLoans.length
       : carryoverProfile.completedLoanCycles;
+
+  useEffect(() => {
+    if (carryoverMemberMode !== "loan" || completedLoanComplianceTotal <= 0) return;
+    setCarryoverProfile((current) => {
+      const breakdown = readCarryoverBreakdown(current.collectionBreakdown);
+      const nextSavingsBalance = Math.max(
+        current.savingsBalance,
+        guidedComplianceAllocation.savingsAmount,
+      );
+      const nextShareUnits = Math.max(current.shareUnits, guidedComplianceAllocation.shareUnits);
+      const nextPurposePool = Math.max(
+        breakdown.purposePoolBalance,
+        guidedComplianceAllocation.purposePoolAmount,
+      );
+      if (
+        nextSavingsBalance === current.savingsBalance &&
+        nextShareUnits === current.shareUnits &&
+        nextPurposePool === breakdown.purposePoolBalance
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        savingsBalance: nextSavingsBalance,
+        shareUnits: nextShareUnits,
+        collectionBreakdown: {
+          ...breakdown,
+          purposePoolBalance: nextPurposePool,
+        },
+      };
+    });
+  }, [
+    carryoverMemberMode,
+    completedLoanComplianceTotal,
+    guidedComplianceAllocation.purposePoolAmount,
+    guidedComplianceAllocation.savingsAmount,
+    guidedComplianceAllocation.shareUnits,
+  ]);
+
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
     0,
@@ -589,18 +665,22 @@ function PolicyCenterPage() {
     );
     setCarryoverLoans(result.loans);
     setCarryoverLoanDraft(blankCarryoverLoan(nextMemberId, result.loans.length + 1));
+    setCarryoverMemberMode(result.loans.length > 0 ? "loan" : "none");
     setGuidedClosedLoans(result.loans.filter((loan) => loan.status === "closed" || loan.finished));
+    setGuidedDefaultedLoans(
+      result.loans.filter((loan) => loan.status === "defaulted" && !loan.finished),
+    );
+    setGuidedActiveLoans(result.loans.filter((loan) => loan.status === "active" && !loan.finished));
   }
 
   async function saveCarryoverProfileDraft() {
     if (!selectedClient) return;
-    const nextGuidedLoans = guidedClosedLoans.map((loan, index) => {
+    const nextClosedLoans = guidedClosedLoans.map((loan, index) => {
       const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
       return {
         ...loan,
         memberId: selectedClient.id,
         label: loan.label || `Completed loan ${index + 1}`,
-        loanCycleNumber: Math.max(1, loan.loanCycleNumber || index + 1),
         paidToDate: summary.totalRepayment,
         dueDate: loan.dueDate ?? summary.dueDate,
         closedOn: loan.closedOn ?? summary.dueDate,
@@ -608,19 +688,44 @@ function PolicyCenterPage() {
         finished: true,
       };
     });
+    const nextDefaultedLoans = guidedDefaultedLoans.map((loan, index) => ({
+      ...loan,
+      memberId: selectedClient.id,
+      label: loan.label || `Defaulted loan ${index + 1}`,
+      status: "defaulted" as const,
+      finished: false,
+    }));
+    const nextActiveLoans = guidedActiveLoans.map((loan, index) => ({
+      ...loan,
+      memberId: selectedClient.id,
+      label: loan.label || `Active loan ${index + 1}`,
+      status: "active" as const,
+      finished: false,
+    }));
+    const nextGuidedLoans = [...nextClosedLoans, ...nextDefaultedLoans, ...nextActiveLoans].map(
+      (loan, index) => ({
+        ...loan,
+        loanCycleNumber: index + 1,
+      }),
+    );
+
+    const incompleteLoan = nextGuidedLoans.find((loan) => loan.principal <= 0);
+    if (incompleteLoan) {
+      toast.error("Every guided carryover loan needs a net disbursed amount above zero.");
+      return;
+    }
 
     for (const loan of nextGuidedLoans) {
       await saveCarryoverLoan({ data: loan });
     }
 
-    const keptClosedLoanIds = new Set(
+    const keptGuidedLoanIds = new Set(
       nextGuidedLoans.map((loan) => loan.id).filter((loanId): loanId is string => Boolean(loanId)),
     );
-    const removedClosedLoanIds = carryoverLoans
-      .filter((loan) => loan.status === "closed" || loan.finished)
+    const removedGuidedLoanIds = carryoverLoans
       .map((loan) => loan.id)
-      .filter((loanId) => loanId && !keptClosedLoanIds.has(loanId));
-    for (const loanId of removedClosedLoanIds) {
+      .filter((loanId) => loanId && !keptGuidedLoanIds.has(loanId));
+    for (const loanId of removedGuidedLoanIds) {
       await deleteCarryoverLoan({ data: { id: loanId } });
     }
 
@@ -643,11 +748,11 @@ function PolicyCenterPage() {
         feesPaidTotal: carryoverFeeTotal,
         loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
         totalCollected: recordedTotalDeposits,
-        pendingBalance: carryoverLoanSummaries.reduce(
-          (sum, row) => sum + row.summary.totalOwedNow,
+        pendingBalance: [...nextDefaultedLoans, ...nextActiveLoans].reduce(
+          (sum, loan) => sum + summarizeLegacyCarryoverLoan(loan, policySettings).totalOwedNow,
           0,
         ),
-        completedLoanCycles: nextGuidedLoans.length,
+        completedLoanCycles: nextClosedLoans.length,
         collectionBreakdown: nextBreakdown,
       },
     });
@@ -715,6 +820,78 @@ function PolicyCenterPage() {
   const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
   const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
   const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
+
+  function applyCarryoverWaterfallDraft() {
+    const available = Math.max(0, carryoverUndistributedBalance);
+    if (available <= 0) {
+      toast.info("No undistributed carryover balance to apply.");
+      return;
+    }
+
+    setCarryoverProfile((current) => {
+      let remaining = available;
+      const breakdown = readCarryoverBreakdown(current.collectionBreakdown);
+      const feeBuckets = { ...breakdown.feeBuckets };
+      const next = { ...current };
+      const consume = (amount: number) => {
+        const applied = Math.min(remaining, Math.max(0, amount));
+        remaining -= applied;
+        return applied;
+      };
+      const fillFee = (
+        flag: "membershipFeePaid" | "cardFeePaid" | "stickerFeePaid",
+        bucket: keyof CarryoverFeeBuckets,
+        amount: number,
+      ) => {
+        if (next[flag] || amount <= 0 || remaining <= 0) return;
+        const gap = Math.max(0, amount - feeBuckets[bucket]);
+        feeBuckets[bucket] += consume(gap);
+        if (feeBuckets[bucket] >= amount) next[flag] = true;
+      };
+
+      fillFee("membershipFeePaid", "membership", membershipAmount);
+      fillFee("cardFeePaid", "card", cardAmount);
+      fillFee("stickerFeePaid", "sticker", stickerAmount);
+
+      if (next.penaltiesOutstanding > 0 && remaining > 0) {
+        next.penaltiesOutstanding = Math.max(
+          0,
+          next.penaltiesOutstanding - consume(next.penaltiesOutstanding),
+        );
+      }
+
+      const savingsGap = Math.max(
+        0,
+        policySettings.percentages.mandatorySavingsThreshold - next.savingsBalance,
+      );
+      if (savingsGap > 0 && remaining > 0) next.savingsBalance += consume(savingsGap);
+
+      const shareValue = next.shareUnits * sharePrice;
+      const shareGap = Math.max(
+        0,
+        policySettings.percentages.mandatorySharesThreshold - shareValue,
+      );
+      if (shareGap > 0 && remaining > 0 && sharePrice > 0) {
+        const units = Math.floor(Math.min(remaining, shareGap) / sharePrice);
+        if (units > 0) {
+          next.shareUnits += units;
+          remaining -= units * sharePrice;
+        }
+      }
+
+      const purposePoolBalance = breakdown.purposePoolBalance + remaining;
+      remaining = 0;
+      return {
+        ...next,
+        collectionBreakdown: {
+          ...breakdown,
+          purposePoolBalance,
+          feeBuckets,
+        },
+      };
+    });
+    toast.success("Remaining carryover balance applied through the waterfall.");
+  }
 
   return (
     <>
@@ -1764,6 +1941,174 @@ function PolicyCenterPage() {
                   }
                 >
                   <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="space-y-4 rounded-xl border border-border bg-muted/10 p-4 md:col-span-2 xl:col-span-4">
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <MetricCard label="Lifetime net" value={fmtKES(clientLifetimeNet)} />
+                        <MetricCard
+                          label="Locked live savings"
+                          value={fmtKES(selectedClient.savingsBalance)}
+                        />
+                        <MetricCard
+                          label="Locked live shares"
+                          value={`${selectedClient.shares} units / ${fmtKES(
+                            selectedClient.shares * sharePrice,
+                          )}`}
+                        />
+                        <MetricCard
+                          label="Remaining undistributed"
+                          value={fmtKES(carryoverUndistributedBalance)}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { key: "loan" as const, label: "Loan member" },
+                          { key: "none" as const, label: "Non-loan member" },
+                        ].map((option) => {
+                          const active = carryoverMemberMode === option.key;
+                          return (
+                            <button
+                              key={option.key}
+                              type="button"
+                              onClick={() => setCarryoverMemberMode(option.key)}
+                              className={`rounded-md border px-3 py-2 text-sm font-medium transition ${
+                                active
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-border bg-card hover:bg-muted"
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {carryoverMemberMode === "loan" && (
+                        <div className="space-y-4">
+                          <div className="grid gap-3 md:grid-cols-3">
+                            <NumberField
+                              label="Finished loans"
+                              value={guidedClosedLoans.length}
+                              onChange={(value) =>
+                                setGuidedClosedLoans((current) =>
+                                  resizeGuidedCarryoverLoans(
+                                    current,
+                                    value,
+                                    selectedClient.id,
+                                    "closed",
+                                  ),
+                                )
+                              }
+                            />
+                            <NumberField
+                              label="Defaulted loans"
+                              value={guidedDefaultedLoans.length}
+                              onChange={(value) =>
+                                setGuidedDefaultedLoans((current) =>
+                                  resizeGuidedCarryoverLoans(
+                                    current,
+                                    value,
+                                    selectedClient.id,
+                                    "defaulted",
+                                  ),
+                                )
+                              }
+                            />
+                            <NumberField
+                              label="Active loans"
+                              value={guidedActiveLoans.length}
+                              onChange={(value) =>
+                                setGuidedActiveLoans((current) =>
+                                  resizeGuidedCarryoverLoans(
+                                    current,
+                                    value,
+                                    selectedClient.id,
+                                    "active",
+                                  ),
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <MetricCard
+                              label="Completed-loan compliance contribution"
+                              value={fmtKES(completedLoanComplianceTotal)}
+                            />
+                            <MetricCard
+                              label="Mandatory compliance savings"
+                              value={fmtKES(guidedComplianceAllocation.savingsAmount)}
+                            />
+                            <MetricCard
+                              label="Mandatory shares"
+                              value={`${guidedComplianceAllocation.shareUnits} units / ${fmtKES(
+                                guidedComplianceAllocation.shareAmount,
+                              )}`}
+                            />
+                            <MetricCard
+                              label="Purpose pool overflow"
+                              value={fmtKES(guidedComplianceAllocation.purposePoolAmount)}
+                            />
+                          </div>
+                          <div className="grid gap-4 xl:grid-cols-2">
+                            {guidedClosedLoans.map((loan, index) => (
+                              <GuidedCarryoverLoanCard
+                                key={loan.id || `closed-${index}`}
+                                status="closed"
+                                index={index}
+                                loan={loan}
+                                summary={
+                                  guidedClosedLoanSummaries[index]?.summary ??
+                                  summarizeLegacyCarryoverLoan(loan, policySettings)
+                                }
+                                onChange={(nextLoan) =>
+                                  setGuidedClosedLoans((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index ? nextLoan : item,
+                                    ),
+                                  )
+                                }
+                              />
+                            ))}
+                            {guidedDefaultedLoans.map((loan, index) => (
+                              <GuidedCarryoverLoanCard
+                                key={loan.id || `defaulted-${index}`}
+                                status="defaulted"
+                                index={index}
+                                loan={loan}
+                                summary={
+                                  guidedDefaultedLoanSummaries[index]?.summary ??
+                                  summarizeLegacyCarryoverLoan(loan, policySettings)
+                                }
+                                onChange={(nextLoan) =>
+                                  setGuidedDefaultedLoans((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index ? nextLoan : item,
+                                    ),
+                                  )
+                                }
+                              />
+                            ))}
+                            {guidedActiveLoans.map((loan, index) => (
+                              <GuidedCarryoverLoanCard
+                                key={loan.id || `active-${index}`}
+                                status="active"
+                                index={index}
+                                loan={loan}
+                                summary={
+                                  guidedActiveLoanSummaries[index]?.summary ??
+                                  summarizeLegacyCarryoverLoan(loan, policySettings)
+                                }
+                                onChange={(nextLoan) =>
+                                  setGuidedActiveLoans((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index ? nextLoan : item,
+                                    ),
+                                  )
+                                }
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     <NumberField
                       label="Total deposits ever recorded"
                       value={derivedCarryoverTotalCollected}
@@ -1991,96 +2336,31 @@ function PolicyCenterPage() {
                         label="Purpose pool"
                         value={fmtKES(carryoverBreakdown.purposePoolBalance)}
                       />
+                      <button
+                        type="button"
+                        onClick={applyCarryoverWaterfallDraft}
+                        className="mt-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+                      >
+                        Apply remaining balance through waterfall
+                      </button>
                     </div>
-                    {showCarryoverAdvanced ? (
-                      <div className="rounded-xl border border-border bg-card p-4 md:col-span-2 xl:col-span-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium">
-                              Completed loans in redistribution flow
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              Use this only when bringing old completed loan cycles into the live
-                              ledger.
-                            </div>
-                          </div>
-                          <select
-                            value={guidedClosedLoans.length}
-                            onChange={(event) => {
-                              const count = Number(event.target.value);
-                              setGuidedClosedLoans((current) =>
-                                Array.from({ length: count }, (_, index) => {
-                                  const existingLoan = current[index];
-                                  return existingLoan
-                                    ? {
-                                        ...existingLoan,
-                                        memberId: selectedClient.id,
-                                        loanCycleNumber: index + 1,
-                                        status: "closed",
-                                        finished: true,
-                                      }
-                                    : {
-                                        ...blankCarryoverLoan(selectedClient.id, index + 1),
-                                        label: `Completed loan ${index + 1}`,
-                                        status: "closed",
-                                        finished: true,
-                                      };
-                                }),
-                              );
-                            }}
-                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                          >
-                            {Array.from({ length: 11 }, (_, index) => index).map((count) => (
-                              <option key={count} value={count}>
-                                {count} loan{count === 1 ? "" : "s"}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                          {guidedClosedLoans.map((loan, index) => (
-                            <GuidedCompletedLoanCard
-                              key={loan.id || `${selectedClient.id}-guided-${index}`}
-                              index={index}
-                              loan={loan}
-                              summary={
-                                guidedClosedLoanSummaries[index]?.summary ??
-                                summarizeLegacyCarryoverLoan(loan, policySettings)
-                              }
-                              onChange={(nextLoan) =>
-                                setGuidedClosedLoans((current) =>
-                                  current.map((item, itemIndex) =>
-                                    itemIndex === index ? nextLoan : item,
-                                  ),
-                                )
-                              }
-                            />
-                          ))}
-                          {guidedClosedLoans.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-                              Set the completed-loan count above to expand the loan tiles.
-                            </div>
-                          )}
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/20 p-4 md:col-span-2 xl:col-span-4">
+                      <div>
+                        <div className="text-sm font-medium">Advanced carryover loan editor</div>
+                        <div className="text-xs text-muted-foreground">
+                          Use this for one-off edits after the guided loan counts above are saved.
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/20 p-4 md:col-span-2 xl:col-span-4">
-                        <div>
-                          <div className="text-sm font-medium">Advanced carryover loan cycles</div>
-                          <div className="text-xs text-muted-foreground">
-                            Hidden by default so normal client records stay focused on balances,
-                            fees, penalties, and live history.
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowCarryoverAdvanced(true)}
-                          className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                        >
-                          Show legacy loan tools
-                        </button>
-                      </div>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => setShowCarryoverAdvanced((current) => !current)}
+                        className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+                      >
+                        {showCarryoverAdvanced
+                          ? "Hide legacy loan tools"
+                          : "Show legacy loan tools"}
+                      </button>
+                    </div>
                     <Field label="First loan start date">
                       <input
                         type="date"
@@ -2236,7 +2516,7 @@ function PolicyCenterPage() {
                         }
                       />
                       <NumberField
-                        label="Daily savings amount"
+                        label="Daily compliance contribution amount"
                         value={carryoverLoanDraft.dailySavingsAmount}
                         onChange={(value) =>
                           setCarryoverLoanDraft((current) => ({
@@ -2375,10 +2655,10 @@ function PolicyCenterPage() {
                       </div>
                     </div>
                     <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-                      Start with principal, term, daily savings, start date, and amount already
-                      paid. Leave the override rate at 0 to use the current policy rate for that
-                      term. The balance, penalties, due date, and completion status are calculated
-                      from the saved carryover loan record.
+                      Start with principal, term, daily compliance contribution, start date, and
+                      amount already paid. Leave the override rate at 0 to use the current policy
+                      rate for that term. The balance, penalties, due date, and completion status
+                      are calculated from the saved carryover loan record.
                     </div>
                     <div className="space-y-4 border-t border-border p-5">
                       {carryoverLoading && (
@@ -2456,7 +2736,7 @@ function PolicyCenterPage() {
                               value={fmtKES(summary.estimatedPenaltyNow)}
                             />
                             <MetricCard
-                              label="Savings Accrued"
+                              label="Compliance contribution accrued"
                               value={fmtKES(summary.totalSavingsAccrued)}
                             />
                           </div>
@@ -2895,6 +3175,57 @@ function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryo
   };
 }
 
+function resizeGuidedCarryoverLoans(
+  current: LegacyCarryoverLoan[],
+  countValue: number,
+  memberId: string,
+  status: "closed" | "defaulted" | "active",
+) {
+  const count = Math.max(0, Math.floor(Number(countValue) || 0));
+  const labelPrefix =
+    status === "closed"
+      ? "Completed loan"
+      : status === "defaulted"
+        ? "Defaulted loan"
+        : "Active loan";
+  return Array.from({ length: count }, (_, index) => {
+    const existing = current[index];
+    return {
+      ...(existing ?? blankCarryoverLoan(memberId, index + 1)),
+      memberId,
+      label: existing?.label || `${labelPrefix} ${index + 1}`,
+      loanCycleNumber: index + 1,
+      status,
+      finished: status === "closed",
+    };
+  });
+}
+
+function allocateComplianceContribution(
+  amount: number,
+  savingsThreshold: number,
+  sharesThreshold: number,
+  sharePrice: number,
+) {
+  const available = Math.max(0, Number(amount) || 0);
+  const savingsAmount = Math.min(available, Math.max(0, Number(savingsThreshold) || 0));
+  const remainingAfterSavings = Math.max(0, available - savingsAmount);
+  const shareTargetAmount = Math.min(
+    remainingAfterSavings,
+    Math.max(0, Number(sharesThreshold) || 0),
+  );
+  const shareUnits =
+    sharePrice > 0 ? Math.floor(shareTargetAmount / Math.max(1, Number(sharePrice) || 1)) : 0;
+  const shareAmount = shareUnits * Math.max(0, Number(sharePrice) || 0);
+  const purposePoolAmount = Math.max(0, remainingAfterSavings - shareAmount);
+  return {
+    savingsAmount,
+    shareUnits,
+    shareAmount,
+    purposePoolAmount,
+  };
+}
+
 function defaultCarryoverFeeBuckets(): CarryoverFeeBuckets {
   return {
     membership: 0,
@@ -3202,20 +3533,39 @@ function buildClientRating(
   return { label: "D - High Risk", detail: "Frequent arrears, penalties, or unresolved balances." };
 }
 
-function GuidedCompletedLoanCard({
+function GuidedCarryoverLoanCard({
+  status,
   index,
   loan,
   summary,
   onChange,
 }: {
+  status: "closed" | "defaulted" | "active";
   index: number;
   loan: LegacyCarryoverLoan;
   summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
   onChange: (loan: LegacyCarryoverLoan) => void;
 }) {
+  const title =
+    status === "closed"
+      ? `Finished loan ${index + 1}`
+      : status === "defaulted"
+        ? `Defaulted loan ${index + 1}`
+        : `Active loan ${index + 1}`;
+  const showPaidFields = status !== "closed";
+
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
-      <div className="mb-3 text-sm font-medium">Completed loan {index + 1}</div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="text-sm font-medium">{title}</div>
+        <Badge
+          tone={
+            status === "closed" ? "success" : status === "defaulted" ? "destructive" : "warning"
+          }
+        >
+          {status === "closed" ? "finished" : status}
+        </Badge>
+      </div>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Label">
           <input
@@ -3253,11 +3603,10 @@ function GuidedCompletedLoanCard({
           onChange={(value) => onChange({ ...loan, interestRatePct: value })}
         />
         <NumberField
-          label="Daily savings"
+          label="Daily compliance contribution"
           value={loan.dailySavingsAmount}
           onChange={(value) => onChange({ ...loan, dailySavingsAmount: value })}
         />
-        <CarryoverLoanFeeFields loan={loan} summary={summary} onChange={onChange} compact />
         <Field label="Start date">
           <input
             type="date"
@@ -3266,17 +3615,47 @@ function GuidedCompletedLoanCard({
             className="input"
           />
         </Field>
+        {showPaidFields && (
+          <>
+            <Field label="Due date override">
+              <input
+                type="date"
+                value={loan.dueDate ?? ""}
+                onChange={(event) =>
+                  onChange({ ...loan, dueDate: event.target.value || undefined })
+                }
+                className="input"
+              />
+            </Field>
+            <NumberField
+              label="Amount already paid"
+              value={loan.paidToDate}
+              onChange={(value) => onChange({ ...loan, paidToDate: value })}
+            />
+            <NumberField
+              label="Penalty waived"
+              value={loan.penaltyWaivedAmount}
+              onChange={(value) => onChange({ ...loan, penaltyWaivedAmount: value })}
+            />
+          </>
+        )}
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Loan repayment total" value={fmtKES(summary.totalRepayment)} />
-        <MetricCard label="Fees and subscriptions" value={fmtKES(summary.feeChargesTotal)} />
-        <MetricCard label="Daily savings accrued" value={fmtKES(summary.totalSavingsAccrued)} />
-        <MetricCard label="Cash through cycle" value={fmtKES(summary.totalExpectedCollected)} />
-      </div>
-      <div className="mt-3 text-xs text-muted-foreground">
-        The redistribution deducts the closed loan repayment total from the client record. The
-        compliance contribution should still be reflected in savings, shares, purpose pool, or loan
-        savings above.
+        <MetricCard
+          label={status === "closed" ? "Saved as paid" : "Paid to date"}
+          value={fmtKES(status === "closed" ? summary.totalRepayment : loan.paidToDate)}
+        />
+        <MetricCard
+          label="Daily compliance contribution accrued"
+          value={fmtKES(summary.totalSavingsAccrued)}
+        />
+        <MetricCard
+          label={status === "closed" ? "Cash through cycle" : "Owed now"}
+          value={fmtKES(
+            status === "closed" ? summary.totalExpectedCollected : summary.totalOwedNow,
+          )}
+        />
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import {
   Boxes,
   Building2,
   CheckCircle2,
+  Eye,
   Fuel,
   KeyRound,
   Package,
@@ -51,6 +52,8 @@ function SuppliersPage() {
 
   const [workspace, setWorkspace] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [simulationPickId, setSimulationPickId] = useState("");
+  const [simulatedSupplierId, setSimulatedSupplierId] = useState("");
   const [registerForm, setRegisterForm] = useState({
     memberId: "",
     name: "",
@@ -95,6 +98,11 @@ function SuppliersPage() {
     try {
       const next = await loadWorkspace();
       setWorkspace(next);
+      const nextSuppliers = next.suppliers ?? [];
+      setSimulationPickId((current) => current || nextSuppliers[0]?.id || "");
+      setSimulatedSupplierId((current) =>
+        current && nextSuppliers.some((supplier: any) => supplier.id === current) ? current : "",
+      );
       setRegisterForm((current) => ({
         ...current,
         memberId: current.memberId || next.members?.[0]?.id || "",
@@ -124,14 +132,43 @@ function SuppliersPage() {
     refresh().catch(() => {});
   }, []);
 
-  const mode = workspace?.mode === "supplier" ? "supplier" : "staff";
-  const suppliers = workspace?.suppliers ?? [];
+  const serverMode = workspace?.mode === "supplier" ? "supplier" : "staff";
+  const activeSimulatedSupplierId = serverMode === "staff" ? simulatedSupplierId : "";
+  const mode = serverMode === "supplier" || activeSimulatedSupplierId ? "supplier" : "staff";
+  const signedSupplierId =
+    serverMode === "supplier" ? workspace?.signedSupplierId ?? "" : activeSimulatedSupplierId;
+  const allSuppliers = workspace?.suppliers ?? [];
+  const allRequests = workspace?.requests ?? [];
+  const allSupplierInventory = workspace?.supplierInventory ?? [];
+  const allInternalStore = workspace?.internalStore ?? [];
+  const allLoans = workspace?.loans ?? [];
+  const allOutflows = workspace?.outflows ?? [];
+  const suppliers =
+    mode === "supplier" && signedSupplierId
+      ? allSuppliers.filter((supplier: any) => supplier.id === signedSupplierId)
+      : allSuppliers;
   const members = workspace?.members ?? [];
-  const requests = workspace?.requests ?? [];
-  const supplierInventory = workspace?.supplierInventory ?? [];
-  const internalStore = workspace?.internalStore ?? [];
-  const loans = workspace?.loans ?? [];
-  const outflows = workspace?.outflows ?? [];
+  const requests =
+    mode === "supplier" && signedSupplierId
+      ? allRequests.filter((request: any) => request.supplier_id === signedSupplierId)
+      : allRequests;
+  const supplierInventory =
+    mode === "supplier" && signedSupplierId
+      ? allSupplierInventory.filter((item: any) => item.supplier_id === signedSupplierId)
+      : allSupplierInventory;
+  const internalStore = mode === "supplier" ? [] : allInternalStore;
+  const loans =
+    mode === "supplier" && signedSupplierId
+      ? allLoans.filter((loan: any) => loan.supplier_id === signedSupplierId)
+      : allLoans;
+  const outflows =
+    mode === "supplier" && signedSupplierId
+      ? allOutflows.filter((outflow: any) => outflow.supplier_id === signedSupplierId)
+      : allOutflows;
+  const simulatedSupplier = allSuppliers.find(
+    (supplier: any) => supplier.id === activeSimulatedSupplierId,
+  );
+  const activeSupplierName = simulatedSupplier?.name || signedSupplierId || "selected supplier";
   const canPaySuppliers = authMode === "staff" && currentUser.role === "director";
 
   const supplierDebt = requests
@@ -236,18 +273,29 @@ function SuppliersPage() {
                 Sauti Microfinance
               </div>
               <h1 className="mt-1 font-display text-2xl font-semibold text-foreground">
-                Supplier Portal
+                {authMode === "staff" ? "Supplier Portal Simulation" : "Supplier Portal"}
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Confirm requests, maintain your stock list, and track what Sauti still owes you.
+                {authMode === "staff"
+                  ? `Viewing as ${activeSupplierName}. Confirm requests, maintain stock, and inspect supplier debt from the portal view.`
+                  : "Confirm requests, maintain your stock list, and track what Sauti still owes you."}
               </p>
             </div>
-            <button
-              onClick={() => void logout()}
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              Sign out
-            </button>
+            {authMode === "staff" ? (
+              <button
+                onClick={() => setSimulatedSupplierId("")}
+                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Back to supplier hub
+              </button>
+            ) : (
+              <button
+                onClick={() => void logout()}
+                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </header>
       )}
@@ -289,6 +337,37 @@ function SuppliersPage() {
             <RefreshCw className="h-4 w-4" /> Refresh
           </button>
         </div>
+
+        {serverMode === "staff" && mode === "staff" ? (
+          <Section title="Simulate supplier portal">
+            <div className="flex flex-wrap items-end gap-3 p-5">
+              <label className="min-w-[260px] flex-1">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Supplier portal to view
+                </span>
+                <Select
+                  value={simulationPickId}
+                  onChange={setSimulationPickId}
+                  options={
+                    allSuppliers.length
+                      ? allSuppliers.map((supplier: any) => [
+                          supplier.id,
+                          `${supplier.name} (${kindLabel(supplier.kind)})`,
+                        ])
+                      : [["", "No suppliers registered"]]
+                  }
+                />
+              </label>
+              <button
+                disabled={busy || !simulationPickId}
+                onClick={() => setSimulatedSupplierId(simulationPickId)}
+                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+              >
+                <Eye className="h-4 w-4" /> Simulate portal
+              </button>
+            </div>
+          </Section>
+        ) : null}
 
         {mode === "staff" ? (
           <div className="grid gap-6 xl:grid-cols-3">

@@ -88,7 +88,7 @@ export const WATERFALL_DESTINATION_LABELS: Record<WaterfallDestination, string> 
   sticker_fee: "Sticker fee",
   penalties: "Outstanding penalties",
   active_loan_repayment: "Active loan repayment",
-  savings: "Savings deposit",
+  savings: "Daily compliance contribution",
   investment: "Investment top-up",
 };
 
