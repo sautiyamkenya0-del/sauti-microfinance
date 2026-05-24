@@ -207,6 +207,23 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
       limit: 10000,
       build: (query) => query.order("ts", { ascending: false }),
     },
+    {
+      key: "staffMessages",
+      table: "staff_messages",
+      limit: 20000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "reportSnapshots",
+      table: "report_snapshots",
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "mpesaCallbackErrors",
+      table: "mpesa_callback_errors",
+      limit: 10000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
   ];
 
   const entries = await Promise.all(specs.map((spec) => readAiTable(db, spec)));
@@ -222,7 +239,30 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
   return {
     audience: "staff",
     currentStaff: actor,
-    access: "director-grade read context for SautiAI analysis; money movement still needs a human-confirmed system action.",
+    access:
+      "director-grade read context for SautiAI analysis across every available system table; money movement still needs a human-confirmed system action.",
+    moneyDockets: [
+      "daily_compliance_contribution",
+      "withdrawable_savings",
+      "loan_savings",
+      "shares",
+      "share_reserve",
+      "full_purpose_pool",
+      "investment",
+      "penalty_payment",
+      "supplier_payables",
+      "client_withdrawals",
+      "investor_withdrawals",
+      "staff_payments",
+      "loan_disbursements",
+      "petty_cash",
+    ],
+    purposePoolDistribution: [
+      ["Levies & Permits Fund", 40],
+      ["Welfare Fund", 15],
+      ["Legal Fund", 20],
+      ["Operations/Admin", 25],
+    ],
     generatedAt: new Date().toISOString(),
     counts,
     warnings,
@@ -347,9 +387,11 @@ Voice and style:
 - Do not dump role, counts, Current State, or Issues detected blocks unless they help answer the question.
 
 Working rules:
-- Use the server-built snapshot below as your source for Sauti data. It includes members, investors, loans, transactions, M-Pesa records, suppliers, stock, fuel/service requests, money dockets, outflows, payroll, approvals, support, policy settings, and audit history when those tables exist.
+- Use the server-built snapshot below as your source for Sauti data. It includes members, investors, loans, transactions, M-Pesa records, suppliers, stock, fuel/service requests, every available money docket, outflows, payroll, approvals, support, policy settings, staff messages, report snapshots, callback errors, and audit history when those tables exist.
 - When asked about a member, loan, or transaction, find it by id, name, or phone.
 - When asked about money movement dockets, remember Full purpose pool as a source excludes Operations/Admin, while Full purpose pool as a receiver includes Operations/Admin.
+- Purpose pool is Levies & Permits 40%, Welfare 15%, Legal 20%, Operations/Admin 25%.
+- Use "daily compliance contribution" in user-facing wording.
 - If you detect anomalies such as overdue loans, savings shortfalls, unusual outflows, or mis-allocated M-Pesa payments, call them out clearly under the plain label: Issues detected:
 - For action requests such as approvals, postings, or disbursements, respond with a short proposal and end with: Confirm to apply.
 - Never claim an action is already done unless the snapshot explicitly shows it already happened.
@@ -360,7 +402,7 @@ Off-topic handling:
 - If the request is general non-time-sensitive knowledge, answer briefly, then pivot back naturally.
 
 Snapshot:
-${JSON.stringify(enrichedSnapshot).slice(0, 60000)}`;
+${JSON.stringify(enrichedSnapshot).slice(0, 120000)}`;
 
           const fullMessages = [{ role: "system", content: system }, ...messages];
           return await streamGroqChat(fullMessages);

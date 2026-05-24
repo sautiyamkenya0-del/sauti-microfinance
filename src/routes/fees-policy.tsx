@@ -3701,24 +3701,25 @@ function CarryoverLoanFeeFields({
           : "md:col-span-2 xl:col-span-4 grid gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-2 xl:grid-cols-4"
       }
     >
-      <NumberField
-        label="Membership fee"
-        value={feeBreakdown.membershipFeeAmount ?? 0}
-        disabled={oneTimeLocked}
-        onChange={(value) => updateFee("membershipFeeAmount", value)}
-      />
-      <NumberField
-        label="Card fee"
-        value={feeBreakdown.cardFeeAmount ?? 0}
-        disabled={oneTimeLocked}
-        onChange={(value) => updateFee("cardFeeAmount", value)}
-      />
-      <NumberField
-        label="Sticker fee"
-        value={feeBreakdown.stickerFeeAmount ?? 0}
-        disabled={oneTimeLocked}
-        onChange={(value) => updateFee("stickerFeeAmount", value)}
-      />
+      {!oneTimeLocked ? (
+        <>
+          <NumberField
+            label="Membership fee"
+            value={feeBreakdown.membershipFeeAmount ?? 0}
+            onChange={(value) => updateFee("membershipFeeAmount", value)}
+          />
+          <NumberField
+            label="Card fee"
+            value={feeBreakdown.cardFeeAmount ?? 0}
+            onChange={(value) => updateFee("cardFeeAmount", value)}
+          />
+          <NumberField
+            label="Sticker fee"
+            value={feeBreakdown.stickerFeeAmount ?? 0}
+            onChange={(value) => updateFee("stickerFeeAmount", value)}
+          />
+        </>
+      ) : null}
       <NumberField
         label="Processing fee"
         value={feeBreakdown.processingFeeAmount ?? 0}

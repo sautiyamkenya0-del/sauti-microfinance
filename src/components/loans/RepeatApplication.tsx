@@ -54,7 +54,7 @@ export function RepeatApplication({
   const [supplierNotes, setSupplierNotes] = useState("");
   const [repaymentPlan, setRepaymentPlan] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
   const [repaymentDays, setRepaymentDays] = useState(30);
-  const [savingsPlan, setSavingsPlan] = useState<"50" | "100">("100");
+  const [compliancePlan, setCompliancePlan] = useState<"50" | "100">("100");
   const [processingFeeMode, setProcessingFeeMode] = useState<LoanChargeMode>("financed");
   const [insuranceFeeMode, setInsuranceFeeMode] = useState<LoanChargeMode>("financed");
   const [confirmKYC, setConfirmKYC] = useState(false);
@@ -65,15 +65,8 @@ export function RepeatApplication({
   const loanType = loanCategory === "Premium" ? "premium" : "standard";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
   const loanKindOptions = useMemo<LoanKind[]>(
-    () =>
-      member?.category === "locomotive"
-        ? ["financial", "fuel"]
-        : member?.category === "stock"
-          ? ["financial", "stock"]
-          : member?.category === "service"
-            ? ["financial", "service"]
-            : ["financial", "fuel", "stock", "service"],
-    [member?.category],
+    () => ["financial", "fuel", "stock", "service"],
+    [],
   );
 
   useEffect(() => {
@@ -92,7 +85,7 @@ export function RepeatApplication({
       termDays: repaymentDays,
       processingFeeMode,
       insuranceFeeMode,
-      dailySavingsAmount: Number(savingsPlan),
+      dailySavingsAmount: Number(compliancePlan),
     });
     const ded = pricing.deductions;
     return {
@@ -105,7 +98,7 @@ export function RepeatApplication({
       financedPrincipal: pricing.financedPrincipal,
       daily: pricing.dailyLoanInstallment,
     };
-  }, [insuranceFeeMode, loanAmount, loanType, processingFeeMode, repaymentDays, savingsPlan]);
+  }, [insuranceFeeMode, loanAmount, loanType, processingFeeMode, repaymentDays, compliancePlan]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
@@ -331,8 +324,8 @@ export function RepeatApplication({
           </div>
           <Select
             label="Daily Compliance Contribution Plan"
-            value={savingsPlan}
-            onChange={(v) => setSavingsPlan(v as "50" | "100")}
+            value={compliancePlan}
+            onChange={(v) => setCompliancePlan(v as "50" | "100")}
             options={["50", "100"]}
           />
           <Select

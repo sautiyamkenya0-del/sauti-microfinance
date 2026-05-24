@@ -96,7 +96,7 @@ export function FirstTimeApplication({
     collateral: [{ ...blankCollateral }],
     collateralAddedToLoan: false,
     collateralPhotosAttached: false,
-    dailySavingsPlan: "50" as "50" | "100",
+    dailyCompliancePlan: "50" as "50" | "100",
     processingFeeMode: "financed" as LoanChargeMode,
     insuranceFeeMode: "financed" as LoanChargeMode,
     registrationFeeMode: "upfront" as LoanChargeMode,
@@ -107,12 +107,10 @@ export function FirstTimeApplication({
   const loanType = useMemo(() => loanProductTypeForAmount(f.loanAmount), [f.loanAmount]);
   const loanCategory = loanType === "premium" ? "Premium" : "Normal";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
-  const loanKindOptions = useMemo<LoanKind[]>(() => {
-    if (existing?.category === "locomotive") return ["financial", "fuel"];
-    if (existing?.category === "stock") return ["financial", "stock"];
-    if (existing?.category === "service") return ["financial", "service"];
-    return ["financial", "fuel", "stock", "service"];
-  }, [existing?.category]);
+  const loanKindOptions = useMemo<LoanKind[]>(
+    () => ["financial", "fuel", "stock", "service"],
+    [],
+  );
 
   useEffect(() => {
     if (loanKindOptions.includes(initialLoanKind)) {
@@ -194,7 +192,7 @@ export function FirstTimeApplication({
       termDays: f.repaymentDays,
       processingFeeMode: f.processingFeeMode,
       insuranceFeeMode: f.insuranceFeeMode,
-      dailySavingsAmount: Number(f.dailySavingsPlan),
+      dailySavingsAmount: Number(f.dailyCompliancePlan),
       fixedFees: {
         membershipFeeAmount: membershipFeeDue,
         membershipFeeMode: f.registrationFeeMode,
@@ -236,7 +234,7 @@ export function FirstTimeApplication({
     f.processingFeeMode,
     f.repaymentDays,
     f.registrationFeeMode,
-    f.dailySavingsPlan,
+    f.dailyCompliancePlan,
     f.stickerFeeMode,
     loanType,
     membershipFeeDue,
@@ -578,8 +576,8 @@ export function FirstTimeApplication({
           </div>
           <Select
             label="Daily Compliance Contribution Plan"
-            value={f.dailySavingsPlan}
-            onChange={(v) => set("dailySavingsPlan", v as "50" | "100")}
+            value={f.dailyCompliancePlan}
+            onChange={(v) => set("dailyCompliancePlan", v as "50" | "100")}
             options={["50", "100"]}
           />
           <Select

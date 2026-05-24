@@ -184,8 +184,8 @@ function ThresholdTree({
       <div className="mt-4 space-y-3">
         <ThresholdNode
           step="1"
-          title="60% to mandatory savings"
-          detail={`Savings contributions continue until ${fmtKES(mandatorySavingsThreshold)} is covered.`}
+          title="60% to daily compliance contribution"
+          detail={`Daily compliance contributions continue until ${fmtKES(mandatorySavingsThreshold)} is covered.`}
         />
         <Connector compact />
         <ThresholdNode

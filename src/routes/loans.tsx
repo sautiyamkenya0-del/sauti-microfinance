@@ -29,9 +29,9 @@ const LOAN_KIND_OPTIONS: { value: LoanKind; label: string; memberHint: string }[
 
 function memberMatchesLoanKind(member: { category?: string }, loanKind: LoanKind) {
   if (loanKind === "financial") return true;
-  if (loanKind === "fuel") return member.category === "locomotive";
-  if (loanKind === "stock") return member.category === "stock";
-  if (loanKind === "service") return member.category === "service";
+  if (loanKind === "fuel") return member.category === "locomotive" || !member.category;
+  if (loanKind === "stock") return member.category === "stock" || !member.category;
+  if (loanKind === "service") return member.category === "service" || !member.category;
   return true;
 }
 

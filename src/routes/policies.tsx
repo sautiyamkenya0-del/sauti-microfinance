@@ -49,19 +49,19 @@ function Policies() {
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               Members with {fmtKES(mandatorySharesThreshold)} in shares and{" "}
-              {fmtKES(mandatorySavingsThreshold)} in mandatory savings qualify for premium loans and
-              annual dividends.
+              {fmtKES(mandatorySavingsThreshold)} in daily compliance contribution qualify for
+              premium loans and annual dividends.
             </p>
           </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <Section title="A. Membership & Savings">
+          <Section title="A. Membership & Compliance Contribution">
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
               <li>All borrowers must be active SBC members.</li>
               <li>
-                Mandatory or compliant savings ({fmtKES(mandatorySavingsThreshold)} min) act as
-                security and are not withdrawable during active membership. Shares are not
+                Daily compliance contribution ({fmtKES(mandatorySavingsThreshold)} min) acts as
+                security and is not withdrawable during active membership. Shares are not
                 withdrawable but transferable.
               </li>
               <li>
@@ -70,7 +70,7 @@ function Policies() {
                 member must not have an active loan or guarantorship obligation.
               </li>
               <li>Voluntary savings may be withdrawn at will less any administrative charges.</li>
-              <li>Savings contributions must continue through the full loan cycle.</li>
+              <li>Daily compliance contributions must continue through the full loan cycle.</li>
               <li>
                 Savings are not used to offset a loan unless management approves the exception.
               </li>
@@ -117,9 +117,10 @@ function Policies() {
           <Section title="C. Dividends & Multipliers">
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
               <li>
-                Members with full share and savings thresholds ({fmtKES(mandatorySharesThreshold)}{" "}
-                shares value and {fmtKES(mandatorySavingsThreshold)} savings) and without default
-                earn annual dividends.
+                Members with full share and daily compliance contribution thresholds (
+                {fmtKES(mandatorySharesThreshold)} shares value and{" "}
+                {fmtKES(mandatorySavingsThreshold)} contribution) and without default earn annual
+                dividends.
               </li>
               <li>Good repayment history grows savings and access multipliers.</li>
               <li>Default reduces eligibility for the next loan cycle.</li>
@@ -149,10 +150,10 @@ function Policies() {
             />
             <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
               Active-loan receipts first clear mandatory fees and premium upfront where applicable.
-              The selected KSh 50 or KSh 100 compliance contribution fills savings and shares at a
-              60/40 split; once both thresholds are full, excess contributions split 80% to purpose
-              pool and 20% to loan savings / multiplier savings. The remaining amount reduces the
-              active loan balance.
+              The selected KSh 50 or KSh 100 daily compliance contribution fills compliance and
+              shares at a 60/40 split; once both thresholds are full, excess contributions split 80%
+              to purpose pool and 20% to loan savings / multiplier savings. The remaining amount
+              reduces the active loan balance.
             </div>
           </div>
         </Section>
@@ -187,7 +188,7 @@ function Policies() {
           </div>
         </Section>
 
-        <Section title="Premium Loan Upfront Heads (Shares + Savings thresholds)">
+        <Section title="Premium Loan Upfront Heads (Shares + Compliance thresholds)">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
@@ -195,8 +196,8 @@ function Policies() {
                   <th className="px-5 py-3 text-left">Loan Amount (KSh)</th>
                   <th className="px-5 py-3 text-right">Min Shares (KSh)</th>
                   <th className="px-5 py-3 text-right">Shares %</th>
-                  <th className="px-5 py-3 text-right">Min Savings (KSh)</th>
-                  <th className="px-5 py-3 text-right">Savings %</th>
+                  <th className="px-5 py-3 text-right">Min Compliance (KSh)</th>
+                  <th className="px-5 py-3 text-right">Compliance %</th>
                   <th className="px-5 py-3 text-left">Notes</th>
                 </tr>
               </thead>
@@ -215,7 +216,7 @@ function Policies() {
             </table>
           </div>
           <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
-            Remaining balances can be completed through Special Savings (3:2 ratio).
+            Remaining balances can be completed through directed compliance top-ups (3:2 ratio).
           </p>
         </Section>
       </main>

@@ -1699,10 +1699,10 @@ export async function applyMpesaPaymentToDatabase(args: {
     if (options?.trackMandatoryThreshold === false) return;
     if (currentSavingsBalance() < mandatorySavingsThreshold) {
       notes.push(
-        `${notePrefix} Member is still below the mandatory savings threshold of ${mandatorySavingsThreshold}/=.`,
+        `${notePrefix} Member is still below the daily compliance contribution threshold of ${mandatorySavingsThreshold}/=.`,
       );
     } else {
-      notes.push(`${notePrefix} Member meets mandatory savings threshold.`);
+      notes.push(`${notePrefix} Member meets the daily compliance contribution threshold.`);
     }
   }
 
@@ -1834,7 +1834,7 @@ export async function applyMpesaPaymentToDatabase(args: {
 
     if (savingsTarget > 0) {
       queueSavingsDeposit(savingsTarget, notePrefix, {
-        note: `Mandatory compliance savings via Paybill ${norm}`,
+        note: `Mandatory daily compliance contribution via Paybill ${norm}`,
         roundOff: false,
       });
     }
@@ -1850,7 +1850,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     if (amount > 0 || unassigned > 0) {
       allocatePostComplianceSplit(
         roundMoney(amount + unassigned),
-        "amount above mandatory savings and shares thresholds",
+        "amount above daily compliance contribution and shares thresholds",
       );
     }
   }
@@ -6942,6 +6942,10 @@ const DOCKET_ACCOUNT_ALIASES: Record<string, MemberDocket> = {
   WITHDRAW: "withdrawable_savings",
   WDS: "withdrawable_savings",
   SAVINGS: "mandatory_savings",
+  DAILY: "mandatory_savings",
+  DAILYCOMPLIANCE: "mandatory_savings",
+  DAILY_COMPLIANCE: "mandatory_savings",
+  CONTRIBUTION: "mandatory_savings",
   MANDATORY: "mandatory_savings",
   COMPLIANCE: "mandatory_savings",
   LOANSAVINGS: "loan_savings",
@@ -7126,7 +7130,7 @@ async function adjustMemberDocketBalance(args: {
     const compliance = await memberMeetsComplianceThreshold(runtimeDb, member);
     if (!compliance.ok) {
       throw new Error(
-        `Loan savings opens after compliance is met: savings ${compliance.savings}/${compliance.savingsThreshold}, shares ${compliance.sharesValue}/${compliance.sharesThreshold}.`,
+        `Loan savings opens after compliance is met: daily compliance contribution ${compliance.savings}/${compliance.savingsThreshold}, shares ${compliance.sharesValue}/${compliance.sharesThreshold}.`,
       );
     }
   }

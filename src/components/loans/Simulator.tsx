@@ -42,7 +42,7 @@ const DAY_OPTIONS: Record<LoanProductType, number[]> = {
   premium: [14, 30, 60, 90],
 };
 
-const SAVINGS_OPTIONS = [50, 100];
+const COMPLIANCE_OPTIONS = [50, 100];
 
 function fmtDate(date: Date) {
   return date.toLocaleDateString("en-GB", {
@@ -58,7 +58,7 @@ export function Simulator() {
   const [loanType, setLoanType] = useState<LoanProductType>("premium");
   const [amount, setAmount] = useState(30000);
   const [requestedDays, setRequestedDays] = useState<number>(30);
-  const [dailySavings, setDailySavings] = useState(100);
+  const [dailyComplianceContribution, setDailyComplianceContribution] = useState(100);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [processingMode, setProcessingMode] = useState<LoanChargeMode>("financed");
   const [insuranceMode, setInsuranceMode] = useState<LoanChargeMode>("financed");
@@ -132,7 +132,7 @@ export function Simulator() {
         termDays: requestedDays,
         processingFeeMode: processingMode,
         insuranceFeeMode: insuranceMode,
-        dailySavingsAmount: dailySavings,
+        dailySavingsAmount: dailyComplianceContribution,
         fixedFees: {
           membershipFeeAmount: registrationFeeAmount,
           membershipFeeMode: registrationMode,
@@ -146,7 +146,7 @@ export function Simulator() {
       amount,
       cardFeeAmount,
       cardMode,
-      dailySavings,
+      dailyComplianceContribution,
       insuranceMode,
       loanType,
       processingMode,
@@ -297,19 +297,20 @@ export function Simulator() {
 
             <Field label="Daily Compliance Contribution Inclusive">
               <select
-                value={dailySavings}
-                onChange={(event) => setDailySavings(Number(event.target.value))}
+                value={dailyComplianceContribution}
+                onChange={(event) => setDailyComplianceContribution(Number(event.target.value))}
                 className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
               >
-                {SAVINGS_OPTIONS.map((value) => (
+                {COMPLIANCE_OPTIONS.map((value) => (
                   <option key={value} value={value}>
                     {value} KSh / day
                   </option>
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                Over {pricing.termDays} days: {fmtKES(dailySavings * pricing.termDays)} credited to
-                the member compliance contribution.
+                Over {pricing.termDays} days:{" "}
+                {fmtKES(dailyComplianceContribution * pricing.termDays)} credited to the member
+                daily compliance contribution.
               </p>
             </Field>
 
@@ -383,7 +384,7 @@ export function Simulator() {
               <Tile
                 label="Daily Repayment Inclusive"
                 value={fmtKES(pricing.dailyInclusive)}
-                sub={`${fmtKES(pricing.dailyLoanInstallment)} loan + ${fmtKES(dailySavings)} savings`}
+                sub={`${fmtKES(pricing.dailyLoanInstallment)} loan + ${fmtKES(dailyComplianceContribution)} compliance`}
               />
               <Tile
                 label="Grand Total Collected"

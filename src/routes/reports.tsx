@@ -313,7 +313,7 @@ function ReportsPage() {
       label: "Purpose pool contributions",
       count: purposePoolTransactions.length,
       amount: purposePoolRevenue,
-      note: "Amounts routed above the mandatory savings and shares thresholds.",
+      note: "Amounts routed above the daily compliance contribution and shares thresholds.",
     },
     {
       key: "round_off_income",

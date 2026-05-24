@@ -87,6 +87,7 @@ function SuppliersPage() {
     commodityName: "",
     quantity: 0,
     unit: "unit",
+    unitPrice: 0,
     vehiclePlate: "",
     fuelType: "",
     notes: "",
@@ -625,6 +626,9 @@ function SuppliersPage() {
                         commodityName: "",
                         vehiclePlate: "",
                         fuelType: "",
+                        quantity: 0,
+                        unit: value === "fuel" ? "litres" : "unit",
+                        unitPrice: 0,
                       }))
                     }
                     options={[
@@ -670,6 +674,22 @@ function SuppliersPage() {
                         setRequestForm((current) => ({ ...current, fuelType: value }))
                       }
                       placeholder="Fuel type"
+                    />
+                    <Input
+                      type="number"
+                      value={requestForm.quantity || ""}
+                      onChange={(value) =>
+                        setRequestForm((current) => ({ ...current, quantity: Number(value) }))
+                      }
+                      placeholder="Litres requested"
+                    />
+                    <Input
+                      type="number"
+                      value={requestForm.unitPrice || ""}
+                      onChange={(value) =>
+                        setRequestForm((current) => ({ ...current, unitPrice: Number(value) }))
+                      }
+                      placeholder="Price per litre"
                     />
                   </div>
                 ) : (
@@ -745,6 +765,7 @@ function SuppliersPage() {
                             unit: requestForm.unit,
                             vehicle: requestForm.vehiclePlate,
                             fuelType: requestForm.fuelType,
+                            unitPrice: requestForm.unitPrice,
                             notes: requestForm.notes,
                             driverMemberId: requestForm.memberId,
                           },
@@ -760,6 +781,7 @@ function SuppliersPage() {
                         amount: 0,
                         commodityName: "",
                         quantity: 0,
+                        unitPrice: 0,
                         notes: "",
                         vehiclePlate: "",
                         fuelType: "",
