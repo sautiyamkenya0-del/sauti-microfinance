@@ -1,6 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { toast } from "sonner";
 import {
   Bell,
@@ -225,7 +232,13 @@ function SupplierPortalPage() {
                   <StatCard
                     label={isBroker ? "Registered people" : "Open requests"}
                     value={isBroker ? brokerClients.length : openRequests}
-                    icon={isBroker ? <Users className="h-5 w-5" /> : <ClipboardList className="h-5 w-5" />}
+                    icon={
+                      isBroker ? (
+                        <Users className="h-5 w-5" />
+                      ) : (
+                        <ClipboardList className="h-5 w-5" />
+                      )
+                    }
                   />
                   <StatCard
                     label={isBroker ? "Client balances" : "Outstanding payment"}
@@ -248,7 +261,8 @@ function SupplierPortalPage() {
                         : fmtKES(paidAmount)
                     }
                     tone={
-                      isBroker && Math.abs(brokerTotals.ledgerNet - brokerTotals.clientBalances) >= 0.01
+                      isBroker &&
+                      Math.abs(brokerTotals.ledgerNet - brokerTotals.clientBalances) >= 0.01
                         ? "destructive"
                         : "success"
                     }
@@ -270,7 +284,15 @@ function SupplierPortalPage() {
                               {notice.date} by {notice.by}
                             </div>
                           </div>
-                          <Badge tone={notice.kind === "alert" ? "destructive" : notice.kind === "warning" ? "warning" : "default"}>
+                          <Badge
+                            tone={
+                              notice.kind === "alert"
+                                ? "destructive"
+                                : notice.kind === "warning"
+                                  ? "warning"
+                                  : "default"
+                            }
+                          >
                             {notice.kind ?? "info"}
                           </Badge>
                         </div>
@@ -346,9 +368,20 @@ function SupplierPortalPage() {
                 {isBroker ? (
                   <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
                     <StatCard label="Opening balances" value={fmtKES(brokerTotals.opening)} />
-                    <StatCard label="Deposits" value={fmtKES(brokerTotals.deposits)} tone="success" />
-                    <StatCard label="Withdrawals" value={fmtKES(brokerTotals.withdrawals)} tone="warning" />
-                    <StatCard label="Current client balances" value={fmtKES(brokerTotals.clientBalances)} />
+                    <StatCard
+                      label="Deposits"
+                      value={fmtKES(brokerTotals.deposits)}
+                      tone="success"
+                    />
+                    <StatCard
+                      label="Withdrawals"
+                      value={fmtKES(brokerTotals.withdrawals)}
+                      tone="warning"
+                    />
+                    <StatCard
+                      label="Current client balances"
+                      value={fmtKES(brokerTotals.clientBalances)}
+                    />
                   </div>
                 ) : (
                   <PaymentsTable requests={requests} outflows={outflows} />
@@ -491,9 +524,7 @@ function SupplierRequests({
                   <td className="px-5 py-3">
                     <div className="font-medium">{summarizeRequest(request)}</div>
                     {request.verification_code ? (
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        Driver code required
-                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">Driver code required</div>
                     ) : null}
                   </td>
                   <td className="px-5 py-3 text-right font-semibold">
@@ -584,7 +615,9 @@ function SupplierInventoryForm({
     <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-4 md:grid-cols-2 xl:grid-cols-4">
       <Select
         value={form.itemKind}
-        onChange={(value) => setForm((current) => ({ ...current, itemKind: value as SupplierKind }))}
+        onChange={(value) =>
+          setForm((current) => ({ ...current, itemKind: value as SupplierKind }))
+        }
         options={[
           ["stock", "Stock"],
           ["fuel", "Fuel"],
@@ -795,7 +828,9 @@ function BrokerPeopleLedger({
           />
           <Select
             value={moneyForm.kind}
-            onChange={(kind) => setMoneyForm({ ...moneyForm, kind: kind as "deposit" | "withdrawal" })}
+            onChange={(kind) =>
+              setMoneyForm({ ...moneyForm, kind: kind as "deposit" | "withdrawal" })
+            }
             options={[
               ["deposit", "Deposit"],
               ["withdrawal", "Withdrawal"],
@@ -836,7 +871,9 @@ function BrokerPeopleLedger({
                 ? "Balanced"
                 : fmtKES(totals.ledgerNet - totals.clientBalances)
             }
-            tone={Math.abs(totals.ledgerNet - totals.clientBalances) < 0.01 ? "success" : "destructive"}
+            tone={
+              Math.abs(totals.ledgerNet - totals.clientBalances) < 0.01 ? "success" : "destructive"
+            }
           />
         </div>
         <div className="overflow-x-auto">
@@ -898,7 +935,9 @@ function BrokerPeopleLedger({
                     <td className="px-5 py-3 text-xs text-muted-foreground">
                       {tx.created_at ? new Date(tx.created_at).toLocaleString() : "-"}
                     </td>
-                    <td className="px-5 py-3">{client ? brokerClientName(client) : tx.supplier_client_id}</td>
+                    <td className="px-5 py-3">
+                      {client ? brokerClientName(client) : tx.supplier_client_id}
+                    </td>
                     <td className="px-5 py-3 capitalize">{tx.kind}</td>
                     <td className="px-5 py-3 text-right">{fmtKES(Number(tx.amount ?? 0))}</td>
                     <td className="px-5 py-3 text-right font-semibold">

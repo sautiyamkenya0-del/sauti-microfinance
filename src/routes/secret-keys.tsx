@@ -510,9 +510,10 @@ function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
       depositsToday,
       withdrawalsToday,
       netMovementToday: depositsToday - withdrawalsToday,
-      lastUpdatedAt: latestBalanceRow && Number.isFinite(latestBalanceRow.time)
-        ? new Date(latestBalanceRow.time).toLocaleString()
-        : undefined,
+      lastUpdatedAt:
+        latestBalanceRow && Number.isFinite(latestBalanceRow.time)
+          ? new Date(latestBalanceRow.time).toLocaleString()
+          : undefined,
       lastReference: latestBalanceRow?.row.mpesaRef,
     };
   }, [rows, todayKey]);

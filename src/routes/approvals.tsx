@@ -34,7 +34,9 @@ function ApprovalsPage() {
   const fulfilledSupplierRequests = supplierRequests.filter(
     (request: any) => request.status === "fulfilled",
   );
-  const activeSupplierRequests = supplierRequests.filter((request: any) => request.status === "sent");
+  const activeSupplierRequests = supplierRequests.filter(
+    (request: any) => request.status === "sent",
+  );
 
   const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? id;
 
@@ -167,7 +169,9 @@ function ApprovalsPage() {
         </Section>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <Section title={`Supplier-backed loans waiting for dispatch (${supplierReadyLoans.length})`}>
+          <Section
+            title={`Supplier-backed loans waiting for dispatch (${supplierReadyLoans.length})`}
+          >
             <div className="divide-y divide-border">
               {supplierReadyLoans.length === 0 ? (
                 <div className="px-5 py-8 text-sm text-muted-foreground">
@@ -203,26 +207,28 @@ function ApprovalsPage() {
                   No supplier actions are waiting right now.
                 </div>
               ) : null}
-              {[...activeSupplierRequests, ...fulfilledSupplierRequests].slice(0, 8).map((request: any) => (
-                <div key={request.id} className="px-5 py-4 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-medium">
-                        {request.id} / {memberName(request.member_id)}
+              {[...activeSupplierRequests, ...fulfilledSupplierRequests]
+                .slice(0, 8)
+                .map((request: any) => (
+                  <div key={request.id} className="px-5 py-4 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium">
+                          {request.id} / {memberName(request.member_id)}
+                        </div>
+                        <div className="text-xs text-muted-foreground capitalize">
+                          {request.kind} request is {request.status}
+                          {request.status === "fulfilled"
+                            ? " and waiting for payment."
+                            : " and waiting for supplier confirmation."}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground capitalize">
-                        {request.kind} request is {request.status}
-                        {request.status === "fulfilled"
-                          ? " and waiting for payment."
-                          : " and waiting for supplier confirmation."}
-                      </div>
+                      <Link to="/suppliers" className="text-xs text-primary hover:underline">
+                        Open Supplier Hub
+                      </Link>
                     </div>
-                    <Link to="/suppliers" className="text-xs text-primary hover:underline">
-                      Open Supplier Hub
-                    </Link>
                   </div>
-                </div>
-              ))}
+                ))}
             </div>
           </Section>
         </div>

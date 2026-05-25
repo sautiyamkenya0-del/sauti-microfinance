@@ -99,10 +99,26 @@ function Dashboard() {
         <Section title="Quick Access">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 p-4">
             {[
-              { to: "/approvals", label: "Director approvals", hint: "Loans, member requests, supplier follow-through" },
-              { to: "/suppliers", label: "Supplier hub", hint: "Dispatch, inventory, fuel codes, supplier debt" },
-              { to: "/savings", label: "Savings dockets", hint: "Compliance contribution, withdrawable and loan savings" },
-              { to: "/withdrawals", label: "Withdrawals", hint: "Client, supplier, investor and staff outflows" },
+              {
+                to: "/approvals",
+                label: "Director approvals",
+                hint: "Loans, member requests, supplier follow-through",
+              },
+              {
+                to: "/suppliers",
+                label: "Supplier hub",
+                hint: "Dispatch, inventory, fuel codes, supplier debt",
+              },
+              {
+                to: "/savings",
+                label: "Savings dockets",
+                hint: "Compliance contribution, withdrawable and loan savings",
+              },
+              {
+                to: "/withdrawals",
+                label: "Withdrawals",
+                hint: "Client, supplier, investor and staff outflows",
+              },
             ].map((entry) => (
               <Link
                 key={entry.to}

@@ -7,7 +7,10 @@ import { Building2, HandCoins, RefreshCw, WalletCards } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
-import { listWithdrawalOperationsRecord, recordSystemOutflowRecord } from "@/lib/app-data.functions";
+import {
+  listWithdrawalOperationsRecord,
+  recordSystemOutflowRecord,
+} from "@/lib/app-data.functions";
 import { fmtKES, memberCategoryLabel, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/withdrawals")({
@@ -75,8 +78,12 @@ function WithdrawalsPage() {
   );
 
   const selectedMember = members.find((member: any) => member.id === outflowForm.memberId);
-  const selectedSupplier = suppliers.find((supplier: any) => supplier.id === outflowForm.supplierId);
-  const selectedInvestor = investors.find((investor: any) => investor.id === outflowForm.investorId);
+  const selectedSupplier = suppliers.find(
+    (supplier: any) => supplier.id === outflowForm.supplierId,
+  );
+  const selectedInvestor = investors.find(
+    (investor: any) => investor.id === outflowForm.investorId,
+  );
   const selectedStaff = staff.find((person: any) => person.id === outflowForm.staffId);
 
   const totalOutflows = outflows.reduce(
@@ -119,7 +126,10 @@ function WithdrawalsPage() {
   }, [outflowForm.kind, selectedInvestor]);
 
   useEffect(() => {
-    if ((outflowForm.kind === "staff_payment" || outflowForm.kind === "petty_cash") && selectedStaff) {
+    if (
+      (outflowForm.kind === "staff_payment" || outflowForm.kind === "petty_cash") &&
+      selectedStaff
+    ) {
       setOutflowForm((current) => ({
         ...current,
         receiverName: selectedStaff.name,
@@ -169,7 +179,11 @@ function WithdrawalsPage() {
             icon={<Building2 className="h-5 w-5" />}
             tone="destructive"
           />
-          <StatCard label="Recorded outflows" value={fmtKES(totalOutflows)} icon={<HandCoins className="h-5 w-5" />} />
+          <StatCard
+            label="Recorded outflows"
+            value={fmtKES(totalOutflows)}
+            icon={<HandCoins className="h-5 w-5" />}
+          />
         </div>
 
         <div className="flex justify-end">
@@ -209,7 +223,9 @@ function WithdrawalsPage() {
               {outflowForm.kind === "client_withdrawal" ? (
                 <Select
                   value={outflowForm.memberId}
-                  onChange={(value) => setOutflowForm((current) => ({ ...current, memberId: value }))}
+                  onChange={(value) =>
+                    setOutflowForm((current) => ({ ...current, memberId: value }))
+                  }
                   options={members.map((member: any) => [
                     member.id,
                     `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
@@ -274,8 +290,13 @@ function WithdrawalsPage() {
               {outflowForm.kind === "staff_payment" || outflowForm.kind === "petty_cash" ? (
                 <Select
                   value={outflowForm.staffId}
-                  onChange={(value) => setOutflowForm((current) => ({ ...current, staffId: value }))}
-                  options={staff.map((person: any) => [person.id, `${person.name} (${person.role})`])}
+                  onChange={(value) =>
+                    setOutflowForm((current) => ({ ...current, staffId: value }))
+                  }
+                  options={staff.map((person: any) => [
+                    person.id,
+                    `${person.name} (${person.role})`,
+                  ])}
                 />
               ) : null}
 
@@ -286,11 +307,16 @@ function WithdrawalsPage() {
                     onChange={(value) =>
                       setOutflowForm((current) => ({ ...current, memberId: value, loanId: "" }))
                     }
-                    options={members.map((member: any) => [member.id, `${member.id} - ${member.name}`])}
+                    options={members.map((member: any) => [
+                      member.id,
+                      `${member.id} - ${member.name}`,
+                    ])}
                   />
                   <Select
                     value={outflowForm.loanId}
-                    onChange={(value) => setOutflowForm((current) => ({ ...current, loanId: value }))}
+                    onChange={(value) =>
+                      setOutflowForm((current) => ({ ...current, loanId: value }))
+                    }
                     options={[
                       ["", "Select loan"],
                       ...loans
@@ -406,7 +432,9 @@ function WithdrawalsPage() {
                     const member = members.find((row: any) => row.id === request.member_id);
                     return (
                       <tr key={request.id}>
-                        <td className="px-5 py-3 font-medium">{supplier?.name ?? request.supplier_id}</td>
+                        <td className="px-5 py-3 font-medium">
+                          {supplier?.name ?? request.supplier_id}
+                        </td>
                         <td className="px-5 py-3">
                           <div>{member?.name ?? request.member_id}</div>
                           <div className="text-xs text-muted-foreground">
@@ -471,14 +499,14 @@ function WithdrawalsPage() {
                 {outflows.slice(0, 20).map((row: any) => (
                   <tr key={row.id}>
                     <td className="px-5 py-3 font-medium">{row.receiver_name}</td>
-                    <td className="px-5 py-3 capitalize">{String(row.kind ?? "").replace(/_/g, " ")}</td>
+                    <td className="px-5 py-3 capitalize">
+                      {String(row.kind ?? "").replace(/_/g, " ")}
+                    </td>
                     <td className="px-5 py-3 text-right font-semibold">
                       {fmtKES(Number(row.amount ?? 0))}
                     </td>
                     <td className="px-5 py-3">{row.method}</td>
-                    <td className="px-5 py-3 text-xs text-muted-foreground">
-                      {row.note || "-"}
-                    </td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">{row.note || "-"}</td>
                   </tr>
                 ))}
               </tbody>

@@ -4396,7 +4396,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       thirdName: data?.thirdName?.trim() || undefined,
       dob: data?.dob?.trim() || undefined,
       gender: data?.gender,
-      email: data?.email?.trim() || undefined,
+      email: data?.email?.trim().toLowerCase() || undefined,
       address: data?.address?.trim() || undefined,
       city: data?.city?.trim() || undefined,
       county: data?.county?.trim() || undefined,
@@ -4598,7 +4598,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       thirdName: data?.thirdName?.trim() || undefined,
       dob: data?.dob?.trim() || undefined,
       gender: data?.gender,
-      email: data?.email?.trim() || undefined,
+      email: data?.email?.trim().toLowerCase() || undefined,
       address: data?.address?.trim() || undefined,
       city: data?.city?.trim() || undefined,
       county: data?.county?.trim() || undefined,
@@ -4955,7 +4955,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       firstName: data?.firstName?.trim() || undefined,
       secondName: data?.secondName?.trim() || undefined,
       thirdName: data?.thirdName?.trim() || undefined,
-      email: data?.email?.trim() || undefined,
+      email: data?.email?.trim().toLowerCase() || undefined,
       phone: data?.phone?.trim() || undefined,
       nationalId: data?.nationalId?.trim() || undefined,
       address: data?.address?.trim() || undefined,
@@ -4978,7 +4978,8 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     const { data: existing, error: existingError } = await supabaseAdmin
       .from("staff")
       .select("id")
-      .eq("email", data.email)
+      .ilike("email", data.email)
+      .limit(1)
       .maybeSingle();
     if (existingError) throw new Error(existingError.message);
     if (existing)
@@ -5056,7 +5057,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
     const updates: Record<string, unknown> = {};
     if (hasPatch("name")) updates.name = patch.name?.trim() || undefined;
     if (hasPatch("role")) updates.role = patch.role as never;
-    if (hasPatch("email")) updates.email = patch.email?.trim() || undefined;
+    if (hasPatch("email")) updates.email = patch.email?.trim().toLowerCase() || undefined;
     if (hasPatch("phone")) updates.phone = patch.phone?.trim() || null;
     if (hasPatch("nationalId")) updates.national_id = patch.nationalId?.trim() || null;
     if (hasPatch("address")) updates.address = patch.address?.trim() || null;
@@ -7912,7 +7913,9 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
     if (!supplier) throw new Error("Supplier was not found.");
     if (supplier.status !== "active") throw new Error("Supplier is not active.");
     if (supplier.supplier_class === "special_broker") {
-      throw new Error("Special broker suppliers manage people and deposits, not commodity requests.");
+      throw new Error(
+        "Special broker suppliers manage people and deposits, not commodity requests.",
+      );
     }
     if (supplier.kind !== data.kind) {
       throw new Error(
@@ -8393,19 +8396,17 @@ export const recordSupplierBrokerClientTransactionRecord = createServerFn({ meth
 
     const now = new Date().toISOString();
     const id = makeId("BRT");
-    const { error: txError } = await runtimeDb
-      .from("supplier_broker_client_transactions")
-      .insert({
-        id,
-        supplier_client_id: data.clientId,
-        supplier_id: data.supplierId,
-        kind: data.kind,
-        amount: data.amount,
-        balance_after: nextBalance,
-        note: data.note ?? null,
-        recorded_by: actor.id,
-        created_at: now,
-      });
+    const { error: txError } = await runtimeDb.from("supplier_broker_client_transactions").insert({
+      id,
+      supplier_client_id: data.clientId,
+      supplier_id: data.supplierId,
+      kind: data.kind,
+      amount: data.amount,
+      balance_after: nextBalance,
+      note: data.note ?? null,
+      recorded_by: actor.id,
+      created_at: now,
+    });
     if (txError) throw new Error(txError.message);
 
     const { error: updateError } = await runtimeDb

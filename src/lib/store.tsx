@@ -590,6 +590,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dataVersionRef = useRef("");
   const fullRefreshRef = useRef<Promise<any> | null>(null);
   const changeRefreshRef = useRef<Promise<any> | null>(null);
+  const refreshGenerationRef = useRef(0);
 
   function applyDatabaseState(data: any) {
     dataVersionRef.current = data.dataVersion ?? dataVersionRef.current;
@@ -619,16 +620,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setActivePolicySettings(data.policySettings ?? DEFAULT_POLICY_SETTINGS);
   }
 
-  async function refreshFromDatabase() {
-    if (fullRefreshRef.current) return fullRefreshRef.current;
+  async function refreshFromDatabase(options?: { force?: boolean }) {
+    if (fullRefreshRef.current && !options?.force) return fullRefreshRef.current;
+    const generation = options?.force
+      ? ++refreshGenerationRef.current
+      : refreshGenerationRef.current;
     fullRefreshRef.current = (async () => {
       try {
         const data = await load();
-        applyDatabaseState(data);
+        if (generation === refreshGenerationRef.current) {
+          applyDatabaseState(data);
+        }
         return data;
       } finally {
         setIsHydrated(true);
-        fullRefreshRef.current = null;
+        if (generation === refreshGenerationRef.current) {
+          fullRefreshRef.current = null;
+        }
       }
     })();
     return fullRefreshRef.current;
@@ -657,10 +665,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function refreshInBackground(fallbackMessage: string, full = false) {
-    const task = full ? refreshFromDatabase() : refreshIfDatabaseChanged();
+    const task = full ? refreshFromDatabase({ force: true }) : refreshIfDatabaseChanged();
     void task.catch((error: any) => {
       toast.error(error?.message ?? fallbackMessage);
     });
+  }
+
+  async function refreshAfterAuth() {
+    const refresh = refreshFromDatabase({ force: true });
+    const timeout = new Promise<null>((resolve) => {
+      window.setTimeout(() => resolve(null), 5000);
+    });
+    return Promise.race([refresh, timeout]);
   }
 
   useEffect(() => {
@@ -993,9 +1009,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const result = await authenticateMember({
           data: { memberNo, phone },
         });
-        const data = await refreshFromDatabase();
+        setIsAuthenticated(true);
+        setAuthMode("member");
+        setPortalMemberIdState(result.member.id);
+        const data = await refreshAfterAuth();
+        if (!data) {
+          refreshInBackground("Signed in, but the first data sync is still running.", true);
+        }
         return {
-          member: data?.members.find((member) => member.id === result.member.id) ?? null,
+          member:
+            data?.members.find((member) => member.id === result.member.id) ??
+            ({
+              id: result.member.id,
+              name: result.member.name,
+              phone: "",
+              joinedAt: new Date().toISOString().slice(0, 10),
+              status: "active",
+              shares: 0,
+              savingsBalance: 0,
+              fees: DEFAULT_FEES,
+              category: "member",
+            } satisfies Member),
           portal: result.portal === "supplier" ? "supplier" : "member",
         };
       },
@@ -1003,8 +1037,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const result = await authenticateStaff({
           data: { email, password },
         });
-        const data = await refreshFromDatabase();
-        return data?.staff.find((member) => member.id === result.user.id) ?? null;
+        const signedInStaff = {
+          id: result.user.id,
+          name: result.user.name,
+          role: result.user.role,
+          canMarkAttendance: result.user.role === "director",
+        } satisfies Staff;
+        setIsAuthenticated(true);
+        setAuthMode("staff");
+        setCurrentUserState(signedInStaff);
+        const data = await refreshAfterAuth();
+        if (!data) {
+          refreshInBackground("Signed in, but the first data sync is still running.", true);
+        }
+        return data?.staff.find((member) => member.id === result.user.id) ?? signedInStaff;
       },
       logout: async () => {
         await signOut();

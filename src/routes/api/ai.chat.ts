@@ -290,8 +290,7 @@ async function buildMemberAiSnapshot(memberId: string, clientSnapshot: unknown) 
       key: "transactions",
       table: "transactions",
       limit: 500,
-      build: (query) =>
-        query.eq("member_id", memberId).order("created_at", { ascending: false }),
+      build: (query) => query.eq("member_id", memberId).order("created_at", { ascending: false }),
     },
     {
       key: "penalties",

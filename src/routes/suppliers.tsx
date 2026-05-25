@@ -183,7 +183,11 @@ function SuppliersPage() {
           : registerForm.registrationCategory,
       name:
         registerForm.supplierClass === "special_broker"
-          ? [registerForm.individualFirstName, registerForm.individualSecondName, registerForm.individualThirdName]
+          ? [
+              registerForm.individualFirstName,
+              registerForm.individualSecondName,
+              registerForm.individualThirdName,
+            ]
               .filter(Boolean)
               .join(" ")
               .trim()
@@ -240,10 +244,27 @@ function SuppliersPage() {
       />
       <main className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="Normal suppliers" value={normalSuppliers.length} icon={<Truck className="h-5 w-5" />} />
-          <StatCard label="Special brokers" value={brokerSuppliers.length} icon={<Building2 className="h-5 w-5" />} />
-          <StatCard label="Open requests" value={requests.filter((row: any) => row.status === "sent").length} icon={<ClipboardList className="h-5 w-5" />} />
-          <StatCard label="Outstanding supplier debt" value={fmtKES(totalDebt)} tone="warning" icon={<CheckCircle2 className="h-5 w-5" />} />
+          <StatCard
+            label="Normal suppliers"
+            value={normalSuppliers.length}
+            icon={<Truck className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Special brokers"
+            value={brokerSuppliers.length}
+            icon={<Building2 className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Open requests"
+            value={requests.filter((row: any) => row.status === "sent").length}
+            icon={<ClipboardList className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Outstanding supplier debt"
+            value={fmtKES(totalDebt)}
+            tone="warning"
+            icon={<CheckCircle2 className="h-5 w-5" />}
+          />
         </div>
 
         <div className="flex justify-end">
@@ -272,7 +293,8 @@ function SuppliersPage() {
                     setRegisterForm((current) => ({
                       ...current,
                       supplierClass: value,
-                      supplierType: value === "special_broker" ? "individual" : current.supplierType,
+                      supplierType:
+                        value === "special_broker" ? "individual" : current.supplierType,
                       kind: value === "special_broker" ? "service" : current.kind,
                       registrationCategory:
                         value === "special_broker" ? "services" : current.registrationCategory,
@@ -294,7 +316,10 @@ function SuppliersPage() {
                 <Select
                   value={registerForm.supplierType}
                   onChange={(value) =>
-                    setRegisterForm((current) => ({ ...current, supplierType: value as SupplierType }))
+                    setRegisterForm((current) => ({
+                      ...current,
+                      supplierType: value as SupplierType,
+                    }))
                   }
                   options={[
                     ["individual", "Individual"],
@@ -429,7 +454,9 @@ function SuppliersPage() {
                   />
                   <Input
                     value={registerForm.accountNumber}
-                    onChange={(accountNumber) => setRegisterForm({ ...registerForm, accountNumber })}
+                    onChange={(accountNumber) =>
+                      setRegisterForm({ ...registerForm, accountNumber })
+                    }
                     placeholder="Account number"
                   />
                   <Input
@@ -470,7 +497,8 @@ function SuppliersPage() {
                 setRequestForm((current) => ({
                   ...current,
                   kind: kind as SupplierKind,
-                  supplierId: normalSuppliers.find((supplier: any) => supplier.kind === kind)?.id ?? "",
+                  supplierId:
+                    normalSuppliers.find((supplier: any) => supplier.kind === kind)?.id ?? "",
                   loanId: "",
                 }))
               }
@@ -611,7 +639,11 @@ function SuppliersPage() {
                           </div>
                         </td>
                         <td className="px-5 py-3">
-                          <Badge tone={supplier.supplier_class === "special_broker" ? "accent" : "default"}>
+                          <Badge
+                            tone={
+                              supplier.supplier_class === "special_broker" ? "accent" : "default"
+                            }
+                          >
                             {supplierClassLabel(supplier.supplier_class)}
                           </Badge>
                         </td>
@@ -664,7 +696,10 @@ function SuppliersPage() {
                         <td className="px-5 py-3">
                           <div className="capitalize">{request.kind}</div>
                           <div className="text-xs text-muted-foreground">
-                            {request.commodity_name || request.fuel_type || request.detail?.item || "Request"}
+                            {request.commodity_name ||
+                              request.fuel_type ||
+                              request.detail?.item ||
+                              "Request"}
                           </div>
                         </td>
                         <td className="px-5 py-3 text-right font-semibold">

@@ -36,7 +36,8 @@ export const signInStaff = createServerFn({ method: "POST" })
     const { data: staffRow, error } = await supabaseAdmin
       .from("staff")
       .select("id, name, role, temp_password")
-      .eq("email", data.email)
+      .ilike("email", data.email)
+      .limit(1)
       .maybeSingle();
     if (error) throw new Error(error.message);
 

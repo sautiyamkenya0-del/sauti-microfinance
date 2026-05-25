@@ -159,8 +159,7 @@ function SavingsPage() {
     const purposePool = Number(balances.purpose_pool ?? 0);
     const investment = Number(balances.investment ?? 0);
     const penaltyPayment = Number(balances.penalty_payment ?? 0);
-    const shareValue =
-      Number(member.shares ?? 0) * 100 + Number(member.share_reserve_balance ?? 0);
+    const shareValue = Number(member.shares ?? 0) * 100 + Number(member.share_reserve_balance ?? 0);
     const lastMovement = movements.find((row: any) => row.member_id === member.id);
     return {
       member,
@@ -335,9 +334,7 @@ function SavingsPage() {
               />
               <Input
                 value={transferForm.reason}
-                onChange={(value) =>
-                  setTransferForm((current) => ({ ...current, reason: value }))
-                }
+                onChange={(value) => setTransferForm((current) => ({ ...current, reason: value }))}
                 placeholder="Reason for transfer"
               />
               {selectedTransferMember ? (
@@ -396,9 +393,7 @@ function SavingsPage() {
                         {row.member.id} - {memberCategoryLabel(row.member.member_category)}
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-right font-semibold">
-                      {fmtKES(row.compliance)}
-                    </td>
+                    <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.compliance)}</td>
                     <td className="px-5 py-3 text-right text-xs">
                       {row.thresholdGap > 0 ? fmtKES(row.thresholdGap) : "Met"}
                     </td>
