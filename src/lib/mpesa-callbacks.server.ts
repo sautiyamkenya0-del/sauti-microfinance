@@ -8,7 +8,6 @@ import {
   markMpesaWithdrawalTimeout,
   recordMpesaConfirmationEvent,
   recordMpesaValidationEvent,
-  validateMpesaDepositRequest,
 } from "@/lib/app-data.functions";
 import { logErrorToServer } from "@/lib/error-logging.server";
 import { listConfiguredMpesaShortcodes } from "@/lib/mpesa-config.server";
@@ -44,7 +43,13 @@ function textValue(value: unknown) {
 }
 
 function numberValue(value: unknown) {
-  const next = Number(value ?? 0);
+  const raw =
+    typeof value === "number"
+      ? value
+      : String(value ?? "")
+          .trim()
+          .replace(/[^\d.-]/g, "");
+  const next = Number(raw || 0);
   return Number.isFinite(next) ? next : 0;
 }
 
@@ -410,7 +415,7 @@ export async function handleMpesaValidationRequest(request: Request) {
       payerName,
       phone,
     });
-    await logErrorToServer({
+    void logErrorToServer({
       level: "info",
       category: "mpesa.validation.payload",
       message: "M-Pesa validation callback received",
@@ -421,17 +426,17 @@ export async function handleMpesaValidationRequest(request: Request) {
         phone,
         body,
       },
+    }).catch((error) => {
+      console.error("mpesa validation log error", error);
     });
 
-    try {
-      await recordMpesaValidationEvent({
-        raw: body,
-        account,
-        amount,
-        payerName,
-        phone,
-      });
-    } catch (error) {
+    void recordMpesaValidationEvent({
+      raw: body,
+      account,
+      amount,
+      payerName,
+      phone,
+    }).catch(async (error) => {
       console.error("mpesa validation audit error", error);
       try {
         await logErrorToServer({
@@ -443,12 +448,11 @@ export async function handleMpesaValidationRequest(request: Request) {
       } catch (_) {
         /* ignore logging failure */
       }
-    }
+    });
 
-    const validation = await validateMpesaDepositRequest({ account, amount });
-    if (!validation.accepted) {
+    if (amount <= 0) {
       return Response.json(
-        { ResultCode: 1, ResultDesc: validation.reason ?? "Rejected" },
+        { ResultCode: 1, ResultDesc: "Payment amount must be above zero." },
         { headers: NO_STORE_HEADERS },
       );
     }
