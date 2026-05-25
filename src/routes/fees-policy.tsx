@@ -753,7 +753,7 @@ function PolicyCenterPage() {
         ...loan,
         memberId: selectedClient.id,
         label: loan.label || `Completed loan ${index + 1}`,
-        paidToDate: summary.totalRepayment,
+        paidToDate: summary.totalExpectedCollected,
         dueDate: loan.dueDate ?? summary.dueDate,
         closedOn: loan.closedOn ?? summary.dueDate,
         status: "closed" as const,
@@ -2536,12 +2536,18 @@ function PolicyCenterPage() {
                         </select>
                       </Field>
                       <NumberField
-                        label="Interest rate override %"
-                        value={carryoverLoanDraft.interestRatePct}
+                        label="Daily penalty missed days"
+                        value={carryoverLoanDraftSummary.dailyPenaltyDays}
                         onChange={(value) =>
                           setCarryoverLoanDraft((current) => ({
                             ...current,
-                            interestRatePct: value,
+                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                              {
+                                ...current.feeBreakdown,
+                                dailyPenaltyDays: Math.max(0, Math.floor(value)),
+                              },
+                              current.loanCycleNumber,
+                            ),
                           }))
                         }
                       />
@@ -2612,6 +2618,29 @@ function PolicyCenterPage() {
                           <option value="defaulted">Defaulted</option>
                         </select>
                       </Field>
+                      {carryoverLoanDraft.status === "closed" || carryoverLoanDraft.finished ? (
+                        <NumberField
+                          label="Days after due date"
+                          value={carryoverLoanDraftSummary.dueDatePenaltyDays}
+                          onChange={(value) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                {
+                                  ...current.feeBreakdown,
+                                  dueDatePenaltyDays: Math.max(0, Math.floor(value)),
+                                },
+                                current.loanCycleNumber,
+                              ),
+                            }))
+                          }
+                        />
+                      ) : carryoverLoanDraft.status === "defaulted" ? (
+                        <MetricCard
+                          label="Due-date days to today"
+                          value={`${carryoverLoanDraftSummary.daysPastDue}`}
+                        />
+                      ) : null}
                       <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
                         <label className="flex items-center gap-2 text-sm">
                           <input
@@ -2670,6 +2699,14 @@ function PolicyCenterPage() {
                         <MetricCard
                           label="Fees and subscriptions"
                           value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
+                        />
+                        <MetricCard
+                          label="Daily penalty"
+                          value={fmtKES(carryoverLoanDraftSummary.arrearsPenalty)}
+                        />
+                        <MetricCard
+                          label="Due-date penalty"
+                          value={fmtKES(carryoverLoanDraftSummary.overduePenalty)}
                         />
                         <MetricCard
                           label="Owed now"
@@ -2753,6 +2790,14 @@ function PolicyCenterPage() {
                           <div className="mt-3 grid gap-3 md:grid-cols-4">
                             <MetricCard label="Arrears" value={fmtKES(summary.arrears)} />
                             <MetricCard label="Past Due Days" value={`${summary.daysPastDue}`} />
+                            <MetricCard
+                              label="Daily Penalty"
+                              value={fmtKES(summary.arrearsPenalty)}
+                            />
+                            <MetricCard
+                              label="Due-Date Penalty"
+                              value={fmtKES(summary.overduePenalty)}
+                            />
                             <MetricCard
                               label="Penalty Estimate"
                               value={fmtKES(summary.estimatedPenaltyNow)}
@@ -3233,8 +3278,8 @@ function applyDerivedCarryoverPayments(
     const summary = summarizeLegacyCarryoverLoan({ ...loan, paidToDate: 0 }, policySettings);
     const paidToDate =
       loan.status === "closed" || loan.finished
-        ? summary.totalRepayment
-        : Math.min(remaining, summary.totalRepayment);
+        ? summary.totalExpectedCollected
+        : Math.min(remaining, summary.totalExpectedCollected);
     if (loan.status !== "closed" && !loan.finished) {
       remaining = Math.max(0, remaining - paidToDate);
     }
@@ -3654,6 +3699,25 @@ function GuidedCarryoverLoanCard({
         ? `Defaulted loan ${index + 1}`
         : `Active loan ${index + 1}`;
   const showPaidFields = status !== "closed";
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const updateFee = (
+    key: keyof NonNullable<LegacyCarryoverLoan["feeBreakdown"]>,
+    value: number | boolean,
+  ) => {
+    onChange({
+      ...loan,
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        {
+          ...feeBreakdown,
+          [key]: value,
+        },
+        loan.loanCycleNumber,
+      ),
+    });
+  };
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -3699,9 +3763,9 @@ function GuidedCarryoverLoanCard({
           </select>
         </Field>
         <NumberField
-          label="Interest override %"
-          value={loan.interestRatePct}
-          onChange={(value) => onChange({ ...loan, interestRatePct: value })}
+          label="Daily penalty missed days"
+          value={summary.dailyPenaltyDays}
+          onChange={(value) => updateFee("dailyPenaltyDays", Math.max(0, Math.floor(value)))}
         />
         <NumberField
           label="Daily compliance contribution"
@@ -3734,14 +3798,24 @@ function GuidedCarryoverLoanCard({
               value={loan.penaltyWaivedAmount}
               onChange={(value) => onChange({ ...loan, penaltyWaivedAmount: value })}
             />
+            {status === "defaulted" ? (
+              <MetricCard label="Due-date days to today" value={`${summary.daysPastDue}`} />
+            ) : null}
           </>
         )}
+        {status === "closed" ? (
+          <NumberField
+            label="Days after due date"
+            value={summary.dueDatePenaltyDays}
+            onChange={(value) => updateFee("dueDatePenaltyDays", Math.max(0, Math.floor(value)))}
+          />
+        ) : null}
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Loan repayment total" value={fmtKES(summary.totalRepayment)} />
         <MetricCard
           label={status === "closed" ? "Saved as paid" : "Paid to date"}
-          value={fmtKES(status === "closed" ? summary.totalRepayment : loan.paidToDate)}
+          value={fmtKES(status === "closed" ? summary.totalExpectedCollected : loan.paidToDate)}
         />
         <MetricCard
           label="Daily compliance contribution accrued"
@@ -3753,6 +3827,8 @@ function GuidedCarryoverLoanCard({
             status === "closed" ? summary.totalExpectedCollected : summary.totalOwedNow,
           )}
         />
+        <MetricCard label="Daily penalty" value={fmtKES(summary.arrearsPenalty)} />
+        <MetricCard label="Due-date penalty" value={fmtKES(summary.overduePenalty)} />
       </div>
     </div>
   );

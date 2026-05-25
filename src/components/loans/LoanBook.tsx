@@ -3,6 +3,7 @@ import {
   useStore,
   fmtKES,
   loanDailySavingsAmount,
+  loanPenaltySummary,
   loanSummary,
   loanTermDaysOf,
   type Loan,
@@ -74,7 +75,8 @@ export function LoanBook({
   carryoverLoans?: LegacyCarryoverLoan[];
   onSelectMember: (memberId: string) => void;
 }) {
-  const { loans, members, staff, currentUser, recordTransaction, policySettings } = useStore();
+  const { loans, members, staff, transactions, currentUser, recordTransaction, policySettings } =
+    useStore();
   const [filter, setFilter] = useState<Filter>("all");
   const [productFilter, setProductFilter] = useState<ProductFilter>("all");
   const [query, setQuery] = useState("");
@@ -160,6 +162,7 @@ export function LoanBook({
     today,
     carryoverLoans,
     policySettings,
+    transactions,
   ]);
 
   const empty = loans.length === 0 && carryoverLoans.length === 0;
@@ -273,7 +276,7 @@ export function LoanBook({
                 row.kind === "live" ? staff.find((s) => s.id === liveLoan.officerId) : undefined;
               const summary =
                 row.kind === "live"
-                  ? loanSummary(liveLoan)
+                  ? loanPenaltySummary(liveLoan, transactions)
                   : summarizeLegacyCarryoverLoan(legacyLoan, policySettings);
               const idNum = l.id.replace(/\D/g, "") || l.id;
               const statusLabel =
@@ -343,7 +346,7 @@ export function LoanBook({
                   <td className="px-5 py-3 text-xs">
                     {fmtKES(
                       row.kind === "live"
-                        ? (summary as ReturnType<typeof loanSummary>).balance
+                        ? (summary as ReturnType<typeof loanPenaltySummary>).totalOwedNow
                         : (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).totalOwedNow,
                     )}
                   </td>
@@ -582,8 +585,11 @@ export function MemberLoanHistory({
               );
             })}
             {memberLoans.map((l) => {
-              const summary = loanSummary(l);
-              const pct = Math.min(100, Math.round((l.paid / summary.total) * 100));
+              const summary = loanPenaltySummary(l, transactions);
+              const pct = Math.min(
+                100,
+                Math.round((summary.totalPaid / summary.totalExpectedCollected) * 100),
+              );
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
                   <div className="flex justify-between items-center">
@@ -608,7 +614,7 @@ export function MemberLoanHistory({
                     {l.startDate} · {summary.termDays} days · purpose: {l.purpose ?? "—"}
                   </div>
                   <div className="text-xs mt-1">
-                    Paid {fmtKES(l.paid)} / {fmtKES(summary.total)}
+                    Paid {fmtKES(summary.totalPaid)} / {fmtKES(summary.totalExpectedCollected)}
                   </div>
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-primary" style={{ width: `${pct}%` }} />

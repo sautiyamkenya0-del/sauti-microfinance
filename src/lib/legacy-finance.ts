@@ -45,6 +45,8 @@ export type LegacyCarryoverLoanFeeBreakdown = {
   monthlySubscriptionAmount?: number;
   subscriptionMonths?: number;
   subscriptionWaived?: boolean;
+  dailyPenaltyDays?: number;
+  dueDatePenaltyDays?: number;
 };
 
 export type LegacyCarryoverLoan = {
@@ -110,10 +112,23 @@ function moneyValue(value: unknown) {
   return Number.isFinite(next) ? Math.max(0, next) : 0;
 }
 
+function wholeDaysValue(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, Math.floor(next)) : 0;
+}
+
 function roundUpKES(amount: number, step: number) {
   if (amount <= 0) return 0;
   const normalizedStep = Number.isFinite(step) && step > 0 ? step : 1;
   return Math.ceil(amount / normalizedStep) * normalizedStep;
+}
+
+function compoundedDailyPenalty(baseAmount: number, pct: number, days: number) {
+  const principal = Math.max(0, Number(baseAmount ?? 0));
+  const normalizedDays = wholeDaysValue(days);
+  const dailyRate = Math.max(0, Number(pct ?? 0)) / 100;
+  if (principal <= 0 || dailyRate <= 0 || normalizedDays <= 0) return 0;
+  return principal * (Math.pow(1 + dailyRate, normalizedDays) - 1);
 }
 
 function termPeriodsFromDays(termDays: number) {
@@ -152,6 +167,8 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
     monthlySubscriptionAmount: moneyValue(source.monthlySubscriptionAmount),
     subscriptionMonths: Math.max(0, Math.floor(Number(source.subscriptionMonths ?? 0))),
     subscriptionWaived: source.subscriptionWaived === true,
+    dailyPenaltyDays: wholeDaysValue(source.dailyPenaltyDays),
+    dueDatePenaltyDays: wholeDaysValue(source.dueDatePenaltyDays),
   };
 }
 
@@ -228,15 +245,28 @@ export function summarizeLegacyCarryoverLoan(
   const elapsedDays = Math.max(0, Math.min(termDays, diffDays(loan.startDate, asOfDate) + 1));
   const scheduledCollectedToDate = elapsedDays * dailyInclusive;
   const arrears = Math.max(0, scheduledCollectedToDate - paidToDate);
-  const balance = Math.max(0, totalRepayment - paidToDate);
-  const daysPastDue = Math.max(0, diffDays(dueDate, asOfDate));
-  const arrearsPenalty = arrears * (settings.percentages.penaltyDailyPct / 100);
-  const overduePenalty =
-    daysPastDue > 0 ? balance * (settings.percentages.defaultPenaltyPct / 100) * daysPastDue : 0;
+  const balance = Math.max(0, totalExpectedCollected - paidToDate);
+  const dailyPenaltyDays = feeBreakdown.dailyPenaltyDays ?? 0;
+  const dueDatePenaltyDays = feeBreakdown.dueDatePenaltyDays ?? 0;
+  const arrearsPenalty =
+    dailyInclusive * dailyPenaltyDays * (settings.percentages.penaltyDailyPct / 100);
+  const automaticDaysPastDue = Math.max(0, diffDays(dueDate, asOfDate));
+  const daysPastDue =
+    loan.status === "active"
+      ? 0
+      : loan.status === "defaulted"
+        ? automaticDaysPastDue
+        : dueDatePenaltyDays;
+  const dueDatePenaltyBase = Math.max(0, totalExpectedCollected + arrearsPenalty - paidToDate);
+  const overduePenalty = compoundedDailyPenalty(
+    dueDatePenaltyBase,
+    settings.percentages.defaultPenaltyPct,
+    daysPastDue,
+  );
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const estimatedPenaltyNow = Math.max(0, arrearsPenalty + overduePenalty - penaltyWaivedAmount);
   const totalOwedNow = balance + estimatedPenaltyNow;
-  const paidPct = totalRepayment > 0 ? (paidToDate / totalRepayment) * 100 : 0;
+  const paidPct = totalExpectedCollected > 0 ? (paidToDate / totalExpectedCollected) * 100 : 0;
   const isFinished = loan.finished || loan.status === "closed" || balance <= 0;
 
   return {
@@ -264,6 +294,10 @@ export function summarizeLegacyCarryoverLoan(
     dueDate,
     elapsedDays,
     daysPastDue,
+    dailyPenaltyDays,
+    dueDatePenaltyDays,
+    dailyPenaltyBase: dailyInclusive,
+    dueDatePenaltyBase,
     arrearsPenalty,
     overduePenalty,
     estimatedPenaltyNow,

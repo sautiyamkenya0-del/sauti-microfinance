@@ -1,7 +1,7 @@
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import { createStaffMemoRecord } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
-import { useStore, fmtKES, loanSummary, SBC_FEES } from "@/lib/store";
+import { useStore, fmtKES, loanPenaltySummary } from "@/lib/store";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -16,21 +16,15 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
     const liveItems = loans
       .filter((l) => l.status === "active" || l.status === "defaulted")
       .map((l) => {
-        const summary = loanSummary(l);
-        const days = summary.termDays;
-        const total = summary.total;
-        const dailyInstallment = total / days;
-        const start = new Date(l.startDate);
-        const today = new Date();
-        const elapsedDays = Math.max(
-          0,
-          Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)),
+        const summary = loanPenaltySummary(l, transactions);
+        const dailyInstallment = summary.dailyExpected;
+        const defaulted = summary.dailyUnpaidBalance;
+        const outstanding = summary.totalOwedNow - summary.totalPenalty;
+        const daysMissed = Math.max(
+          summary.skippedPaymentDays,
+          dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0,
         );
-        const expected = Math.min(total, dailyInstallment * Math.min(days, elapsedDays));
-        const defaulted = Math.max(0, expected - l.paid);
-        const outstanding = summary.balance;
-        const daysMissed = dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0;
-        const penalties = defaulted * (SBC_FEES.penaltyDailyPct / 100);
+        const penalties = summary.totalPenalty;
         return {
           loan: l,
           loanKind: "live" as const,
@@ -38,12 +32,12 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           dailyInstallment,
           defaulted,
           outstanding,
-          totalDue: outstanding + penalties,
+          totalDue: summary.totalOwedNow,
           penalties,
           daysMissed,
         };
       })
-      .filter((x) => x.defaulted > 0);
+      .filter((x) => x.defaulted > 0 || x.penalties > 0);
     const carryoverItems = carryoverLoans
       .filter((loan) => loan.status === "active" || loan.status === "defaulted")
       .map((loan) => {
