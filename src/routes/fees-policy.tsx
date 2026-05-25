@@ -75,7 +75,9 @@ import { listAllCarryoverLoans, loadMemberCarryover } from "@/lib/runtime-data.f
 import {
   fmtKES,
   loanSummary,
+  memberNeedsSticker,
   SBC_UPFRONT_TABLE,
+  upfrontRequirementForAmount,
   upfrontTotalsForAmount,
   useStore,
 } from "@/lib/store";
@@ -202,6 +204,7 @@ function PolicyCenterPage() {
   const [carryoverLoanDraft, setCarryoverLoanDraft] = useState<LegacyCarryoverLoan>(() =>
     blankCarryoverLoan("", 1),
   );
+  const [hasCarryoverProfile, setHasCarryoverProfile] = useState(false);
   const [carryoverMemberMode, setCarryoverMemberMode] = useState<CarryoverMemberMode>("none");
   const [guidedClosedLoans, setGuidedClosedLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [guidedDefaultedLoans, setGuidedDefaultedLoans] = useState<LegacyCarryoverLoan[]>([]);
@@ -244,6 +247,7 @@ function PolicyCenterPage() {
       setCarryoverProfile(blankCarryoverProfile(""));
       setCarryoverLoans([]);
       setCarryoverLoanDraft(blankCarryoverLoan("", 1));
+      setHasCarryoverProfile(false);
       setCarryoverMemberMode("none");
       setGuidedClosedLoans([]);
       setGuidedDefaultedLoans([]);
@@ -269,6 +273,7 @@ function PolicyCenterPage() {
           blankProfile.firstUpfrontPaid = !!selectedMember.fees.firstUpfrontPaid;
         }
         const profile = hydrateCarryoverProfile(typedResult.profile ?? blankProfile);
+        setHasCarryoverProfile(Boolean(typedResult.profile));
         setCarryoverProfile(profile);
         setCarryoverLoans(typedResult.loans);
         setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
@@ -304,6 +309,9 @@ function PolicyCenterPage() {
   );
   const feeRows = feePolicies.length > 0 ? feePolicies : DEFAULT_FEE_POLICIES;
   const activeFees = feeRows.filter(isFeeActive);
+  const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
+  const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
+  const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
   const filteredClients = memberAccounts.filter((member) => {
     const q = clientQuery.trim().toLowerCase();
     if (!q) return true;
@@ -350,7 +358,33 @@ function PolicyCenterPage() {
     policySettings,
   );
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
-  const carryoverFeeBuckets = carryoverBreakdown.feeBuckets;
+  const carryoverLoanInputs = [...guidedClosedLoans, ...guidedDefaultedLoans, ...guidedActiveLoans];
+  const carryoverHasDraftData =
+    hasCarryoverProfile ||
+    carryoverLoans.length > 0 ||
+    carryoverMemberMode === "loan" ||
+    carryoverProfile.savingsBalance > 0 ||
+    carryoverProfile.shareUnits > 0 ||
+    carryoverProfile.investmentBalance > 0 ||
+    carryoverProfile.otherCollectedTotal > 0 ||
+    carryoverProfile.penaltiesOutstanding > 0 ||
+    carryoverProfile.penaltiesWaivedTotal > 0 ||
+    carryoverBreakdown.purposePoolBalance > 0;
+  const automaticCarryoverDeductions = deriveAutomaticCarryoverDeductions({
+    available: carryoverHasDraftData ? lifetimeNetAvailableForCarryover : 0,
+    member: selectedClient,
+    loans: carryoverLoanInputs.length > 0 ? carryoverLoanInputs : carryoverLoans,
+    membershipAmount,
+    cardAmount,
+    stickerAmount,
+    sharePrice,
+  });
+  const carryoverFeeBuckets = {
+    ...carryoverBreakdown.feeBuckets,
+    membership: automaticCarryoverDeductions.feeBuckets.membership,
+    card: automaticCarryoverDeductions.feeBuckets.card,
+    sticker: automaticCarryoverDeductions.feeBuckets.sticker,
+  };
   const carryoverFeeTotal = Object.values(carryoverFeeBuckets).reduce(
     (sum, value) => sum + value,
     0,
@@ -411,16 +445,26 @@ function PolicyCenterPage() {
       ? guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalRepayment, 0) +
         guidedOpenLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
       : carryoverProfile.loanRepaymentsTotal;
-  const carryoverShareValue = carryoverProfile.shareUnits * sharePrice;
+  const effectiveCarryoverSavingsBalance = Math.max(
+    carryoverProfile.savingsBalance,
+    automaticCarryoverDeductions.upfrontSavingsAmount,
+  );
+  const effectiveCarryoverShareUnits = Math.max(
+    carryoverProfile.shareUnits,
+    automaticCarryoverDeductions.upfrontShareUnits,
+  );
+  const effectiveCarryoverShareValue = effectiveCarryoverShareUnits * sharePrice;
   const derivedCarryoverAllocatedTotal =
-    carryoverProfile.savingsBalance +
-    carryoverShareValue +
+    effectiveCarryoverSavingsBalance +
+    effectiveCarryoverShareValue +
     carryoverFeeTotal +
     carryoverLoanRepaymentsRecorded +
     carryoverProfile.investmentBalance +
     carryoverBreakdown.purposePoolBalance +
     carryoverProfile.otherCollectedTotal;
-  const derivedCarryoverTotalCollected = lifetimeNetAvailableForCarryover;
+  const derivedCarryoverTotalCollected = carryoverHasDraftData
+    ? lifetimeNetAvailableForCarryover
+    : 0;
   const carryoverUndistributedBalance =
     derivedCarryoverTotalCollected - derivedCarryoverAllocatedTotal;
   const carryoverCompletedCycles =
@@ -471,29 +515,6 @@ function PolicyCenterPage() {
     guidedComplianceAllocation.shareUnits,
     guidedOpenLoanSummaries.length,
   ]);
-
-  useEffect(() => {
-    if (carryoverMemberMode !== "loan" || guidedOpenLoanSummaries.length === 0) return;
-    setCarryoverProfile((current) => {
-      const breakdown = readCarryoverBreakdown(current.collectionBreakdown);
-      if (
-        current.savingsBalance === 0 &&
-        current.shareUnits === 0 &&
-        breakdown.purposePoolBalance === 0
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        savingsBalance: 0,
-        shareUnits: 0,
-        collectionBreakdown: {
-          ...breakdown,
-          purposePoolBalance: 0,
-        },
-      };
-    });
-  }, [carryoverMemberMode, guidedOpenLoanSummaries.length]);
 
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
@@ -710,6 +731,7 @@ function PolicyCenterPage() {
       profile: LegacyCarryoverProfile | null;
       loans: LegacyCarryoverLoan[];
     };
+    setHasCarryoverProfile(Boolean(result.profile));
     setCarryoverProfile(
       hydrateCarryoverProfile(result.profile ?? blankCarryoverProfile(nextMemberId)),
     );
@@ -796,6 +818,8 @@ function PolicyCenterPage() {
         data: {
           ...carryoverProfile,
           memberId: selectedClient.id,
+          savingsBalance: effectiveCarryoverSavingsBalance,
+          shareUnits: effectiveCarryoverShareUnits,
           feesPaidTotal: carryoverFeeTotal,
           loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
           totalCollected: recordedTotalDeposits,
@@ -804,9 +828,14 @@ function PolicyCenterPage() {
             0,
           ),
           completedLoanCycles: nextClosedLoans.length,
+          membershipFeePaid: automaticCarryoverDeductions.membershipFeePaid,
+          cardFeePaid: automaticCarryoverDeductions.cardFeePaid,
+          stickerFeePaid: automaticCarryoverDeductions.stickerFeePaid,
+          firstUpfrontPaid: automaticCarryoverDeductions.firstUpfrontPaid,
           collectionBreakdown: nextBreakdown,
         },
       });
+      setHasCarryoverProfile(true);
       await reloadAppData();
       await refreshCarryoverDetails(selectedClient.id);
       await refreshAllCarryoverLoans();
@@ -837,6 +866,7 @@ function PolicyCenterPage() {
     try {
       await resetCarryover({ data: { memberId: selectedClient.id } });
       await reloadAppData();
+      setHasCarryoverProfile(false);
       await refreshCarryoverDetails(selectedClient.id);
       await refreshAllCarryoverLoans();
       toast.success("Carryover reset and locked balances cleared.");
@@ -868,10 +898,6 @@ function PolicyCenterPage() {
     if (selectedClient) await refreshCarryoverDetails(selectedClient.id);
     toast.success("Penalty waiver saved");
   }
-
-  const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
-  const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
-  const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
 
   function applyCarryoverWaterfallDraft() {
     const available = Math.max(0, carryoverUndistributedBalance);
@@ -2193,22 +2219,15 @@ function PolicyCenterPage() {
                       label="Lifetime net used"
                       value={fmtKES(derivedCarryoverTotalCollected)}
                     />
-                    <NumberField
-                      label="Savings balance"
-                      value={carryoverProfile.savingsBalance}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({ ...current, savingsBalance: value }))
-                      }
+                    <MetricCard
+                      label="Automatic upfront savings"
+                      value={fmtKES(automaticCarryoverDeductions.upfrontSavingsAmount)}
                     />
-                    <NumberField
-                      label="Share units"
-                      value={carryoverProfile.shareUnits}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({
-                          ...current,
-                          shareUnits: Math.max(0, Math.floor(value)),
-                        }))
-                      }
+                    <MetricCard
+                      label="Automatic upfront shares"
+                      value={`${automaticCarryoverDeductions.upfrontShareUnits} units / ${fmtKES(
+                        automaticCarryoverDeductions.upfrontShareAmount,
+                      )}`}
                     />
                     <NumberField
                       label="Purpose pool balance"
@@ -2245,85 +2264,25 @@ function PolicyCenterPage() {
                     />
                     <div className="rounded-xl border border-border bg-muted/20 p-4 md:col-span-2 xl:col-span-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Waterfall fee buckets
+                        Automatic fees and loan charges
                       </div>
                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={carryoverProfile.membershipFeePaid}
-                            onChange={(event) =>
-                              setCarryoverProfile((current) => ({
-                                ...current,
-                                membershipFeePaid: event.target.checked,
-                                collectionBreakdown: {
-                                  ...readCarryoverBreakdown(current.collectionBreakdown),
-                                  feeBuckets: {
-                                    ...readCarryoverBreakdown(current.collectionBreakdown)
-                                      .feeBuckets,
-                                    membership: event.target.checked ? membershipAmount : 0,
-                                  },
-                                },
-                              }))
-                            }
-                          />
-                          Membership fee ({fmtKES(membershipAmount)})
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={carryoverProfile.cardFeePaid}
-                            onChange={(event) =>
-                              setCarryoverProfile((current) => ({
-                                ...current,
-                                cardFeePaid: event.target.checked,
-                                collectionBreakdown: {
-                                  ...readCarryoverBreakdown(current.collectionBreakdown),
-                                  feeBuckets: {
-                                    ...readCarryoverBreakdown(current.collectionBreakdown)
-                                      .feeBuckets,
-                                    card: event.target.checked ? cardAmount : 0,
-                                  },
-                                },
-                              }))
-                            }
-                          />
-                          Card fee ({fmtKES(cardAmount)})
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={carryoverProfile.stickerFeePaid}
-                            onChange={(event) =>
-                              setCarryoverProfile((current) => ({
-                                ...current,
-                                stickerFeePaid: event.target.checked,
-                                collectionBreakdown: {
-                                  ...readCarryoverBreakdown(current.collectionBreakdown),
-                                  feeBuckets: {
-                                    ...readCarryoverBreakdown(current.collectionBreakdown)
-                                      .feeBuckets,
-                                    sticker: event.target.checked ? stickerAmount : 0,
-                                  },
-                                },
-                              }))
-                            }
-                          />
-                          Sticker fee ({fmtKES(stickerAmount)})
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={carryoverProfile.firstUpfrontPaid}
-                            onChange={(event) =>
-                              setCarryoverProfile((current) => ({
-                                ...current,
-                                firstUpfrontPaid: event.target.checked,
-                              }))
-                            }
-                          />
-                          First upfront already covered
-                        </label>
+                        <MetricCard
+                          label="Membership fee"
+                          value={fmtKES(carryoverFeeBuckets.membership)}
+                        />
+                        <MetricCard label="Card fee" value={fmtKES(carryoverFeeBuckets.card)} />
+                        <MetricCard
+                          label="Sticker fee"
+                          value={fmtKES(carryoverFeeBuckets.sticker)}
+                        />
+                        <MetricCard
+                          label="Premium upfront"
+                          value={fmtKES(
+                            automaticCarryoverDeductions.upfrontSavingsAmount +
+                              automaticCarryoverDeductions.upfrontShareAmount,
+                          )}
+                        />
                       </div>
                       <div className="mt-4 grid gap-3 sm:grid-cols-3">
                         <NumberField
@@ -2397,7 +2356,7 @@ function PolicyCenterPage() {
                       }
                     />
                     <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
-                      <MetricRow label="Share value" value={fmtKES(carryoverShareValue)} />
+                      <MetricRow label="Share value" value={fmtKES(effectiveCarryoverShareValue)} />
                       <MetricRow label="Fee buckets total" value={fmtKES(carryoverFeeTotal)} />
                       <MetricRow
                         label="Loan repayments derived"
@@ -3286,6 +3245,63 @@ function applyDerivedCarryoverPayments(
   });
 }
 
+function deriveAutomaticCarryoverDeductions({
+  available,
+  member,
+  loans,
+  membershipAmount,
+  cardAmount,
+  stickerAmount,
+  sharePrice,
+}: {
+  available: number;
+  member?: ReturnType<typeof useStore>["members"][number];
+  loans: LegacyCarryoverLoan[];
+  membershipAmount: number;
+  cardAmount: number;
+  stickerAmount: number;
+  sharePrice: number;
+}) {
+  let remaining = Math.max(0, Number(available) || 0);
+  const consume = (amount: number) => {
+    const applied = Math.min(remaining, Math.max(0, Number(amount) || 0));
+    remaining -= applied;
+    return applied;
+  };
+  const feeBuckets = defaultCarryoverFeeBuckets();
+  feeBuckets.membership = consume(membershipAmount);
+  feeBuckets.card = consume(cardAmount);
+  feeBuckets.sticker = member && memberNeedsSticker(member) ? consume(stickerAmount) : 0;
+
+  const premiumLoan = loans.find((loan) => Number(loan.principal ?? 0) > 5000);
+  const upfront = premiumLoan ? upfrontRequirementForAmount(premiumLoan.principal) : undefined;
+  const upfrontSavingsAmount = consume(upfront?.savingsAmount ?? 0);
+  const upfrontShareTarget = consume(upfront?.sharesAmount ?? 0);
+  const upfrontShareUnits =
+    sharePrice > 0 ? Math.floor(upfrontShareTarget / Math.max(1, Number(sharePrice) || 1)) : 0;
+  const upfrontShareAmount = upfrontShareUnits * Math.max(0, Number(sharePrice) || 0);
+  remaining += Math.max(0, upfrontShareTarget - upfrontShareAmount);
+
+  return {
+    feeBuckets,
+    upfrontSavingsAmount,
+    upfrontShareUnits,
+    upfrontShareAmount,
+    firstUpfrontRequired: Boolean(upfront && upfront.total > 0),
+    membershipFeePaid: membershipAmount <= 0 || feeBuckets.membership >= membershipAmount,
+    cardFeePaid: cardAmount <= 0 || feeBuckets.card >= cardAmount,
+    stickerFeePaid:
+      !member ||
+      !memberNeedsSticker(member) ||
+      stickerAmount <= 0 ||
+      feeBuckets.sticker >= stickerAmount,
+    firstUpfrontPaid:
+      !upfront ||
+      upfront.total <= 0 ||
+      (upfrontSavingsAmount >= upfront.savingsAmount && upfrontShareAmount >= upfront.sharesAmount),
+  };
+}
+
 function allocateComplianceContribution(
   amount: number,
   savingsThreshold: number,
@@ -3712,11 +3728,7 @@ function GuidedCarryoverLoanCard({
                 className="input"
               />
             </Field>
-            <NumberField
-              label="Paid from lifetime net"
-              value={loan.paidToDate}
-              readOnly
-            />
+            <NumberField label="Paid from lifetime net" value={loan.paidToDate} readOnly />
             <NumberField
               label="Penalty waived"
               value={loan.penaltyWaivedAmount}

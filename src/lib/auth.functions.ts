@@ -22,6 +22,41 @@ function requireSupabaseAdmin() {
   return supabaseAdmin;
 }
 
+const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const MAX_AUTH_FAILURES_PER_WINDOW = 8;
+
+const authFailures = new Map<string, { count: number; resetAt: number }>();
+
+function authThrottleKey(kind: "staff" | "member", identifier: string) {
+  return `${kind}:${identifier.trim().toLowerCase()}`;
+}
+
+function assertAuthAttemptAllowed(key: string) {
+  const now = Date.now();
+  const entry = authFailures.get(key);
+  if (!entry || entry.resetAt <= now) {
+    authFailures.delete(key);
+    return;
+  }
+  if (entry.count >= MAX_AUTH_FAILURES_PER_WINDOW) {
+    throw new Error("Too many failed sign-in attempts. Try again in a few minutes.");
+  }
+}
+
+function recordAuthFailure(key: string) {
+  const now = Date.now();
+  const entry = authFailures.get(key);
+  if (!entry || entry.resetAt <= now) {
+    authFailures.set(key, { count: 1, resetAt: now + AUTH_ATTEMPT_WINDOW_MS });
+    return;
+  }
+  authFailures.set(key, { count: entry.count + 1, resetAt: entry.resetAt });
+}
+
+function clearAuthFailures(key: string) {
+  authFailures.delete(key);
+}
+
 export const signInStaff = createServerFn({ method: "POST" })
   .inputValidator((data: { email: string; password: string }) => ({
     email: String(data?.email ?? "")
@@ -31,6 +66,9 @@ export const signInStaff = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }) => {
     if (!data.email || !data.password) throw new Error("Enter your email and password.");
+
+    const throttleKey = authThrottleKey("staff", data.email);
+    assertAuthAttemptAllowed(throttleKey);
 
     const supabaseAdmin = requireSupabaseAdmin();
     const { data: staffRow, error } = await supabaseAdmin
@@ -56,6 +94,7 @@ export const signInStaff = createServerFn({ method: "POST" })
           reason: staffRow ? "invalid_password" : "unknown_email",
         },
       });
+      recordAuthFailure(throttleKey);
       throw new Error("Invalid email or password.");
     }
 
@@ -68,6 +107,7 @@ export const signInStaff = createServerFn({ method: "POST" })
     }
 
     await signInStaffSession(staffRow.id);
+    clearAuthFailures(throttleKey);
     await recordAudit({
       actor_id: staffRow.id,
       actor_name: staffRow.name,
@@ -100,8 +140,14 @@ export const signInMember = createServerFn({ method: "POST" })
       throw new Error("Enter your membership number and registered phone number.");
     }
 
+    const throttleKey = authThrottleKey("member", `${data.memberNo}:${data.phone}`);
+    assertAuthAttemptAllowed(throttleKey);
+
     const memberCandidates = membershipIdCandidates(data.memberNo);
-    if (!memberCandidates.length) throw new Error("The supplied sign-in details are not valid.");
+    if (!memberCandidates.length) {
+      recordAuthFailure(throttleKey);
+      throw new Error("The supplied sign-in details are not valid.");
+    }
 
     const supabaseAdmin = requireSupabaseAdmin();
     const { data: memberRows, error } = await supabaseAdmin
@@ -129,10 +175,12 @@ export const signInMember = createServerFn({ method: "POST" })
           reason: memberRow ? "phone_mismatch" : "unknown_member",
         },
       });
+      recordAuthFailure(throttleKey);
       throw new Error("The supplied sign-in details are not valid.");
     }
 
     await signInMemberSession(memberRow.id);
+    clearAuthFailures(throttleKey);
     const { data: supplierRow, error: supplierError } = await supabaseAdmin
       .from("suppliers")
       .select("id")

@@ -469,6 +469,26 @@ export const listAllCarryoverLoans = createServerFn({ method: "POST" }).handler(
   return (data ?? []).map((row: DbRow) => mapCarryoverLoanRow(row));
 });
 
+export const listPortalCarryoverLoans = createServerFn({ method: "POST" })
+  .inputValidator((data?: { memberId?: string }) => ({
+    memberId: String(data?.memberId ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    const memberId = session.authMode === "member" ? session.memberId : data.memberId;
+    if (!memberId) return [];
+
+    const runtimeDb = requireSupabaseAdmin() as any;
+    const { data: rows, error } = await runtimeDb
+      .from("member_carryover_loans")
+      .select("*")
+      .eq("member_id", memberId)
+      .order("start_date", { ascending: false });
+
+    if (error) throw new Error(error.message);
+    return (rows ?? []).map((row: DbRow) => mapCarryoverLoanRow(row));
+  });
+
 export const listReportSnapshots = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();
   const runtimeDb = requireSupabaseAdmin() as any;

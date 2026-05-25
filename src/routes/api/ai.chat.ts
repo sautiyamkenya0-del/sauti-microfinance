@@ -10,7 +10,11 @@ type AiTableSpec = {
   columns?: string;
   limit?: number;
   build?: (query: any) => any;
+  directorOnly?: boolean;
 };
+
+const DEFAULT_AI_TABLE_LIMIT = 1000;
+const HEAVY_AI_TABLE_LIMIT = 3000;
 
 function missingTableOrColumn(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
@@ -25,7 +29,7 @@ function missingTableOrColumn(error: any) {
 async function readAiTable(db: any, spec: AiTableSpec) {
   let query = db.from(spec.table).select(spec.columns ?? "*");
   if (spec.build) query = spec.build(query);
-  if (spec.limit) query = query.limit(spec.limit);
+  query = query.limit(spec.limit ?? DEFAULT_AI_TABLE_LIMIT);
 
   const { data, error } = await query;
   if (error) {
@@ -39,6 +43,7 @@ async function readAiTable(db: any, spec: AiTableSpec) {
 
 async function buildStaffAiSnapshot(clientSnapshot: unknown) {
   const actor = await requireStaffActor();
+  const isDirector = actor.role === "director";
   const db = getSupabaseAdminOrNull() as any;
   if (!db) {
     return {
@@ -52,38 +57,47 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "staff",
       table: "staff",
-      columns:
-        "id, name, role, email, phone, national_id, address, notes, photo, can_mark_attendance, fingerprint_enrolled, created_at, updated_at",
+      columns: "id, name, role, email, can_mark_attendance, created_at, updated_at",
       build: (query) => query.order("id", { ascending: true }),
     },
-    { key: "members", table: "members", build: (query) => query.order("id", { ascending: true }) },
+    {
+      key: "members",
+      table: "members",
+      columns:
+        "id, name, phone, member_category, status, savings_balance, shares, joined_at, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid, created_at, updated_at",
+      build: (query) => query.order("id", { ascending: true }),
+    },
     {
       key: "investors",
       table: "investors",
+      columns: "id, member_id, name, amount, status, joined_at, updated_at",
       build: (query) => query.order("joined_at", { ascending: false }),
     },
     {
       key: "loans",
       table: "loans",
-      limit: 20000,
+      limit: HEAVY_AI_TABLE_LIMIT,
       build: (query) => query.order("start_date", { ascending: false }),
     },
     {
       key: "transactions",
       table: "transactions",
-      limit: 30000,
+      limit: HEAVY_AI_TABLE_LIMIT,
+      columns:
+        "id, member_id, loan_id, date, type, amount, ref, account, note, created_at, updated_at",
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
       key: "mpesaEvents",
       table: "mpesa_events",
-      limit: 30000,
+      limit: HEAVY_AI_TABLE_LIMIT,
+      columns: "id, account, amount, phone, mpesa_ref, processed, transaction_id, created_at",
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
       key: "mpesaReceiptAllocations",
       table: "mpesa_receipt_allocations",
-      limit: 30000,
+      limit: HEAVY_AI_TABLE_LIMIT,
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
@@ -161,7 +175,7 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "memberDocketMovements",
       table: "member_docket_movements",
-      limit: 20000,
+      limit: HEAVY_AI_TABLE_LIMIT,
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
@@ -173,12 +187,14 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
       key: "systemPayoutRequests",
       table: "system_payout_requests",
       build: (query) => query.order("created_at", { ascending: false }),
+      directorOnly: true,
     },
-    { key: "staffPayrollProfiles", table: "staff_payroll_profiles" },
+    { key: "staffPayrollProfiles", table: "staff_payroll_profiles", directorOnly: true },
     {
       key: "staffPayrollPayments",
       table: "staff_payroll_payments",
       build: (query) => query.order("created_at", { ascending: false }),
+      directorOnly: true,
     },
     {
       key: "staffMemos",
@@ -204,14 +220,16 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "auditLog",
       table: "audit_log",
-      limit: 10000,
+      limit: 1000,
       build: (query) => query.order("ts", { ascending: false }),
+      directorOnly: true,
     },
     {
       key: "staffMessages",
       table: "staff_messages",
-      limit: 20000,
+      limit: 1000,
       build: (query) => query.order("created_at", { ascending: false }),
+      directorOnly: true,
     },
     {
       key: "reportSnapshots",
@@ -226,7 +244,8 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     },
   ];
 
-  const entries = await Promise.all(specs.map((spec) => readAiTable(db, spec)));
+  const allowedSpecs = specs.filter((spec) => isDirector || !spec.directorOnly);
+  const entries = await Promise.all(allowedSpecs.map((spec) => readAiTable(db, spec)));
   const tables: Record<string, unknown[]> = {};
   const counts: Record<string, number> = {};
   const warnings: string[] = [];
@@ -239,8 +258,9 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
   return {
     audience: "staff",
     currentStaff: actor,
-    access:
-      "director-grade read context for SautiAI analysis across every available system table; money movement still needs a human-confirmed system action.",
+    access: isDirector
+      ? "director read context for SautiAI analysis across available system tables; money movement still needs a human-confirmed system action."
+      : "staff read context for SautiAI analysis with sensitive payroll, payout, staff-message, and audit tables withheld; money movement still needs a human-confirmed system action.",
     moneyDockets: [
       "daily_compliance_contribution",
       "withdrawable_savings",
@@ -401,7 +421,7 @@ Off-topic handling:
 - If the request is general non-time-sensitive knowledge, answer briefly, then pivot back naturally.
 
 Snapshot:
-${JSON.stringify(enrichedSnapshot).slice(0, 120000)}`;
+${JSON.stringify(enrichedSnapshot).slice(0, 50000)}`;
 
           const fullMessages = [{ role: "system", content: system }, ...messages];
           return await streamGroqChat(fullMessages);

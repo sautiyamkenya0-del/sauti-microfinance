@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
+import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import {
   useStore,
   businessPermanenceLabel,
@@ -33,7 +34,11 @@ import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
-import { listClientNotices, listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
+import {
+  listClientNotices,
+  listPortalCarryoverLoans,
+  listSupplierWorkspaceRecord,
+} from "@/lib/runtime-data.functions";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -98,6 +103,7 @@ function Portal() {
     setPortalMemberId,
     logout,
     feePolicies,
+    policySettings,
   } = useStore();
   // The Member Portal route lives inside the staff app; every signed-in user here
   // is staff (director / manager / loan_officer). Render it as a staff "view-as"
@@ -156,6 +162,7 @@ function Portal() {
     : fees;
   const { submit } = useApprovalActions();
   const loadClientNotices = useServerFn(listClientNotices);
+  const loadCarryoverLoans = useServerFn(listPortalCarryoverLoans);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const navigate = useNavigate();
@@ -165,6 +172,7 @@ function Portal() {
   const [pinNew, setPinNew] = useState("");
   const [payMember, setPayMember] = useState<Member | null>(null);
   const [clientNotices, setClientNotices] = useState<ClientNotice[]>([]);
+  const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [clientReadIds, setClientReadIds] = useState<Set<string>>(new Set());
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification === "undefined" ? "denied" : Notification.permission,
@@ -201,6 +209,15 @@ function Portal() {
       window.removeEventListener("focus", refreshNotices);
     };
   }, [isStaffView, loadClientNotices, memberId]);
+  useEffect(() => {
+    if (!memberId) {
+      setCarryoverLoans([]);
+      return;
+    }
+    loadCarryoverLoans({ data: isStaffView ? { memberId } : {} })
+      .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
+      .catch(() => setCarryoverLoans([]));
+  }, [isStaffView, loadCarryoverLoans, memberId]);
   useEffect(() => {
     if (authMode !== "member") return;
     loadSupplierWorkspace()
@@ -305,6 +322,7 @@ function Portal() {
     () => clientAlerts.filter((alert) => !clientReadIds.has(alert.id)),
     [clientAlerts, clientReadIds],
   );
+  const myCarryoverLoans = carryoverLoans.filter((loan) => loan.memberId === memberId);
   const announcedClientIdsRef = useRef(new Set<string>());
   const markClientAlertsRead = useCallback(
     (ids: string | string[]) => {
@@ -812,7 +830,7 @@ function Portal() {
             {tab === "loans" && (
               <Section title={isStaffView ? "Member Loans (staff view)" : "My Loans"}>
                 <div className="p-5 space-y-3">
-                  {myLoans.length === 0 && (
+                  {myLoans.length === 0 && myCarryoverLoans.length === 0 && (
                     <div className="text-sm text-muted-foreground">No loans on file.</div>
                   )}
                   {myLoans.map((l) => {
@@ -905,6 +923,62 @@ function Portal() {
                             )}
                           </div>
                         )}
+                      </div>
+                    );
+                  })}
+                  {myCarryoverLoans.map((loan) => {
+                    const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+                    const balance = summary.balance;
+                    return (
+                      <div
+                        key={loan.id}
+                        className="border border-border rounded-md p-4 text-sm space-y-2"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="font-mono text-xs text-muted-foreground">
+                              {loan.id} · carryover
+                            </div>
+                            <div className="font-semibold">
+                              {fmtKES(loan.principal)} · {summary.ratePct}% · {summary.termDays}{" "}
+                              days
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-0.5">{loan.label}</div>
+                          </div>
+                          <Badge
+                            tone={
+                              loan.status === "active"
+                                ? "warning"
+                                : loan.status === "closed"
+                                  ? "success"
+                                  : "destructive"
+                            }
+                          >
+                            {loan.status}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                          <Stat label="Total payable" value={fmtKES(summary.totalRepayment)} />
+                          <Stat label="Paid so far" value={fmtKES(loan.paidToDate)} />
+                          <Stat
+                            label="Outstanding"
+                            value={fmtKES(balance)}
+                            tone={balance > 0 ? "warning" : "success"}
+                          />
+                          <Stat label="Due date" value={summary.dueDate} />
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                          <Stat label="Daily inclusive" value={fmtKES(summary.dailyInclusive)} />
+                          <Stat label="Arrears" value={fmtKES(summary.arrears)} />
+                          <Stat
+                            label="Penalty estimate"
+                            value={fmtKES(summary.estimatedPenaltyNow)}
+                          />
+                          <Stat label="Owed now" value={fmtKES(summary.totalOwedNow)} />
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Started {loan.startDate} · ends {summary.dueDate}
+                        </div>
                       </div>
                     );
                   })}
