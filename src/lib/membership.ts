@@ -1,4 +1,11 @@
-export type MemberCategory = "member" | "investor" | "both" | "locomotive" | "stock" | "service";
+export type MemberCategory =
+  | "member"
+  | "investor"
+  | "both"
+  | "locomotive"
+  | "stock"
+  | "service"
+  | "supplier";
 
 function extractMembershipDigits(value: string | number | null | undefined) {
   const raw = String(value ?? "")
@@ -78,7 +85,8 @@ export function resolveMemberCategory(
     value === "both" ||
     value === "locomotive" ||
     value === "stock" ||
-    value === "service"
+    value === "service" ||
+    value === "supplier"
   ) {
     return value;
   }
@@ -95,7 +103,8 @@ export function isInvestorOnlyCategory(category?: MemberCategory | null) {
 }
 
 export function isMemberCategory(category?: MemberCategory | null) {
-  return resolveMemberCategory(category) !== "investor";
+  const resolved = resolveMemberCategory(category);
+  return resolved !== "investor" && resolved !== "supplier";
 }
 
 export function memberCategoryLabel(category?: MemberCategory | null) {
@@ -105,6 +114,7 @@ export function memberCategoryLabel(category?: MemberCategory | null) {
   if (resolved === "locomotive") return "Locomotive";
   if (resolved === "stock") return "Stock";
   if (resolved === "service") return "Service";
+  if (resolved === "supplier") return "Supplier";
   return "Member";
 }
 

@@ -320,6 +320,7 @@ const COMPLIANCE_SHARES_PCT = 0.4;
 const POST_COMPLIANCE_LOAN_SAVINGS_PCT = 0.2;
 const PURPOSE_POOL_TRANSFERABLE_SOURCE_PCT = 0.75;
 const SPECIAL_MEMBER_TRANSACTION_INTEREST = 100;
+const SPECIAL_MEMBER_BUFFER_PER_PAYMENT = 100;
 const SPECIAL_MEMBER_BUFFER_TARGET = 3000;
 const MAX_FIELD_VISIT_PHOTOS = 6;
 const MAX_FIELD_VISIT_TOTAL_BYTES = 8 * 1024 * 1024;
@@ -385,6 +386,7 @@ function computeLoanPricing(args: {
   termMonths?: number;
   processingFeeMode?: string | null;
   insuranceFeeMode?: string | null;
+  loanKind?: string | null;
   settings?: typeof DEFAULT_POLICY_SETTINGS;
 }) {
   const settings = args.settings ?? DEFAULT_POLICY_SETTINGS;
@@ -392,16 +394,21 @@ function computeLoanPricing(args: {
   const termDays = normalizeLoanTermDays(args.termDays ?? Number(args.termMonths ?? 1) * 30);
   const termMonths =
     Number(args.termMonths ?? 0) > 0 ? Number(args.termMonths ?? 0) : termPeriodsFromDays(termDays);
-  const processing = netAmount * (settings.percentages.processingPct / 100);
-  const insurance = netAmount * (settings.percentages.insurancePct / 100);
-  const transactionFee = transactionFeeAmountForLoanWithSettings(netAmount, settings);
+  const supplierBacked =
+    args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service";
+  const processing = supplierBacked ? 0 : netAmount * (settings.percentages.processingPct / 100);
+  const insurance = supplierBacked ? 0 : netAmount * (settings.percentages.insurancePct / 100);
+  const transactionFee = supplierBacked
+    ? 0
+    : transactionFeeAmountForLoanWithSettings(netAmount, settings);
   const processingMode = args.processingFeeMode === "upfront" ? "upfront" : "financed";
   const insuranceMode = args.insuranceFeeMode === "upfront" ? "upfront" : "financed";
   const processingUpfront = processingMode === "upfront" ? processing : 0;
   const insuranceUpfront = insuranceMode === "upfront" ? insurance : 0;
   const financedPrincipal =
     netAmount + (processing - processingUpfront) + (insurance - insuranceUpfront) + transactionFee;
-  const schedule = loanScheduleTotal(financedPrincipal, Number(args.ratePct ?? 0), termMonths);
+  const ratePct = supplierBacked ? 0 : Number(args.ratePct ?? 0);
+  const schedule = loanScheduleTotal(financedPrincipal, ratePct, termMonths);
   return {
     termDays,
     termMonths,
@@ -1997,9 +2004,35 @@ export async function applyMpesaPaymentToDatabase(args: {
     const activeBalance = activeLoan ? loanBalanceSummary(activeLoan).balance : 0;
 
     if (activeLoan && activeBalance > 0) {
-      const interest = Math.min(remaining, SPECIAL_MEMBER_TRANSACTION_INTEREST);
-      queueSpecialInterest(interest, kind);
-      remaining = roundMoney(remaining - interest);
+      if (kind === "locomotive") {
+        const interest = Math.min(remaining, SPECIAL_MEMBER_TRANSACTION_INTEREST);
+        queueSpecialInterest(interest, kind);
+        remaining = roundMoney(remaining - interest);
+
+        const existingBuffer = await loadSpecialBufferBalance(kind);
+        const pendingBuffer = txBatch
+          .filter(
+            (row) =>
+              row.type === "deposit" && String(row.note ?? "").startsWith("Locomotive fuel buffer"),
+          )
+          .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+        const bufferGap = Math.max(
+          0,
+          SPECIAL_MEMBER_BUFFER_TARGET - existingBuffer - pendingBuffer,
+        );
+        const bufferApplied = Math.min(remaining, SPECIAL_MEMBER_BUFFER_PER_PAYMENT, bufferGap);
+        if (bufferApplied > 0) {
+          queueSavingsDeposit(bufferApplied, `${label} buffer:`, {
+            note: `${label} buffer via Paybill ${norm}`,
+            allocationType: `${kind}_buffer`,
+            primaryNote: `${label} buffer via Paybill ${norm}`,
+            trackMandatoryThreshold: false,
+            roundOff: false,
+          });
+          notes.push(`Saved ${bufferApplied}/= toward the fuel buffer.`);
+          remaining = roundMoney(remaining - bufferApplied);
+        }
+      }
 
       if (remaining > 0) {
         const overflow = await applyLoanRepayment(remaining);
@@ -3903,6 +3936,9 @@ async function buildAppData(version?: string) {
   if (failed?.error) throw new Error(failed.error.message);
 
   const staffRows = (staffResult.data ?? []).map(mapStaffRow);
+  const memberRows = (membersResult.data ?? []).filter(
+    (row) => resolveMemberCategory(row.member_category, row.is_investor) !== "supplier",
+  );
 
   return {
     ...base,
@@ -3911,7 +3947,7 @@ async function buildAppData(version?: string) {
     authMode: "staff" as const,
     currentUser: staffRows.find((row) => row.id === actor.id),
     staff: staffRows,
-    members: (membersResult.data ?? []).map(mapMemberRow),
+    members: memberRows.map(mapMemberRow),
     loans: (loansResult.data ?? []).map(mapLoanRow),
     transactions: transactionRows.map(mapTransactionRow),
     pettyCash: (pettyCashResult.data ?? []).map(mapPettyCashRow),
@@ -3964,7 +4000,14 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         .toLowerCase() || undefined,
   }))
   .handler(async ({ data }) => {
-    await requireDirectorActor();
+    const session = await requireSignedInSession();
+    let scopedMemberId = data.memberId;
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      scopedMemberId = member.id;
+    } else {
+      await requireDirectorActor();
+    }
     const supabaseAdmin = await requireSupabaseAdmin();
 
     const [events, allocations, linkedTransactions, members, payoutRequests] = await Promise.all([
@@ -4127,7 +4170,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         ).filter(Boolean),
       };
 
-      if (data.memberId && receiptRow.memberId !== data.memberId) continue;
+      if (scopedMemberId && receiptRow.memberId !== scopedMemberId) continue;
       if (data.account && receiptRow.account !== data.account) continue;
       if (data.query) {
         const haystack = [
@@ -4199,7 +4242,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
           .filter(Boolean),
       };
 
-      if (data.memberId && receiptRow.memberId !== data.memberId) continue;
+      if (scopedMemberId && receiptRow.memberId !== scopedMemberId) continue;
       if (data.account && receiptRow.account !== data.account) continue;
       if (data.query) {
         const haystack = [
@@ -4267,7 +4310,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
         transactionIds: request.transaction_id ? [String(request.transaction_id)] : [],
       };
 
-      if (data.memberId && payoutRow.memberId !== data.memberId) continue;
+      if (scopedMemberId && payoutRow.memberId !== scopedMemberId) continue;
       if (data.account && payoutRow.account !== data.account) continue;
       if (data.query) {
         const haystack = [
@@ -5369,27 +5412,34 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       termMonths: data.termMonths,
       processingFeeMode: data.processingFeeMode,
       insuranceFeeMode: data.insuranceFeeMode,
+      loanKind: data.loanKind,
       settings: policySettings,
     });
+    const supplierBacked = data.loanKind !== "financial";
     const officerId = data.officerId ?? actor.id;
     const { error } = await supabaseAdmin.from("loans").insert({
       id,
       member_id: data.memberId,
       principal: data.principal,
       approved_amount: netAmount ?? null,
-      financed_principal_amount:
-        data.financedPrincipalAmount ?? pricing.financedPrincipal ?? data.principal,
-      net_disbursed_amount: data.netDisbursedAmount ?? netAmount ?? data.principal,
-      processing_fee_amount: data.processingFeeAmount ?? pricing.processing,
-      insurance_fee_amount: data.insuranceFeeAmount ?? pricing.insurance,
-      transaction_fee_amount: data.transactionFeeAmount ?? pricing.transactionFee,
-      processing_fee_mode: data.processingFeeMode,
-      insurance_fee_mode: data.insuranceFeeMode,
+      financed_principal_amount: supplierBacked
+        ? (netAmount ?? data.principal)
+        : (data.financedPrincipalAmount ?? pricing.financedPrincipal ?? data.principal),
+      net_disbursed_amount: supplierBacked
+        ? 0
+        : (data.netDisbursedAmount ?? netAmount ?? data.principal),
+      processing_fee_amount: supplierBacked ? 0 : (data.processingFeeAmount ?? pricing.processing),
+      insurance_fee_amount: supplierBacked ? 0 : (data.insuranceFeeAmount ?? pricing.insurance),
+      transaction_fee_amount: supplierBacked
+        ? 0
+        : (data.transactionFeeAmount ?? pricing.transactionFee),
+      processing_fee_mode: supplierBacked ? "upfront" : data.processingFeeMode,
+      insurance_fee_mode: supplierBacked ? "upfront" : data.insuranceFeeMode,
       disbursement_status:
         data.status === "active"
           ? "paid"
           : ((data.disbursementStatus as string | undefined) ?? "not_requested"),
-      rate: data.rate,
+      rate: supplierBacked ? 0 : data.rate,
       term_months: data.termMonths,
       term_days: data.termDays ?? null,
       start_date: data.startDate,
@@ -5620,6 +5670,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       termMonths: Number(loan.term_months ?? 0) || undefined,
       processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
+      loanKind: String(loan.loan_kind ?? "financial"),
       settings: policySettings,
     });
     const loanKind = String(loan.loan_kind ?? "financial");
@@ -5628,13 +5679,14 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         .from("loans")
         .update({
           approved_amount: approvedAmount,
-          financed_principal_amount: pricing.financedPrincipal,
+          financed_principal_amount: approvedAmount,
           net_disbursed_amount: 0,
-          processing_fee_amount: pricing.processing,
-          insurance_fee_amount: pricing.insurance,
-          transaction_fee_amount: pricing.transactionFee,
-          processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
-          insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
+          processing_fee_amount: 0,
+          insurance_fee_amount: 0,
+          transaction_fee_amount: 0,
+          processing_fee_mode: "upfront",
+          insurance_fee_mode: "upfront",
+          rate: 0,
           supplier_request_status: "approved",
           disbursement_status: "not_requested",
           reviewed_by: actor.id,
@@ -5652,7 +5704,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         details: {
           memberId: loan.member_id,
           approvedAmount,
-          financedPrincipalAmount: pricing.financedPrincipal,
+          financedPrincipalAmount: approvedAmount,
           loanKind,
           note: clipAuditText(data.note, 160),
         },
@@ -6473,12 +6525,24 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
 
 export const createStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator(
-    (data: { title: string; body: string; by: string; byStaffId?: string; date?: string }) => ({
+    (data: {
+      title: string;
+      body: string;
+      by: string;
+      byStaffId?: string;
+      date?: string;
+      audience?: "staff" | "members" | "all";
+      kind?: "info" | "warning" | "alert";
+      expiresAt?: string;
+    }) => ({
       title: String(data?.title ?? "").trim(),
       body: String(data?.body ?? "").trim(),
       by: String(data?.by ?? "").trim(),
       byStaffId: data?.byStaffId?.trim() || undefined,
       date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+      audience: data?.audience === "members" || data?.audience === "all" ? data.audience : "staff",
+      kind: data?.kind === "warning" || data?.kind === "alert" ? data.kind : "info",
+      expiresAt: data?.expiresAt?.trim() || undefined,
     }),
   )
   .handler(async ({ data }) => {
@@ -6495,6 +6559,9 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       body: data.body,
       by_staff_id: actor.id,
       by_name: actor.name,
+      audience: data.audience,
+      notice_kind: data.kind,
+      expires_at: data.expiresAt ?? null,
     });
     if (error) throw new Error(error.message);
     await auditAction({
@@ -6505,6 +6572,9 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       summary: `${actor.name} posted memo ${data.title}`,
       details: {
         date: data.date,
+        audience: data.audience,
+        kind: data.kind,
+        expiresAt: data.expiresAt ?? null,
         title: clipAuditText(data.title, 120),
         bodyPreview: clipAuditText(data.body, 180),
       },
@@ -6924,6 +6994,9 @@ type MemberDocket =
   | "penalty_payment";
 
 type SupplierKind = "fuel" | "stock" | "service";
+type SupplierType = "individual" | "company";
+type SupplierRegistrationCategory = "goods" | "services" | "works";
+type SupplierAgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
 
 const MEMBER_DOCKETS: MemberDocket[] = [
   "withdrawable_savings",
@@ -7005,6 +7078,18 @@ function parseMpesaAccountDocket(rawAccount: string) {
 
 function normalizeSupplierKind(value: unknown): SupplierKind {
   return value === "fuel" || value === "stock" || value === "service" ? value : "stock";
+}
+
+function normalizeSupplierType(value: unknown): SupplierType {
+  return value === "company" ? "company" : "individual";
+}
+
+function normalizeSupplierRegistrationCategory(value: unknown): SupplierRegistrationCategory {
+  return value === "services" || value === "works" ? value : "goods";
+}
+
+function normalizeAgpoCategory(value: unknown): SupplierAgpoCategory {
+  return value === "youth" || value === "women" || value === "pwd" ? value : "not_applicable";
 }
 
 function supplierVerificationCode() {
@@ -7527,66 +7612,239 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     (data: {
       name: string;
       kind: SupplierKind;
-      memberId?: string;
+      supplierType?: SupplierType;
+      registrationCategory?: SupplierRegistrationCategory;
       phone?: string;
+      alternativePhone?: string;
+      email?: string;
+      postalAddress?: string;
+      postalCodeTown?: string;
+      county?: string;
+      subCountyTown?: string;
+      physicalLocation?: string;
+      individualFirstName?: string;
+      individualSecondName?: string;
+      individualThirdName?: string;
+      nationalId?: string;
+      gender?: "Male" | "Female";
+      dateOfBirth?: string;
+      businessRegistrationNumber?: string;
+      registrationDate?: string;
       contactPerson?: string;
+      contactPersonDesignation?: string;
+      kraPin?: string;
+      taxComplianceCertificateNumber?: string;
+      agpoCategory?: SupplierAgpoCategory;
+      regulatoryLicenseNumber?: string;
+      bankName?: string;
+      bankBranch?: string;
+      accountName?: string;
+      accountNumber?: string;
+      mpesaPaybillTill?: string;
+      documentChecklist?: Record<string, boolean>;
       location?: string;
       notes?: string;
     }) => ({
       name: String(data?.name ?? "").trim(),
       kind: normalizeSupplierKind(data?.kind),
-      memberId: data?.memberId?.trim() || undefined,
+      supplierType: normalizeSupplierType(data?.supplierType),
+      registrationCategory: normalizeSupplierRegistrationCategory(data?.registrationCategory),
       phone: data?.phone?.trim() || undefined,
+      alternativePhone: data?.alternativePhone?.trim() || undefined,
+      email: data?.email?.trim() || undefined,
+      postalAddress: data?.postalAddress?.trim() || undefined,
+      postalCodeTown: data?.postalCodeTown?.trim() || undefined,
+      county: data?.county?.trim() || undefined,
+      subCountyTown: data?.subCountyTown?.trim() || undefined,
+      physicalLocation: data?.physicalLocation?.trim() || undefined,
+      individualFirstName: data?.individualFirstName?.trim() || undefined,
+      individualSecondName: data?.individualSecondName?.trim() || undefined,
+      individualThirdName: data?.individualThirdName?.trim() || undefined,
+      nationalId: data?.nationalId?.trim() || undefined,
+      gender: data?.gender,
+      dateOfBirth: data?.dateOfBirth?.trim() || undefined,
+      businessRegistrationNumber: data?.businessRegistrationNumber?.trim() || undefined,
+      registrationDate: data?.registrationDate?.trim() || undefined,
       contactPerson: data?.contactPerson?.trim() || undefined,
-      location: data?.location?.trim() || undefined,
+      contactPersonDesignation: data?.contactPersonDesignation?.trim() || undefined,
+      kraPin: data?.kraPin?.trim().toUpperCase() || undefined,
+      taxComplianceCertificateNumber: data?.taxComplianceCertificateNumber?.trim() || undefined,
+      agpoCategory: normalizeAgpoCategory(data?.agpoCategory),
+      regulatoryLicenseNumber: data?.regulatoryLicenseNumber?.trim() || undefined,
+      bankName: data?.bankName?.trim() || undefined,
+      bankBranch: data?.bankBranch?.trim() || undefined,
+      accountName: data?.accountName?.trim() || undefined,
+      accountNumber: data?.accountNumber?.trim() || undefined,
+      mpesaPaybillTill: data?.mpesaPaybillTill?.trim() || undefined,
+      documentChecklist: asJsonObject(data?.documentChecklist) as Record<string, boolean>,
+      location:
+        data?.location?.trim() ||
+        data?.physicalLocation?.trim() ||
+        data?.subCountyTown?.trim() ||
+        undefined,
       notes: data?.notes?.trim() || undefined,
     }),
   )
   .handler(async ({ data }) => {
     const actor = await requireStaffActor();
-    if (!data.name) throw new Error("Supplier name is required.");
-    const runtimeDb = (await requireSupabaseAdmin()) as any;
-    if (data.memberId) {
-      const { data: member, error: memberError } = await runtimeDb
-        .from("members")
-        .select("id")
-        .eq("id", data.memberId)
-        .maybeSingle();
-      if (memberError) throw new Error(memberError.message);
-      if (!member) throw new Error("Linked membership number was not found.");
+    const individualName = [
+      data.individualFirstName,
+      data.individualSecondName,
+      data.individualThirdName,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const supplierName =
+      data.supplierType === "individual" ? individualName || data.name : data.name;
+    if (!supplierName) throw new Error("Supplier name is required.");
+    if (!data.phone) throw new Error("Supplier phone is required.");
+    if (!isValidLocalKenyanPhone(data.phone)) {
+      throw new Error("Use a local phone number starting with 07 or 01.");
+    }
+    if (data.alternativePhone && !isValidLocalKenyanPhone(data.alternativePhone)) {
+      throw new Error("Use a local alternative phone number starting with 07 or 01.");
+    }
+    if (data.supplierType === "individual" && !data.nationalId) {
+      throw new Error("National ID or passport number is required for individual suppliers.");
+    }
+    if (data.supplierType === "company" && !data.businessRegistrationNumber) {
+      throw new Error("Business registration or certificate number is required for companies.");
+    }
+    if (!data.kraPin) throw new Error("KRA PIN is required.");
+    if (!data.bankName || !data.accountName || !data.accountNumber) {
+      throw new Error("Supplier bank name, account name, and account number are required.");
+    }
 
-      const { data: existingSupplier, error: supplierLookupError } = await runtimeDb
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+
+    if (data.kraPin) {
+      const { data: existingSupplier, error: existingSupplierError } = await runtimeDb
         .from("suppliers")
-        .select("id")
-        .eq("member_id", data.memberId)
+        .select("id, name")
+        .eq("kra_pin", data.kraPin)
         .maybeSingle();
-      if (supplierLookupError) throw new Error(supplierLookupError.message);
+      if (existingSupplierError && !isMissingColumnError(existingSupplierError, "kra_pin")) {
+        throw new Error(existingSupplierError.message);
+      }
       if (existingSupplier) {
-        throw new Error("That membership number is already linked to another supplier profile.");
+        throw new Error(`That KRA PIN is already registered to supplier ${existingSupplier.name}.`);
       }
     }
+
+    const { data: existingMembers, error: existingMembersError } = await runtimeDb
+      .from("members")
+      .select("id");
+    if (existingMembersError) throw new Error(existingMembersError.message);
+
+    const memberId = nextMembershipNumber(
+      (existingMembers ?? []).map((row: { id?: string | null }) => row.id),
+      1,
+    );
+    const phone = toLocalKenyanPhone(data.phone);
+    const alternativePhone = data.alternativePhone
+      ? toLocalKenyanPhone(data.alternativePhone)
+      : undefined;
+    const joinedAt = new Date().toISOString().slice(0, 10);
+    const location = data.location ?? data.physicalLocation ?? data.subCountyTown;
+    const memberFirstName =
+      data.supplierType === "individual"
+        ? data.individualFirstName
+        : data.contactPerson?.split(/\s+/).filter(Boolean)[0];
+    const memberLastName =
+      data.supplierType === "individual"
+        ? [data.individualSecondName, data.individualThirdName].filter(Boolean).join(" ").trim()
+        : data.name;
+    const { error: memberError } = await runtimeDb.from("members").insert({
+      id: memberId,
+      name: supplierName,
+      phone,
+      joined_at: joinedAt,
+      status: "active",
+      shares: 0,
+      savings_balance: 0,
+      fee_membership: false,
+      fee_card: false,
+      fee_has_shop: false,
+      fee_sticker: false,
+      fee_first_upfront_paid: false,
+      first_name: memberFirstName ?? null,
+      second_name: data.supplierType === "individual" ? (data.individualSecondName ?? null) : null,
+      third_name: data.supplierType === "individual" ? (data.individualThirdName ?? null) : null,
+      last_name: memberLastName || null,
+      dob: data.dateOfBirth ?? null,
+      gender: data.gender ?? null,
+      email: data.email ?? null,
+      address: data.postalAddress ?? location ?? null,
+      city: data.subCountyTown ?? null,
+      county: data.county ?? null,
+      village: data.physicalLocation ?? null,
+      business_name: data.supplierType === "company" ? data.name : null,
+      business_type: data.registrationCategory,
+      business_permanence: null,
+      business_address: data.physicalLocation ?? location ?? null,
+      field_officer_id: actor.id,
+      member_category: "supplier",
+      is_investor: false,
+    });
+    if (memberError) throw new Error(memberError.message);
 
     const id = makeId("SUP");
     const { error } = await runtimeDb.from("suppliers").insert({
       id,
-      name: data.name,
+      name: supplierName,
       kind: data.kind,
-      member_id: data.memberId ?? null,
-      phone: data.phone ?? null,
+      member_id: memberId,
+      supplier_type: data.supplierType,
+      registration_category: data.registrationCategory,
+      individual_first_name: data.individualFirstName ?? null,
+      individual_second_name: data.individualSecondName ?? null,
+      individual_third_name: data.individualThirdName ?? null,
+      national_id: data.nationalId ?? null,
+      gender: data.gender ?? null,
+      date_of_birth: data.dateOfBirth ?? null,
+      business_registration_number: data.businessRegistrationNumber ?? null,
+      registration_date: data.registrationDate ?? null,
+      phone,
+      alternative_phone: alternativePhone ?? null,
+      email: data.email ?? null,
       contact_person: data.contactPerson ?? null,
-      location: data.location ?? null,
+      contact_person_designation: data.contactPersonDesignation ?? null,
+      postal_address: data.postalAddress ?? null,
+      postal_code_town: data.postalCodeTown ?? null,
+      county: data.county ?? null,
+      sub_county_town: data.subCountyTown ?? null,
+      physical_location: data.physicalLocation ?? null,
+      kra_pin: data.kraPin ?? null,
+      tax_compliance_certificate_number: data.taxComplianceCertificateNumber ?? null,
+      agpo_category: data.agpoCategory,
+      regulatory_license_number: data.regulatoryLicenseNumber ?? null,
+      bank_name: data.bankName ?? null,
+      bank_branch: data.bankBranch ?? null,
+      account_name: data.accountName ?? null,
+      account_number: data.accountNumber ?? null,
+      mpesa_paybill_till: data.mpesaPaybillTill ?? null,
+      document_checklist: data.documentChecklist,
+      location: location ?? null,
       notes: data.notes ?? null,
     });
-    if (error) throw new Error(error.message);
+    if (error) {
+      await runtimeDb.from("members").delete().eq("id", memberId);
+      throw new Error(error.message);
+    }
     await auditAction({
       actor,
       action: "supplier.created",
       targetType: "supplier",
       targetId: id,
-      summary: `${actor.name} registered supplier ${data.name}`,
-      details: data,
+      summary: `${actor.name} registered supplier ${supplierName}`,
+      details: {
+        ...data,
+        memberId,
+        supplierName,
+      },
     });
-    return { id };
+    return { id, memberId };
   });
 
 export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "POST" })
@@ -7724,6 +7982,59 @@ export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
     }
 
     const now = new Date().toISOString();
+    if (request.kind === "stock") {
+      const quantity = Number(request.quantity_requested ?? 0);
+      const commodity = String(request.commodity_name ?? "").trim();
+      if (quantity > 0 && commodity) {
+        const { data: inventoryRows, error: inventoryError } = await runtimeDb
+          .from("supplier_inventory_items")
+          .select("*")
+          .eq("supplier_id", request.supplier_id)
+          .eq("item_kind", "stock")
+          .ilike("item_name", `%${commodity}%`)
+          .order("updated_at", { ascending: false })
+          .limit(1);
+        if (inventoryError) throw new Error(inventoryError.message);
+        const inventoryItem = inventoryRows?.[0];
+        if (inventoryItem) {
+          const available = Number(inventoryItem.quantity_available ?? 0);
+          if (available < quantity) {
+            throw new Error(
+              `Supplier inventory has only ${available} ${inventoryItem.unit ?? "units"} for ${inventoryItem.item_name}.`,
+            );
+          }
+          const { error: inventoryUpdateError } = await runtimeDb
+            .from("supplier_inventory_items")
+            .update({
+              quantity_available: Math.max(0, available - quantity),
+              updated_at: now,
+            })
+            .eq("id", inventoryItem.id);
+          if (inventoryUpdateError) throw new Error(inventoryUpdateError.message);
+        }
+
+        if (!request.loan_id) {
+          const unitPrice = Number(request.amount ?? 0) / Math.max(1, quantity);
+          const storeId = makeId("STK");
+          const { error: storeError } = await runtimeDb.from("internal_store_items").insert({
+            id: storeId,
+            item_name: commodity,
+            item_kind: "stock",
+            unit: request.unit_of_measure ?? "unit",
+            quantity_available: quantity,
+            unit_price: unitPrice,
+            buying_price: unitPrice,
+            preferred_supplier_id: request.supplier_id,
+            notes: `Received from supplier request ${request.id}; set selling price before issuing.`,
+            created_by: actor.id,
+            updated_by: actor.id,
+            updated_at: now,
+          });
+          if (storeError) throw new Error(storeError.message);
+        }
+      }
+    }
+
     const { error } = await runtimeDb
       .from("supplier_fulfillment_requests")
       .update({
@@ -7867,6 +8178,10 @@ export const saveSupplierInventoryItemRecord = createServerFn({ method: "POST" }
       unit?: string;
       quantityAvailable?: number;
       unitPrice?: number;
+      buyingPrice?: number;
+      sellingPrice?: number;
+      brand?: string;
+      quality?: string;
       sku?: string;
       notes?: string;
     }) => ({
@@ -7877,6 +8192,10 @@ export const saveSupplierInventoryItemRecord = createServerFn({ method: "POST" }
       unit: data?.unit?.trim() || "unit",
       quantityAvailable: Number(data?.quantityAvailable ?? 0),
       unitPrice: Number(data?.unitPrice ?? 0),
+      buyingPrice: data?.buyingPrice == null ? undefined : Number(data.buyingPrice ?? 0),
+      sellingPrice: data?.sellingPrice == null ? undefined : Number(data.sellingPrice ?? 0),
+      brand: data?.brand?.trim() || undefined,
+      quality: data?.quality?.trim() || undefined,
       sku: data?.sku?.trim() || undefined,
       notes: data?.notes?.trim() || undefined,
     }),
@@ -7896,6 +8215,10 @@ export const saveSupplierInventoryItemRecord = createServerFn({ method: "POST" }
       unit: data.unit,
       quantity_available: Math.max(0, data.quantityAvailable),
       unit_price: Math.max(0, data.unitPrice),
+      buying_price: Math.max(0, data.buyingPrice ?? data.unitPrice),
+      selling_price: Math.max(0, data.sellingPrice ?? data.unitPrice),
+      brand: data.brand ?? null,
+      quality: data.quality ?? null,
       sku: data.sku ?? null,
       notes: data.notes ?? null,
       updated_at: new Date().toISOString(),
@@ -7929,6 +8252,10 @@ export const saveInternalStoreItemRecord = createServerFn({ method: "POST" })
       reorderLevel?: number;
       unitPrice?: number;
       preferredSupplierId?: string;
+      buyingPrice?: number;
+      sellingPrice?: number;
+      brand?: string;
+      quality?: string;
       notes?: string;
     }) => ({
       itemId: data?.itemId?.trim() || undefined,
@@ -7939,6 +8266,10 @@ export const saveInternalStoreItemRecord = createServerFn({ method: "POST" })
       reorderLevel: Number(data?.reorderLevel ?? 0),
       unitPrice: Number(data?.unitPrice ?? 0),
       preferredSupplierId: data?.preferredSupplierId?.trim() || undefined,
+      buyingPrice: data?.buyingPrice == null ? undefined : Number(data.buyingPrice ?? 0),
+      sellingPrice: data?.sellingPrice == null ? undefined : Number(data.sellingPrice ?? 0),
+      brand: data?.brand?.trim() || undefined,
+      quality: data?.quality?.trim() || undefined,
       notes: data?.notes?.trim() || undefined,
     }),
   )
@@ -7955,6 +8286,10 @@ export const saveInternalStoreItemRecord = createServerFn({ method: "POST" })
       quantity_available: Math.max(0, data.quantityAvailable),
       reorder_level: Math.max(0, data.reorderLevel),
       unit_price: Math.max(0, data.unitPrice),
+      buying_price: Math.max(0, data.buyingPrice ?? data.unitPrice),
+      selling_price: Math.max(0, data.sellingPrice ?? data.unitPrice),
+      brand: data.brand ?? null,
+      quality: data.quality ?? null,
       preferred_supplier_id: data.preferredSupplierId ?? null,
       notes: data.notes ?? null,
       created_by: actor.id,

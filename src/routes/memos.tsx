@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
-import { Section } from "@/components/ui-bits";
+import { Badge, Section } from "@/components/ui-bits";
 import { CommsTabs } from "./staff";
 import { useStore } from "@/lib/store";
 import { useEffect, useState } from "react";
@@ -20,6 +20,9 @@ function MemosPage() {
   const { markRead } = useReadIds();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [audience, setAudience] = useState<"staff" | "members" | "all">("staff");
+  const [kind, setKind] = useState<"info" | "warning" | "alert">("info");
+  const [expiresAt, setExpiresAt] = useState("");
 
   useEffect(() => {
     const unreadMemoIds = memos
@@ -39,10 +42,16 @@ function MemosPage() {
       by: currentUser.name,
       byStaffId: currentUser.id,
       date: new Date().toISOString().slice(0, 10),
+      audience,
+      kind,
+      expiresAt: expiresAt || undefined,
     });
     setTitle("");
     setBody("");
-    toast.success("Memo posted");
+    setAudience("staff");
+    setKind("info");
+    setExpiresAt("");
+    toast.success(audience === "staff" ? "Memo posted" : "Client notice posted");
   }
 
   function downloadMemo(memo: (typeof memos)[number]) {
@@ -58,7 +67,10 @@ function MemosPage() {
 
   return (
     <>
-      <AppHeader title="Staff Memos" subtitle="Internal announcements visible to all staff." />
+      <AppHeader
+        title="Staff Memos"
+        subtitle="Post internal staff memos or client notices such as AGM and payment reminders."
+      />
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <CommsTabs />
         <Section title="Post a memo">
@@ -76,6 +88,32 @@ function MemosPage() {
               rows={5}
               className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
             />
+            <div className="grid gap-3 sm:grid-cols-3">
+              <select
+                value={audience}
+                onChange={(event) => setAudience(event.target.value as typeof audience)}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                <option value="staff">Staff only</option>
+                <option value="members">Clients only</option>
+                <option value="all">Staff and clients</option>
+              </select>
+              <select
+                value={kind}
+                onChange={(event) => setKind(event.target.value as typeof kind)}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="alert">Urgent alert</option>
+              </select>
+              <input
+                type="date"
+                value={expiresAt}
+                onChange={(event) => setExpiresAt(event.target.value)}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            </div>
             <button
               onClick={post}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium"
@@ -99,6 +137,16 @@ function MemosPage() {
                 <div className="flex justify-between items-start gap-3">
                   <div>
                     <div className="font-medium">{m.title}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <Badge tone={m.audience === "staff" ? "muted" : "accent"}>
+                        {m.audience === "members"
+                          ? "Clients"
+                          : m.audience === "all"
+                            ? "Staff + clients"
+                            : "Staff"}
+                      </Badge>
+                      {m.expiresAt ? <span>Expires {m.expiresAt}</span> : null}
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       {m.date} · by {m.by}
                     </div>

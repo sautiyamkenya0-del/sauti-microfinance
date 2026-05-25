@@ -1282,20 +1282,40 @@ export function loanPricingPreview(args: {
   termDays?: number;
   ratePct?: number;
   loanType?: LoanProductType;
+  loanKind?: LoanKind;
   processingFeeMode?: LoanChargeMode;
   insuranceFeeMode?: LoanChargeMode;
   dailySavingsAmount?: number;
   fixedFees?: LoanFixedFeeModes;
 }) {
   const netAmount = Math.max(0, Number(args.netAmount ?? 0));
+  const supplierBacked =
+    args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service";
   const resolvedLoanType = args.loanType ?? loanProductTypeForAmount(netAmount);
   const termDays = normalizeLoanTermDaysForType(args.termDays, resolvedLoanType);
-  const ratePct = Number(args.ratePct ?? loanRateForTerm(termDays, resolvedLoanType, netAmount));
-  const deductions = sbcDeductions(netAmount, {
-    processingMode: args.processingFeeMode,
-    insuranceMode: args.insuranceFeeMode,
-  });
-  const fixedFees = summarizeLoanFixedFees(args.fixedFees);
+  const ratePct = supplierBacked
+    ? 0
+    : Number(args.ratePct ?? loanRateForTerm(termDays, resolvedLoanType, netAmount));
+  const deductions = supplierBacked
+    ? {
+        processing: 0,
+        insurance: 0,
+        transactionCost: 0,
+        processingUpfront: 0,
+        insuranceUpfront: 0,
+        financedProcessing: 0,
+        financedInsurance: 0,
+        totalUpfrontCharges: 0,
+        totalFinancedCharges: 0,
+        financedPrincipal: netAmount,
+        netDisbursedAmount: netAmount,
+        total: 0,
+      }
+    : sbcDeductions(netAmount, {
+        processingMode: args.processingFeeMode,
+        insuranceMode: args.insuranceFeeMode,
+      });
+  const fixedFees = summarizeLoanFixedFees(supplierBacked ? undefined : args.fixedFees);
   const financedPrincipal = deductions.financedPrincipal + fixedFees.totalFinanced;
   const periods = termPeriodsFromDays(termDays, resolvedLoanType);
   const schedule = loanScheduleTotal(financedPrincipal, ratePct, periods);
@@ -1582,6 +1602,8 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "savings",
     "shares",
     "transactions",
+    "suppliers",
+    "stock",
     "pettycash",
     "investors",
     "attendance",
@@ -1604,6 +1626,8 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "savings",
     "shares",
     "transactions",
+    "suppliers",
+    "stock",
     "pettycash",
     "attendance",
     "policies",
@@ -1620,6 +1644,8 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "members",
     "savings",
     "transactions",
+    "suppliers",
+    "stock",
     "attendance",
     "policies",
     "staff",

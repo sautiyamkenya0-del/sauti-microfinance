@@ -35,6 +35,11 @@ function readNumber(value: unknown) {
   return Number.isFinite(next) ? next : 0;
 }
 
+function isMissingColumnError(error: any, column: string) {
+  const message = String(error?.message ?? "");
+  return error?.code === "42703" || message.includes(column);
+}
+
 function mapStaffMessageRow(row: DbRow) {
   const attachment =
     row.attachment && typeof row.attachment === "object"
@@ -67,6 +72,9 @@ function mapMemoRow(row: DbRow) {
     body: readText(row.body),
     by: readText(row.by_name),
     byStaffId: optionalText(row.by_staff_id),
+    audience: optionalText(row.audience) ?? "staff",
+    kind: optionalText(row.notice_kind) ?? "info",
+    expiresAt: optionalText(row.expires_at),
     createdAt: readText(row.created_at),
   };
 }
@@ -274,6 +282,34 @@ export const listStaffMemos = createServerFn({ method: "POST" }).handler(async (
   return (data ?? []).map((row) => mapMemoRow(row as DbRow));
 });
 
+export const listClientNotices = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireSignedInSession();
+  if (session.authMode === "member") {
+    await requireMemberActor();
+  } else {
+    await requireStaffActor();
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const supabaseAdmin = requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("staff_memos")
+    .select("*")
+    .in("audience", ["members", "all"])
+    .or(`expires_at.is.null,expires_at.gte.${today}`)
+    .order("memo_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  if (error) {
+    if (isMissingColumnError(error, "audience") || isMissingColumnError(error, "expires_at")) {
+      return [];
+    }
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => mapMemoRow(row as DbRow));
+});
+
 export const listApprovalRequests = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();
   const supabaseAdmin = requireSupabaseAdmin();
@@ -441,7 +477,7 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!supplier) {
-      throw new Error("This membership number is not linked to a supplier profile.");
+      throw new Error("This SBC number is not linked to a supplier profile.");
     }
     mode = "supplier";
     signedSupplierId = readText((supplier as DbRow).id);
@@ -552,7 +588,9 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
       ? ((membersResult.data ?? []) as DbRow[]).filter((row) =>
           visibleSupplierMemberIds.has(readText(row.id)),
         )
-      : ((membersResult.data ?? []) as DbRow[]);
+      : ((membersResult.data ?? []) as DbRow[]).filter(
+          (row) => readText(row.member_category) !== "supplier",
+        );
 
   return {
     mode,

@@ -107,10 +107,7 @@ export function FirstTimeApplication({
   const loanType = useMemo(() => loanProductTypeForAmount(f.loanAmount), [f.loanAmount]);
   const loanCategory = loanType === "premium" ? "Premium" : "Normal";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
-  const loanKindOptions = useMemo<LoanKind[]>(
-    () => ["financial", "fuel", "stock", "service"],
-    [],
-  );
+  const loanKindOptions = useMemo<LoanKind[]>(() => ["financial", "fuel", "stock", "service"], []);
 
   useEffect(() => {
     if (loanKindOptions.includes(initialLoanKind)) {
@@ -188,6 +185,7 @@ export function FirstTimeApplication({
     const termDays = normalizeLoanTermDaysForType(f.repaymentDays, loanType);
     const pricing = loanPricingPreview({
       loanType,
+      loanKind: f.loanKind,
       netAmount: f.loanAmount,
       termDays: f.repaymentDays,
       processingFeeMode: f.processingFeeMode,

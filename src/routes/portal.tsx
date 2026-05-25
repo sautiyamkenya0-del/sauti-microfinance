@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
@@ -10,7 +11,7 @@ import {
   loanSummary,
   memberNeedsSticker,
 } from "@/lib/store";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   PiggyBank,
@@ -24,13 +25,16 @@ import {
   ArrowLeftRight,
   Receipt,
   ShieldCheck,
+  Bell,
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
+import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
+  listClientNotices,
   listMemberSupplierRequestsRecord,
   listSupplierWorkspaceRecord,
 } from "@/lib/runtime-data.functions";
@@ -44,6 +48,39 @@ const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "fees", label: "Fees", icon: Receipt },
   { id: "support", label: "Help / Chat", icon: MessageSquare },
 ];
+const PORTAL_MENU_TABS = TABS.filter((tab) => tab.id !== "support");
+
+type ClientNotice = {
+  id: string;
+  date: string;
+  title: string;
+  body: string;
+  by: string;
+  kind?: "info" | "warning" | "alert";
+  expiresAt?: string;
+};
+
+type ClientAlert = {
+  id: string;
+  kind: "info" | "warning" | "alert";
+  title: string;
+  detail: string;
+  tab?: Tab;
+};
+
+function noticeKind(value?: string): ClientAlert["kind"] {
+  return value === "alert" || value === "warning" ? value : "info";
+}
+
+function alertTone(kind: ClientAlert["kind"]): "default" | "warning" | "destructive" {
+  if (kind === "alert") return "destructive";
+  if (kind === "warning") return "warning";
+  return "default";
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export const Route = createFileRoute("/portal")({
   head: () => ({ meta: [{ title: "Member Portal — Sauti Microfinance" }] }),
@@ -122,8 +159,10 @@ function Portal() {
       )
     : fees;
   const { submit } = useApprovalActions();
+  const loadClientNotices = useServerFn(listClientNotices);
   const loadMemberSupplierRequests = useServerFn(listMemberSupplierRequestsRecord);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const navigate = useNavigate();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
@@ -131,6 +170,11 @@ function Portal() {
   const [pinNew, setPinNew] = useState("");
   const [payMember, setPayMember] = useState<Member | null>(null);
   const [supplierRequests, setSupplierRequests] = useState<any[]>([]);
+  const [clientNotices, setClientNotices] = useState<ClientNotice[]>([]);
+  const [clientReadIds, setClientReadIds] = useState<Set<string>>(new Set());
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof Notification === "undefined" ? "denied" : Notification.permission,
+  );
   const [fuelLoanAmount, setFuelLoanAmount] = useState("");
   const [fuelLoanVehicle, setFuelLoanVehicle] = useState("");
   const [fuelLoanType, setFuelLoanType] = useState("");
@@ -138,6 +182,31 @@ function Portal() {
   useEffect(() => {
     setPhone(member?.phone ?? "");
   }, [member]);
+  useEffect(() => {
+    if (!memberId || typeof window === "undefined") {
+      setClientReadIds(new Set());
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(`sauti-client-notifications:${memberId}`);
+      setClientReadIds(new Set(raw ? JSON.parse(raw) : []));
+    } catch {
+      setClientReadIds(new Set());
+    }
+  }, [memberId]);
+  useEffect(() => {
+    const refreshNotices = () =>
+      loadClientNotices()
+        .then((rows) => setClientNotices(rows as ClientNotice[]))
+        .catch(() => setClientNotices([]));
+    refreshNotices();
+    const timer = window.setInterval(refreshNotices, 60000);
+    window.addEventListener("focus", refreshNotices);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshNotices);
+    };
+  }, [loadClientNotices]);
   useEffect(() => {
     if (authMode !== "member") return;
     loadSupplierWorkspace()
@@ -152,9 +221,151 @@ function Portal() {
     loadMemberSupplierRequests({
       data: isStaffView ? { memberId } : undefined,
     })
-      .then((rows) => setSupplierRequests(rows))
+      .then((rows) => setSupplierRequests(rows as any[]))
       .catch(() => setSupplierRequests([]));
   }, [isStaffView, loadMemberSupplierRequests, memberId]);
+  const { data: mpesaReceiptRows = [] } = useQuery({
+    queryKey: ["portal-mpesa-receipts", memberId, isStaffView],
+    queryFn: () => fetchMpesaAudit({ data: isStaffView ? { memberId } : {} }),
+    enabled: !!memberId,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+  const clientAlerts = useMemo<ClientAlert[]>(() => {
+    if (!member) return [];
+    const out: ClientAlert[] = [];
+    const today = todayIso();
+
+    clientNotices.forEach((notice) => {
+      out.push({
+        id: `notice-${notice.id}`,
+        kind: noticeKind(notice.kind),
+        title: notice.title,
+        detail: notice.body,
+        tab: "overview",
+      });
+    });
+
+    const compliancePaidToday = myTx.some(
+      (transaction) =>
+        transaction.date.slice(0, 10) === today &&
+        (transaction.type === "deposit" || transaction.type === "loan_repayment"),
+    );
+    if (!compliancePaidToday) {
+      out.push({
+        id: `daily-compliance-${member.id}-${today}`,
+        kind: "warning",
+        title: "Daily compliance contribution not made",
+        detail: "No deposit or loan repayment has been recorded for today.",
+        tab: "transactions",
+      });
+    }
+
+    myPen
+      .filter((penalty) => penalty.status === "outstanding")
+      .forEach((penalty) => {
+        out.push({
+          id: `penalty-${penalty.id}`,
+          kind: "warning",
+          title: "Penalty pending",
+          detail: `${penalty.reason} / ${fmtKES(penalty.amount)}`,
+          tab: "loans",
+        });
+      });
+
+    myLoans
+      .filter((loan) => loan.status === "active")
+      .forEach((loan) => {
+        const summary = loanSummary(loan);
+        if (summary.balance <= 0) return;
+        const dueDate = new Date(summary.dueDate);
+        const daysLeft = Math.max(1, Math.ceil((dueDate.getTime() - Date.now()) / 86_400_000));
+        const dailyDue = Math.ceil(summary.balance / daysLeft);
+        const paidToday = myTx
+          .filter(
+            (transaction) =>
+              transaction.type === "loan_repayment" &&
+              transaction.loanId === loan.id &&
+              transaction.date.slice(0, 10) === today,
+          )
+          .reduce((sum, transaction) => sum + transaction.amount, 0);
+        if (paidToday >= dailyDue) return;
+        out.push({
+          id: `daily-loan-${loan.id}-${today}`,
+          kind: "alert",
+          title: "Daily loan repayment not completed",
+          detail: `${loan.id}: ${fmtKES(Math.max(0, dailyDue - paidToday))} still due today`,
+          tab: "loans",
+        });
+      });
+
+    myTx
+      .filter(
+        (transaction) =>
+          transaction.date.slice(0, 10) === today &&
+          ["deposit", "loan_repayment", "fee_payment", "share_purchase"].includes(transaction.type),
+      )
+      .slice(0, 5)
+      .forEach((transaction) => {
+        out.push({
+          id: `receipt-${transaction.id}`,
+          kind: "info",
+          title: "Payment received",
+          detail: `${transaction.type.replace(/_/g, " ")} / ${fmtKES(transaction.amount)}`,
+          tab: "transactions",
+        });
+      });
+
+    return out;
+  }, [clientNotices, member, myLoans, myPen, myTx]);
+  const unreadClientAlerts = useMemo(
+    () => clientAlerts.filter((alert) => !clientReadIds.has(alert.id)),
+    [clientAlerts, clientReadIds],
+  );
+  const announcedClientIdsRef = useRef(new Set<string>());
+  const markClientAlertsRead = useCallback(
+    (ids: string | string[]) => {
+      if (!memberId || typeof window === "undefined") return;
+      const values = Array.isArray(ids) ? ids : [ids];
+      setClientReadIds((current) => {
+        const next = new Set(current);
+        values.forEach((id) => next.add(id));
+        window.localStorage.setItem(
+          `sauti-client-notifications:${memberId}`,
+          JSON.stringify([...next]),
+        );
+        return next;
+      });
+    },
+    [memberId],
+  );
+  const enablePhoneAlerts = useCallback(async () => {
+    if (typeof Notification === "undefined") return;
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  }, []);
+
+  useEffect(() => {
+    if (isStaffView || typeof window === "undefined") return;
+    const incoming = unreadClientAlerts.filter(
+      (alert) => !announcedClientIdsRef.current.has(alert.id),
+    );
+    if (!incoming.length) return;
+    incoming.forEach((alert) => announcedClientIdsRef.current.add(alert.id));
+    const lead = incoming.find((alert) => alert.kind === "alert") ?? incoming[0];
+    toast(lead.title, {
+      description:
+        incoming.length > 1 ? `${lead.detail} (+${incoming.length - 1} more)` : lead.detail,
+    });
+    navigator.vibrate?.(lead.kind === "alert" ? [180, 80, 180] : [120]);
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      new Notification(lead.title, {
+        body: lead.detail,
+        icon: "/favicon.png",
+        tag: lead.id,
+      });
+    }
+  }, [isStaffView, unreadClientAlerts]);
 
   return (
     <>
@@ -178,16 +389,41 @@ function Portal() {
                 place.
               </p>
             </div>
-            <button
-              onClick={() => void logout()}
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              Sign out
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {notificationPermission === "default" ? (
+                <button
+                  onClick={() => void enablePhoneAlerts()}
+                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted"
+                >
+                  <Bell className="h-4 w-4" /> Enable alerts
+                </button>
+              ) : null}
+              <button
+                onClick={() => {
+                  setTab("overview");
+                  markClientAlertsRead(unreadClientAlerts.map((alert) => alert.id));
+                }}
+                className="relative inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <Bell className="h-4 w-4" />
+                Alerts
+                {unreadClientAlerts.length > 0 ? (
+                  <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+                    {unreadClientAlerts.length}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                onClick={() => void logout()}
+                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </header>
       )}
-      <main className="flex-1 p-6 lg:p-8 space-y-6">
+      <main className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         {isStaffView && (
           <div className="bg-accent/15 border border-accent/30 rounded-xl p-4 flex items-start gap-3 text-sm">
             <ShieldCheck className="h-5 w-5 text-accent mt-0.5" />
@@ -258,7 +494,31 @@ function Portal() {
         {member && (
           <>
             {/* Member-side tab bar */}
-            <div className="bg-card border border-border rounded-xl p-1 flex flex-wrap gap-1">
+            <div className="rounded-xl border border-border bg-card p-3 sm:hidden">
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Menu
+                </span>
+                <select
+                  value={tab === "support" ? "overview" : tab}
+                  onChange={(event) => setTab(event.target.value as Tab)}
+                  className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                >
+                  {PORTAL_MENU_TABS.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                onClick={() => setTab("support")}
+                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+              >
+                <MessageSquare className="h-4 w-4" /> Help / Chat
+              </button>
+            </div>
+            <div className="hidden bg-card border border-border rounded-xl p-1 sm:flex flex-wrap gap-1">
               {TABS.map((t) => {
                 const Icon = t.icon;
                 const active = tab === t.id;
@@ -306,6 +566,61 @@ function Portal() {
                     tone="success"
                   />
                 </div>
+                <Section
+                  title={`My Notifications (${unreadClientAlerts.length} unread)`}
+                  action={
+                    clientAlerts.length > 0 ? (
+                      <button
+                        onClick={() => markClientAlertsRead(clientAlerts.map((alert) => alert.id))}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                      >
+                        Mark all read
+                      </button>
+                    ) : null
+                  }
+                >
+                  <div className="space-y-2 p-5 text-sm">
+                    {clientAlerts.length === 0 ? (
+                      <div className="text-muted-foreground">
+                        No client notifications right now.
+                      </div>
+                    ) : null}
+                    {clientAlerts.map((alert) => (
+                      <button
+                        key={alert.id}
+                        type="button"
+                        onClick={() => {
+                          if (alert.tab) setTab(alert.tab);
+                          markClientAlertsRead(alert.id);
+                        }}
+                        className={`flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left hover:bg-muted ${
+                          clientReadIds.has(alert.id)
+                            ? "border-border bg-background"
+                            : "border-primary/40 bg-primary/5"
+                        }`}
+                      >
+                        <span
+                          className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                            alert.kind === "alert"
+                              ? "bg-destructive"
+                              : alert.kind === "warning"
+                                ? "bg-accent"
+                                : "bg-primary"
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{alert.title}</span>
+                            <Badge tone={alertTone(alert.kind)}>{alert.kind}</Badge>
+                          </span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            {alert.detail}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </Section>
                 {investorProfile && (
                   <Section title="My Investment">
                     <div className="grid gap-3 p-5 text-sm sm:grid-cols-4">
@@ -653,25 +968,42 @@ function Portal() {
 
             {tab === "transactions" && (
               <Section title="My Transactions">
-                <div className="overflow-x-auto max-h-[60vh]">
+                <div className="border-b border-border p-4 text-xs text-muted-foreground">
+                  Original M-Pesa receipts are shown from the same receipt audit used in Capital
+                  Operations.
+                </div>
+                <div className="max-h-[60vh] overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground sticky top-0">
+                    <thead className="sticky top-0 bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                       <tr>
-                        <th className="px-5 py-2.5 text-left">Date</th>
-                        <th className="text-left">Type</th>
-                        <th className="text-left">Note</th>
+                        <th className="px-5 py-2.5 text-left">Date / Time</th>
+                        <th className="text-left">Receipt</th>
+                        <th className="text-left">Receipt detail</th>
+                        <th className="text-left">Account</th>
                         <th className="text-right pr-5">Amount</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {myTx.map((t) => (
+                      {mpesaReceiptRows.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                            No original M-Pesa receipts found for this member yet.
+                          </td>
+                        </tr>
+                      )}
+                      {mpesaReceiptRows.map((t: any) => (
                         <tr key={t.id}>
                           <td className="px-5 py-2">
-                            {t.createdAt ? new Date(t.createdAt).toLocaleString() : t.date}
+                            {t.exactReceivedAt || t.createdAt
+                              ? new Date(t.exactReceivedAt ?? t.createdAt).toLocaleString()
+                              : "-"}
                           </td>
-                          <td>{t.type.replace(/_/g, " ")}</td>
+                          <td className="font-mono text-xs">{t.mpesaRef ?? t.id}</td>
                           <td className="text-muted-foreground">{t.note ?? t.ref ?? "—"}</td>
-                          <td className="text-right pr-5">{fmtKES(t.amount)}</td>
+                          <td className="font-mono text-xs">{t.account ?? memberId}</td>
+                          <td className="text-right pr-5">
+                            {fmtKES(Number(t.originalAmount ?? t.amount ?? 0))}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

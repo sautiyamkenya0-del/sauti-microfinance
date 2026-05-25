@@ -109,6 +109,7 @@ export function PendingReview() {
             netAmount: adjAmount,
             termDays,
             ratePct: l.rate,
+            loanKind: l.loanKind,
             processingFeeMode: l.processingFeeMode,
             insuranceFeeMode: l.insuranceFeeMode,
           });

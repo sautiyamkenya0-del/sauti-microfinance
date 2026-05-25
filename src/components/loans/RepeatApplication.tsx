@@ -64,10 +64,7 @@ export function RepeatApplication({
   const [changesSinceLast, setChangesSinceLast] = useState("");
   const loanType = loanCategory === "Premium" ? "premium" : "standard";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
-  const loanKindOptions = useMemo<LoanKind[]>(
-    () => ["financial", "fuel", "stock", "service"],
-    [],
-  );
+  const loanKindOptions = useMemo<LoanKind[]>(() => ["financial", "fuel", "stock", "service"], []);
 
   useEffect(() => {
     if (loanKindOptions.includes(initialLoanKind)) {
@@ -81,6 +78,7 @@ export function RepeatApplication({
     const termDays = normalizeLoanTermDaysForType(repaymentDays, loanType);
     const pricing = loanPricingPreview({
       loanType,
+      loanKind,
       netAmount: loanAmount,
       termDays: repaymentDays,
       processingFeeMode,

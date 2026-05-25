@@ -38,6 +38,56 @@ export const Route = createFileRoute("/suppliers")({
 });
 
 type SupplierKind = "fuel" | "stock" | "service";
+type SupplierType = "individual" | "company";
+type SupplierRegistrationCategory = "goods" | "services" | "works";
+type AgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
+
+const emptySupplierDocuments = {
+  nationalId: false,
+  businessRegistrationCertificate: false,
+  kraPinCertificate: false,
+  taxComplianceCertificate: false,
+  cr12: false,
+  agpoCertificate: false,
+};
+
+function emptyRegisterForm() {
+  return {
+    supplierType: "individual" as SupplierType,
+    registrationCategory: "goods" as SupplierRegistrationCategory,
+    name: "",
+    kind: "stock" as SupplierKind,
+    individualFirstName: "",
+    individualSecondName: "",
+    individualThirdName: "",
+    nationalId: "",
+    gender: "Male" as "Male" | "Female",
+    dateOfBirth: "",
+    businessRegistrationNumber: "",
+    registrationDate: "",
+    contactPerson: "",
+    contactPersonDesignation: "",
+    phone: "",
+    alternativePhone: "",
+    email: "",
+    postalAddress: "",
+    postalCodeTown: "",
+    county: "",
+    subCountyTown: "",
+    physicalLocation: "",
+    kraPin: "",
+    taxComplianceCertificateNumber: "",
+    agpoCategory: "not_applicable" as AgpoCategory,
+    regulatoryLicenseNumber: "",
+    bankName: "",
+    bankBranch: "",
+    accountName: "",
+    accountNumber: "",
+    mpesaPaybillTill: "",
+    documentChecklist: { ...emptySupplierDocuments },
+    notes: "",
+  };
+}
 
 function SuppliersPage() {
   const { authMode, currentUser, logout } = useStore();
@@ -54,13 +104,7 @@ function SuppliersPage() {
   const [busy, setBusy] = useState(false);
   const [simulationPickId, setSimulationPickId] = useState("");
   const [simulatedSupplierId, setSimulatedSupplierId] = useState("");
-  const [registerForm, setRegisterForm] = useState({
-    memberId: "",
-    name: "",
-    kind: "stock" as SupplierKind,
-    phone: "",
-    location: "",
-  });
+  const [registerForm, setRegisterForm] = useState(emptyRegisterForm);
   const [inventoryForm, setInventoryForm] = useState({
     supplierId: "",
     itemKind: "stock" as SupplierKind,
@@ -104,10 +148,6 @@ function SuppliersPage() {
       setSimulatedSupplierId((current) =>
         current && nextSuppliers.some((supplier: any) => supplier.id === current) ? current : "",
       );
-      setRegisterForm((current) => ({
-        ...current,
-        memberId: current.memberId || next.members?.[0]?.id || "",
-      }));
       setInventoryForm((current) => ({
         ...current,
         supplierId: current.supplierId || next.signedSupplierId || next.suppliers?.[0]?.id || "",
@@ -115,7 +155,9 @@ function SuppliersPage() {
       setStoreForm((current) => ({
         ...current,
         preferredSupplierId:
-          current.preferredSupplierId || next.suppliers?.find((row: any) => row.kind === "stock")?.id || "",
+          current.preferredSupplierId ||
+          next.suppliers?.find((row: any) => row.kind === "stock")?.id ||
+          "",
       }));
       setRequestForm((current) => ({
         ...current,
@@ -137,7 +179,7 @@ function SuppliersPage() {
   const activeSimulatedSupplierId = serverMode === "staff" ? simulatedSupplierId : "";
   const mode = serverMode === "supplier" || activeSimulatedSupplierId ? "supplier" : "staff";
   const signedSupplierId =
-    serverMode === "supplier" ? workspace?.signedSupplierId ?? "" : activeSimulatedSupplierId;
+    serverMode === "supplier" ? (workspace?.signedSupplierId ?? "") : activeSimulatedSupplierId;
   const allSuppliers = workspace?.suppliers ?? [];
   const allRequests = workspace?.requests ?? [];
   const allSupplierInventory = workspace?.supplierInventory ?? [];
@@ -173,7 +215,7 @@ function SuppliersPage() {
   const canPaySuppliers = authMode === "staff" && currentUser.role === "director";
 
   const supplierDebt = requests
-    .filter((request: any) => request.status === "fulfilled")
+    .filter((request: any) => request.status === "fulfilled" || request.status === "paid")
     .reduce((sum: number, request: any) => sum + Number(request.amount ?? 0), 0);
   const supplierPayments = outflows.reduce(
     (sum: number, payment: any) => sum + Number(payment.amount ?? 0),
@@ -200,7 +242,9 @@ function SuppliersPage() {
     return (
       internalStore.find((item: any) => {
         const sameKind = String(item.item_kind ?? "") === "stock";
-        const sameName = String(item.item_name ?? "").toLowerCase().includes(search);
+        const sameName = String(item.item_name ?? "")
+          .toLowerCase()
+          .includes(search);
         const enough = Number(item.quantity_available ?? 0) >= requestForm.quantity;
         return sameKind && sameName && enough;
       }) ?? null
@@ -220,7 +264,9 @@ function SuppliersPage() {
         .filter(
           (item: any) =>
             String(item.item_kind ?? "") === "stock" &&
-            String(item.item_name ?? "").toLowerCase().includes(search),
+            String(item.item_name ?? "")
+              .toLowerCase()
+              .includes(search),
         )
         .map((item: any) => String(item.supplier_id ?? "")),
     );
@@ -230,7 +276,7 @@ function SuppliersPage() {
   const supplierDebtById = useMemo(() => {
     const totals = new Map<string, number>();
     requests.forEach((request: any) => {
-      if (request.status !== "fulfilled") return;
+      if (request.status !== "fulfilled" && request.status !== "paid") return;
       const supplierId = String(request.supplier_id ?? "");
       totals.set(supplierId, (totals.get(supplierId) ?? 0) + Number(request.amount ?? 0));
     });
@@ -250,7 +296,7 @@ function SuppliersPage() {
     try {
       setBusy(true);
       await action();
-      toast.success(success);
+      if (success) toast.success(success);
       await refresh();
     } catch (error: any) {
       toast.error(error?.message ?? "That action could not be completed.");
@@ -307,7 +353,11 @@ function SuppliersPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label={mode === "staff" ? "Suppliers" : "Open requests"}
-            value={mode === "staff" ? suppliers.length : requests.filter((row: any) => row.status === "sent").length}
+            value={
+              mode === "staff"
+                ? suppliers.length
+                : requests.filter((row: any) => row.status === "sent").length
+            }
             icon={<Building2 className="h-5 w-5" />}
           />
           <StatCard
@@ -372,72 +422,364 @@ function SuppliersPage() {
 
         {mode === "staff" ? (
           <div className="grid gap-6 xl:grid-cols-3">
-            <Section title="Register supplier">
-              <div className="space-y-3 p-5">
-                <Select
-                  value={registerForm.memberId}
-                  onChange={(value) => setRegisterForm((current) => ({ ...current, memberId: value }))}
-                  options={members.map((member: any) => [
-                    member.id,
-                    `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
-                  ])}
-                />
-                <Input
-                  value={registerForm.name}
-                  onChange={(value) => setRegisterForm((current) => ({ ...current, name: value }))}
-                  placeholder="Supplier / business name"
-                />
-                <Select
-                  value={registerForm.kind}
-                  onChange={(value) =>
-                    setRegisterForm((current) => ({ ...current, kind: value as SupplierKind }))
-                  }
-                  options={[
-                    ["stock", "Stock supplier"],
-                    ["fuel", "Fuel supplier"],
-                    ["service", "Service supplier"],
-                  ]}
-                />
-                <Input
-                  value={registerForm.phone}
-                  onChange={(value) => setRegisterForm((current) => ({ ...current, phone: value }))}
-                  placeholder="Supplier phone"
-                />
-                <Input
-                  value={registerForm.location}
-                  onChange={(value) =>
-                    setRegisterForm((current) => ({ ...current, location: value }))
-                  }
-                  placeholder="Location / station / workshop"
-                />
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    runAction(async () => {
-                      await registerSupplier({
-                        data: {
-                          memberId: registerForm.memberId,
-                          name: registerForm.name,
-                          kind: registerForm.kind,
-                          phone: registerForm.phone,
-                          location: registerForm.location,
-                        },
-                      });
-                      setRegisterForm({
-                        memberId: members[0]?.id ?? "",
-                        name: "",
-                        kind: "stock",
-                        phone: "",
-                        location: "",
-                      });
-                    }, "Supplier registered.")
-                  }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  <Plus className="h-4 w-4" /> Save supplier
-                </button>
-              </div>
-            </Section>
+            <div className="xl:col-span-2">
+              <Section title="Register supplier">
+                <div className="space-y-4 p-5">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ["individual", "Individual / Sole Proprietor"],
+                        ["company", "Limited Company / Partnership"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          setRegisterForm((current) => ({ ...current, supplierType: value }))
+                        }
+                        className={`rounded-md border px-3 py-2 text-left text-xs font-medium ${
+                          registerForm.supplierType === value
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border hover:bg-muted"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select
+                      value={registerForm.registrationCategory}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({
+                          ...current,
+                          registrationCategory: value as SupplierRegistrationCategory,
+                          kind: value === "goods" ? current.kind : "service",
+                        }))
+                      }
+                      options={[
+                        ["goods", "Goods / Products"],
+                        ["services", "Services"],
+                        ["works", "Works / Construction"],
+                      ]}
+                    />
+                    <Select
+                      value={registerForm.kind}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, kind: value as SupplierKind }))
+                      }
+                      options={[
+                        ["stock", "Stock / goods"],
+                        ["fuel", "Fuel"],
+                        ["service", "Service / works"],
+                      ]}
+                    />
+                  </div>
+
+                  {registerForm.supplierType === "individual" ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input
+                          value={registerForm.individualFirstName}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              individualFirstName: value,
+                            }))
+                          }
+                          placeholder="First name"
+                        />
+                        <Input
+                          value={registerForm.individualSecondName}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              individualSecondName: value,
+                            }))
+                          }
+                          placeholder="Second name"
+                        />
+                        <Input
+                          value={registerForm.individualThirdName}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              individualThirdName: value,
+                            }))
+                          }
+                          placeholder="Third name"
+                        />
+                      </div>
+                      <Input
+                        value={registerForm.nationalId}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({ ...current, nationalId: value }))
+                        }
+                        placeholder="National ID / Passport No."
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Select
+                          value={registerForm.gender}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              gender: value as "Male" | "Female",
+                            }))
+                          }
+                          options={[
+                            ["Male", "Male"],
+                            ["Female", "Female"],
+                          ]}
+                        />
+                        <Input
+                          type="date"
+                          value={registerForm.dateOfBirth}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({ ...current, dateOfBirth: value }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <Input
+                        value={registerForm.name}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({ ...current, name: value }))
+                        }
+                        placeholder="Registered business / company name"
+                      />
+                      <Input
+                        value={registerForm.businessRegistrationNumber}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({
+                            ...current,
+                            businessRegistrationNumber: value,
+                          }))
+                        }
+                        placeholder="Business registration / certificate No."
+                      />
+                      <Input
+                        type="date"
+                        value={registerForm.registrationDate}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({ ...current, registrationDate: value }))
+                        }
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          value={registerForm.contactPerson}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({ ...current, contactPerson: value }))
+                          }
+                          placeholder="Primary contact person"
+                        />
+                        <Input
+                          value={registerForm.contactPersonDesignation}
+                          onChange={(value) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              contactPersonDesignation: value,
+                            }))
+                          }
+                          placeholder="Designation"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.phone}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, phone: value }))
+                      }
+                      placeholder="Phone number"
+                    />
+                    <Input
+                      value={registerForm.alternativePhone}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, alternativePhone: value }))
+                      }
+                      placeholder="Alternative phone"
+                    />
+                  </div>
+                  <Input
+                    type="email"
+                    value={registerForm.email}
+                    onChange={(value) =>
+                      setRegisterForm((current) => ({ ...current, email: value }))
+                    }
+                    placeholder="Email address"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.postalAddress}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, postalAddress: value }))
+                      }
+                      placeholder="Postal address / P.O. Box"
+                    />
+                    <Input
+                      value={registerForm.postalCodeTown}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, postalCodeTown: value }))
+                      }
+                      placeholder="Postal code & town"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.county}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, county: value }))
+                      }
+                      placeholder="County"
+                    />
+                    <Input
+                      value={registerForm.subCountyTown}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, subCountyTown: value }))
+                      }
+                      placeholder="Sub-county / town"
+                    />
+                  </div>
+                  <Input
+                    value={registerForm.physicalLocation}
+                    onChange={(value) =>
+                      setRegisterForm((current) => ({ ...current, physicalLocation: value }))
+                    }
+                    placeholder="Physical location"
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.kraPin}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, kraPin: value.toUpperCase() }))
+                      }
+                      placeholder="KRA PIN number"
+                    />
+                    <Input
+                      value={registerForm.taxComplianceCertificateNumber}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({
+                          ...current,
+                          taxComplianceCertificateNumber: value,
+                        }))
+                      }
+                      placeholder="Tax compliance certificate No."
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select
+                      value={registerForm.agpoCategory}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({
+                          ...current,
+                          agpoCategory: value as AgpoCategory,
+                        }))
+                      }
+                      options={[
+                        ["not_applicable", "AGPO: Not applicable"],
+                        ["youth", "AGPO: Youth"],
+                        ["women", "AGPO: Women"],
+                        ["pwd", "AGPO: PWD"],
+                      ]}
+                    />
+                    <Input
+                      value={registerForm.regulatoryLicenseNumber}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({
+                          ...current,
+                          regulatoryLicenseNumber: value,
+                        }))
+                      }
+                      placeholder="Regulatory license No."
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.bankName}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, bankName: value }))
+                      }
+                      placeholder="Bank name"
+                    />
+                    <Input
+                      value={registerForm.bankBranch}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, bankBranch: value }))
+                      }
+                      placeholder="Bank branch"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={registerForm.accountName}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, accountName: value }))
+                      }
+                      placeholder="Account name"
+                    />
+                    <Input
+                      value={registerForm.accountNumber}
+                      onChange={(value) =>
+                        setRegisterForm((current) => ({ ...current, accountNumber: value }))
+                      }
+                      placeholder="Account number"
+                    />
+                  </div>
+                  <Input
+                    value={registerForm.mpesaPaybillTill}
+                    onChange={(value) =>
+                      setRegisterForm((current) => ({ ...current, mpesaPaybillTill: value }))
+                    }
+                    placeholder="M-Pesa Paybill / Till (optional)"
+                  />
+
+                  <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+                    {supplierDocumentOptions(registerForm.supplierType).map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={!!registerForm.documentChecklist[key]}
+                          onChange={(event) =>
+                            setRegisterForm((current) => ({
+                              ...current,
+                              documentChecklist: {
+                                ...current.documentChecklist,
+                                [key]: event.target.checked,
+                              },
+                            }))
+                          }
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      runAction(async () => {
+                        const result = await registerSupplier({
+                          data: registerForm,
+                        });
+                        setRegisterForm(emptyRegisterForm());
+                        toast.success(`Supplier SBC number: ${result.memberId}`);
+                      }, "")
+                    }
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    <Plus className="h-4 w-4" /> Save supplier
+                  </button>
+                </div>
+              </Section>
+            </div>
 
             <Section title="Load supplier inventory">
               <div className="space-y-3 p-5">
@@ -472,7 +814,9 @@ function SuppliersPage() {
                 <div className="grid grid-cols-3 gap-2">
                   <Input
                     value={inventoryForm.unit}
-                    onChange={(value) => setInventoryForm((current) => ({ ...current, unit: value }))}
+                    onChange={(value) =>
+                      setInventoryForm((current) => ({ ...current, unit: value }))
+                    }
                     placeholder="Unit"
                   />
                   <Input
@@ -699,9 +1043,7 @@ function SuppliersPage() {
                       onChange={(value) =>
                         setRequestForm((current) => ({ ...current, commodityName: value }))
                       }
-                      placeholder={
-                        requestForm.kind === "service" ? "Service needed" : "Commodity"
-                      }
+                      placeholder={requestForm.kind === "service" ? "Service needed" : "Commodity"}
                     />
                     <Input
                       type="number"
@@ -828,8 +1170,8 @@ function SuppliersPage() {
                     </div>
                   ) : (
                     <div className="mt-2 text-muted-foreground">
-                      No matching internal stock is currently enough for this request, so the
-                      system should source it from a supplier.
+                      No matching internal stock is currently enough for this request, so the system
+                      should source it from a supplier.
                     </div>
                   )}
                 </div>
@@ -854,7 +1196,14 @@ function SuppliersPage() {
                             </div>
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            Owed {fmtKES(Math.max(0, (supplierDebtById.get(supplier.id) ?? 0) - (supplierPaymentsById.get(supplier.id) ?? 0)))}
+                            Owed{" "}
+                            {fmtKES(
+                              Math.max(
+                                0,
+                                (supplierDebtById.get(supplier.id) ?? 0) -
+                                  (supplierPaymentsById.get(supplier.id) ?? 0),
+                              ),
+                            )}
                           </div>
                         </div>
                       ))
@@ -874,7 +1223,7 @@ function SuppliersPage() {
                   <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                     <tr>
                       <th className="px-5 py-3 text-left">Supplier</th>
-                      <th className="px-5 py-3 text-left">Linked member</th>
+                      <th className="px-5 py-3 text-left">SBC supplier No.</th>
                       <th className="px-5 py-3 text-left">Kind</th>
                       <th className="px-5 py-3 text-left">Contact</th>
                       <th className="px-5 py-3 text-right">Outstanding debt</th>
@@ -882,7 +1231,6 @@ function SuppliersPage() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {suppliers.map((supplier: any) => {
-                      const linkedMember = members.find((member: any) => member.id === supplier.member_id);
                       const outstanding =
                         (supplierDebtById.get(supplier.id) ?? 0) -
                         (supplierPaymentsById.get(supplier.id) ?? 0);
@@ -890,9 +1238,7 @@ function SuppliersPage() {
                         <tr key={supplier.id}>
                           <td className="px-5 py-3 font-medium">{supplier.name}</td>
                           <td className="px-5 py-3 text-xs text-muted-foreground">
-                            {linkedMember
-                              ? `${linkedMember.id} - ${linkedMember.name}`
-                              : supplier.member_id || "Not linked"}
+                            {supplier.member_id || "Pending"}
                           </td>
                           <td className="px-5 py-3 capitalize">{supplier.kind}</td>
                           <td className="px-5 py-3 text-xs text-muted-foreground">
@@ -996,19 +1342,22 @@ function SuppliersPage() {
                                 ) : null}
                                 <button
                                   onClick={() =>
-                                    runAction(async () => {
-                                      await markFulfilled({
-                                        data: {
-                                          requestId: request.id,
-                                          verificationCode:
-                                            request.kind === "fuel"
-                                              ? verificationValue
-                                              : undefined,
-                                        },
-                                      });
-                                    }, request.kind === "fuel"
-                                      ? "Fuel delivery confirmed."
-                                      : "Supplier request fulfilled.")
+                                    runAction(
+                                      async () => {
+                                        await markFulfilled({
+                                          data: {
+                                            requestId: request.id,
+                                            verificationCode:
+                                              request.kind === "fuel"
+                                                ? verificationValue
+                                                : undefined,
+                                          },
+                                        });
+                                      },
+                                      request.kind === "fuel"
+                                        ? "Fuel delivery confirmed."
+                                        : "Supplier request fulfilled.",
+                                    )
                                   }
                                   className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90"
                                 >
@@ -1103,7 +1452,9 @@ function SupplierInventoryForm({
       <div className="font-medium">Add inventory line</div>
       <Select
         value={form.itemKind}
-        onChange={(value) => setForm((current) => ({ ...current, itemKind: value as SupplierKind }))}
+        onChange={(value) =>
+          setForm((current) => ({ ...current, itemKind: value as SupplierKind }))
+        }
         options={[
           ["stock", "Stock"],
           ["fuel", "Fuel"],
@@ -1205,6 +1556,28 @@ function kindLabel(value: string) {
   if (value === "fuel") return "Fuel";
   if (value === "service") return "Service";
   return "Stock";
+}
+
+function supplierDocumentOptions(
+  supplierType: SupplierType,
+): Array<[keyof typeof emptySupplierDocuments, string]> {
+  const shared: Array<[keyof typeof emptySupplierDocuments, string]> = [
+    ["kraPinCertificate", "Valid KRA PIN certificate"],
+    ["taxComplianceCertificate", "Valid tax compliance certificate"],
+  ];
+  if (supplierType === "company") {
+    return [
+      ["businessRegistrationCertificate", "Certificate of incorporation / registration"],
+      ...shared,
+      ["cr12", "CR12 form"],
+      ["agpoCertificate", "AGPO certificate, if applicable"],
+    ];
+  }
+  return [
+    ["nationalId", "Copy of national ID / passport"],
+    ...shared,
+    ["agpoCertificate", "AGPO certificate, if applicable"],
+  ];
 }
 
 function summarizeRequest(request: any) {

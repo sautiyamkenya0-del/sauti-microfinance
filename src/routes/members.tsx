@@ -8,6 +8,7 @@ import {
   formatMembershipNumber,
   isInvestorCategory,
   isInvestorOnlyCategory,
+  isMemberCategory,
   memberCategoryLabel,
   nextMembershipNumber,
   normalizeMembershipNumber,
@@ -129,7 +130,10 @@ function MembersPage() {
     currentUser.role === "manager" ||
     currentUser.role === "director";
   const memberRegistry = useMemo(
-    () => members.filter((member) => !isInvestorOnlyCategory(member.category)),
+    () =>
+      members.filter(
+        (member) => !isInvestorOnlyCategory(member.category) && isMemberCategory(member.category),
+      ),
     [members],
   );
 
