@@ -70,9 +70,22 @@ function SupplierPortalPage() {
     setBusy(true);
     try {
       const next = await loadWorkspace();
+      const suppliers = ((next as any).suppliers ?? []) as any[];
       setWorkspace(next);
       if ((next as any).mode === "supplier") {
         setSelectedSupplierId((next as any).signedSupplierId ?? "");
+      } else {
+        const requestedSupplierId = new URLSearchParams(window.location.search).get("supplierId");
+        setSelectedSupplierId((current) => {
+          if (current && suppliers.some((supplier) => supplier.id === current)) return current;
+          if (
+            requestedSupplierId &&
+            suppliers.some((supplier) => supplier.id === requestedSupplierId)
+          ) {
+            return requestedSupplierId;
+          }
+          return suppliers[0]?.id ?? "";
+        });
       }
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to load supplier portal.");
@@ -190,6 +203,10 @@ function SupplierPortalPage() {
                   onChange={(value) => {
                     setSelectedSupplierId(value);
                     setTab("overview");
+                    const nextUrl = new URL(window.location.href);
+                    if (value) nextUrl.searchParams.set("supplierId", value);
+                    else nextUrl.searchParams.delete("supplierId");
+                    window.history.replaceState(null, "", nextUrl.toString());
                   }}
                   options={
                     allSuppliers.length

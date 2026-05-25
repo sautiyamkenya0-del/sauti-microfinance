@@ -8784,16 +8784,15 @@ export const resetMemberCarryoverRecord = createServerFn({ method: "POST" })
     if (memberError) throw new Error(memberError.message);
     if (!member) throw new Error("Member not found.");
 
-    const { data: profile, error: profileError } = await runtimeDb
-      .from("member_carryover_profiles")
-      .select("collection_breakdown")
-      .eq("member_id", data.memberId)
-      .maybeSingle();
-    if (profileError) throw new Error(profileError.message);
-
-    const snapshot = readPreCarryoverLiveState(profile?.collection_breakdown);
-    const restored =
-      snapshot ?? (await rebuildMemberLiveStateFromTransactionLedger(runtimeDb, data.memberId));
+    const restored = {
+      source: "cleared",
+      savingsBalance: 0,
+      shareUnits: 0,
+      membershipFeePaid: false,
+      cardFeePaid: false,
+      stickerFeePaid: false,
+      firstUpfrontPaid: false,
+    };
 
     const { error: updateMemberError } = await runtimeDb
       .from("members")

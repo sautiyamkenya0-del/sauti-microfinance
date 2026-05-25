@@ -1,18 +1,20 @@
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import { createStaffMemoRecord } from "@/lib/app-data.functions";
+import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { useStore, fmtKES, loanSummary, SBC_FEES } from "@/lib/store";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Bell, Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
 
-export function FollowUps() {
-  const { loans, members, transactions, followups, addFollowup, currentUser } = useStore();
+export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarryoverLoan[] }) {
+  const { loans, members, transactions, followups, addFollowup, currentUser, policySettings } =
+    useStore();
   const sendNotice = useServerFn(createStaffMemoRecord);
 
   const items = useMemo(() => {
-    return loans
-      .filter((l) => l.status === "active")
+    const liveItems = loans
+      .filter((l) => l.status === "active" || l.status === "defaulted")
       .map((l) => {
         const summary = loanSummary(l);
         const days = summary.termDays;
@@ -31,6 +33,7 @@ export function FollowUps() {
         const penalties = defaulted * (SBC_FEES.penaltyDailyPct / 100);
         return {
           loan: l,
+          loanKind: "live" as const,
           member: members.find((m) => m.id === l.memberId)!,
           dailyInstallment,
           defaulted,
@@ -40,9 +43,29 @@ export function FollowUps() {
           daysMissed,
         };
       })
-      .filter((x) => x.defaulted > 0)
-      .sort((a, b) => b.daysMissed - a.daysMissed);
-  }, [loans, members, transactions]);
+      .filter((x) => x.defaulted > 0);
+    const carryoverItems = carryoverLoans
+      .filter((loan) => loan.status === "active" || loan.status === "defaulted")
+      .map((loan) => {
+        const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+        const dailyInstallment = summary.dailyInclusive;
+        const defaulted = summary.arrears;
+        const daysMissed = dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0;
+        return {
+          loan: { ...loan, purpose: "carryover" },
+          loanKind: "carryover" as const,
+          member: members.find((m) => m.id === loan.memberId)!,
+          dailyInstallment,
+          defaulted,
+          outstanding: summary.balance,
+          totalDue: summary.totalOwedNow,
+          penalties: summary.estimatedPenaltyNow,
+          daysMissed,
+        };
+      })
+      .filter((x) => x.member && (x.defaulted > 0 || x.outstanding > 0));
+    return [...liveItems, ...carryoverItems].sort((a, b) => b.daysMissed - a.daysMissed);
+  }, [carryoverLoans, loans, members, policySettings, transactions]);
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);
   const totalDue = items.reduce((s, i) => s + i.totalDue, 0);
@@ -86,6 +109,7 @@ export function FollowUps() {
           {items.map(
             ({
               loan,
+              loanKind,
               member,
               dailyInstallment,
               defaulted,
@@ -105,6 +129,7 @@ export function FollowUps() {
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Member: {member?.id} · Loan {loan.id} · {loan.purpose ?? "—"}
+                        {loanKind === "carryover" ? " · carryover" : ""}
                       </div>
                       <div className="text-xs">
                         <span className="font-medium">Phone:</span> {member?.phone}

@@ -316,6 +316,22 @@ function PolicyCenterPage() {
   const currentWaterfall =
     waterfallDraft.find((rule) => rule.scenario === waterfallScenario) ??
     policySettings.waterfallRules.find((rule) => rule.scenario === waterfallScenario);
+  const selectedClientInflow = selectedClientTransactions
+    .filter((transaction) =>
+      [
+        "deposit",
+        "loan_repayment",
+        "share_purchase",
+        "fee_payment",
+        "investor_contribution",
+      ].includes(transaction.type),
+    )
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientOutflow = selectedClientTransactions
+    .filter((transaction) => ["withdrawal", "loan_disbursement"].includes(transaction.type))
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientNet = selectedClientInflow - selectedClientOutflow;
+  const lifetimeNetAvailableForCarryover = Math.max(0, selectedClientNet);
 
   const clientLoansSummary = selectedClientLoans.map((loan) => ({
     loan,
@@ -343,11 +359,30 @@ function PolicyCenterPage() {
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
-  const guidedDefaultedLoanSummaries = guidedDefaultedLoans.map((loan) => ({
+  const guidedOpenPaymentSeed = Math.max(
+    0,
+    lifetimeNetAvailableForCarryover -
+      guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalExpectedCollected, 0),
+  );
+  const derivedGuidedDefaultedLoans = applyDerivedCarryoverPayments(
+    guidedDefaultedLoans,
+    guidedOpenPaymentSeed,
+    policySettings,
+  );
+  const derivedGuidedActiveLoans = applyDerivedCarryoverPayments(
+    guidedActiveLoans,
+    Math.max(
+      0,
+      guidedOpenPaymentSeed -
+        derivedGuidedDefaultedLoans.reduce((sum, loan) => sum + loan.paidToDate, 0),
+    ),
+    policySettings,
+  );
+  const guidedDefaultedLoanSummaries = derivedGuidedDefaultedLoans.map((loan) => ({
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
-  const guidedActiveLoanSummaries = guidedActiveLoans.map((loan) => ({
+  const guidedActiveLoanSummaries = derivedGuidedActiveLoans.map((loan) => ({
     loan,
     summary: summarizeLegacyCarryoverLoan(loan, policySettings),
   }));
@@ -385,11 +420,7 @@ function PolicyCenterPage() {
     carryoverProfile.investmentBalance +
     carryoverBreakdown.purposePoolBalance +
     carryoverProfile.otherCollectedTotal;
-  const derivedCarryoverTotalCollected = resolveRecordedCarryoverTotal(
-    carryoverProfile,
-    carryoverBreakdown,
-    derivedCarryoverAllocatedTotal,
-  );
+  const derivedCarryoverTotalCollected = lifetimeNetAvailableForCarryover;
   const carryoverUndistributedBalance =
     derivedCarryoverTotalCollected - derivedCarryoverAllocatedTotal;
   const carryoverCompletedCycles =
@@ -398,7 +429,12 @@ function PolicyCenterPage() {
       : carryoverProfile.completedLoanCycles;
 
   useEffect(() => {
-    if (carryoverMemberMode !== "loan" || completedLoanComplianceTotal <= 0) return;
+    if (
+      carryoverMemberMode !== "loan" ||
+      completedLoanComplianceTotal <= 0 ||
+      guidedOpenLoanSummaries.length > 0
+    )
+      return;
     setCarryoverProfile((current) => {
       const breakdown = readCarryoverBreakdown(current.collectionBreakdown);
       const nextSavingsBalance = Math.max(
@@ -433,7 +469,31 @@ function PolicyCenterPage() {
     guidedComplianceAllocation.purposePoolAmount,
     guidedComplianceAllocation.savingsAmount,
     guidedComplianceAllocation.shareUnits,
+    guidedOpenLoanSummaries.length,
   ]);
+
+  useEffect(() => {
+    if (carryoverMemberMode !== "loan" || guidedOpenLoanSummaries.length === 0) return;
+    setCarryoverProfile((current) => {
+      const breakdown = readCarryoverBreakdown(current.collectionBreakdown);
+      if (
+        current.savingsBalance === 0 &&
+        current.shareUnits === 0 &&
+        breakdown.purposePoolBalance === 0
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        savingsBalance: 0,
+        shareUnits: 0,
+        collectionBreakdown: {
+          ...breakdown,
+          purposePoolBalance: 0,
+        },
+      };
+    });
+  }, [carryoverMemberMode, guidedOpenLoanSummaries.length]);
 
   const totalBorrowed = clientLoansSummary.reduce(
     (sum, row) => sum + (row.loan.approvedAmount ?? row.loan.principal),
@@ -470,24 +530,9 @@ function PolicyCenterPage() {
       ].includes(transaction.type),
     )
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const selectedClientInflow = selectedClientTransactions
-    .filter((transaction) =>
-      [
-        "deposit",
-        "loan_repayment",
-        "share_purchase",
-        "fee_payment",
-        "investor_contribution",
-      ].includes(transaction.type),
-    )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const selectedClientOutflow = selectedClientTransactions
-    .filter((transaction) => ["withdrawal", "loan_disbursement"].includes(transaction.type))
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const selectedClientNet = selectedClientInflow - selectedClientOutflow;
   const combinedCollections = totalCollections + derivedCarryoverTotalCollected;
   const combinedOutstandingBalance = totalBalance + carryoverBalance;
-  const clientLifetimeNet = selectedClientNet + derivedCarryoverTotalCollected;
+  const clientLifetimeNet = selectedClientNet;
   const selectedClientTransactionTotals = [
     {
       label: "Deposits",
@@ -693,14 +738,14 @@ function PolicyCenterPage() {
         finished: true,
       };
     });
-    const nextDefaultedLoans = guidedDefaultedLoans.map((loan, index) => ({
+    const nextDefaultedLoans = derivedGuidedDefaultedLoans.map((loan, index) => ({
       ...loan,
       memberId: selectedClient.id,
       label: loan.label || `Defaulted loan ${index + 1}`,
       status: "defaulted" as const,
       finished: false,
     }));
-    const nextActiveLoans = guidedActiveLoans.map((loan, index) => ({
+    const nextActiveLoans = derivedGuidedActiveLoans.map((loan, index) => ({
       ...loan,
       memberId: selectedClient.id,
       label: loan.label || `Active loan ${index + 1}`,
@@ -738,11 +783,7 @@ function PolicyCenterPage() {
         await deleteCarryoverLoan({ data: { id: loanId } });
       }
 
-      const recordedTotalDeposits = resolveRecordedCarryoverTotal(
-        carryoverProfile,
-        carryoverBreakdown,
-        derivedCarryoverAllocatedTotal,
-      );
+      const recordedTotalDeposits = lifetimeNetAvailableForCarryover;
 
       const nextBreakdown = {
         ...readCarryoverBreakdown(carryoverProfile.collectionBreakdown),
@@ -788,21 +829,17 @@ function PolicyCenterPage() {
   async function resetSelectedClientCarryover() {
     if (!selectedClient || carryoverResetting) return;
     const confirmed = window.confirm(
-      `Reset all carryover balances and loans for ${selectedClient.name}? The live member balances will be restored from the pre-carryover snapshot when available, otherwise from this client's transaction history.`,
+      `Reset all carryover balances, loans, locked savings, shares, and carryover fee flags for ${selectedClient.name}?`,
     );
     if (!confirmed) return;
 
     setCarryoverResetting(true);
     try {
-      const result = await resetCarryover({ data: { memberId: selectedClient.id } });
+      await resetCarryover({ data: { memberId: selectedClient.id } });
       await reloadAppData();
       await refreshCarryoverDetails(selectedClient.id);
       await refreshAllCarryoverLoans();
-      toast.success(
-        result.restoredFrom === "snapshot"
-          ? "Carryover reset and pre-carryover balances restored."
-          : "Carryover reset and balances rebuilt from transaction history.",
-      );
+      toast.success("Carryover reset and locked balances cleared.");
     } catch (error: any) {
       toast.error(error?.message ?? "Carryover reset failed.");
     } finally {
@@ -2152,18 +2189,9 @@ function PolicyCenterPage() {
                         </div>
                       )}
                     </div>
-                    <NumberField
-                      label="Total deposits ever recorded"
-                      value={derivedCarryoverTotalCollected}
-                      onChange={(value) =>
-                        setCarryoverProfile((current) => ({
-                          ...current,
-                          collectionBreakdown: {
-                            ...readCarryoverBreakdown(current.collectionBreakdown),
-                            totalDepositsRecorded: value,
-                          },
-                        }))
-                      }
+                    <MetricCard
+                      label="Lifetime net used"
+                      value={fmtKES(derivedCarryoverTotalCollected)}
                     />
                     <NumberField
                       label="Savings balance"
@@ -2600,13 +2628,6 @@ function PolicyCenterPage() {
                         />
                       </Field>
                       <NumberField
-                        label="Amount already paid"
-                        value={carryoverLoanDraft.paidToDate}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({ ...current, paidToDate: value }))
-                        }
-                      />
-                      <NumberField
                         label="Penalty waived"
                         value={carryoverLoanDraft.penaltyWaivedAmount}
                         onChange={(value) =>
@@ -2699,9 +2720,8 @@ function PolicyCenterPage() {
                     </div>
                     <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
                       Start with principal, term, daily compliance contribution, start date, and
-                      amount already paid. Leave the override rate at 0 to use the current policy
-                      rate for that term. The balance, penalties, due date, and completion status
-                      are calculated from the saved carryover loan record.
+                      status. Leave the override rate at 0 to use the current policy rate for that
+                      term. Paid-to-date is derived from the client's lifetime net.
                     </div>
                     <div className="space-y-4 border-t border-border p-5">
                       {carryoverLoading && (
@@ -3244,6 +3264,28 @@ function resizeGuidedCarryoverLoans(
   });
 }
 
+function applyDerivedCarryoverPayments(
+  loans: LegacyCarryoverLoan[],
+  availableCollected: number,
+  policySettings: Parameters<typeof summarizeLegacyCarryoverLoan>[1],
+) {
+  let remaining = Math.max(0, Number(availableCollected) || 0);
+  return loans.map((loan) => {
+    const summary = summarizeLegacyCarryoverLoan({ ...loan, paidToDate: 0 }, policySettings);
+    const paidToDate =
+      loan.status === "closed" || loan.finished
+        ? summary.totalRepayment
+        : Math.min(remaining, summary.totalRepayment);
+    if (loan.status !== "closed" && !loan.finished) {
+      remaining = Math.max(0, remaining - paidToDate);
+    }
+    return {
+      ...loan,
+      paidToDate,
+    };
+  });
+}
+
 function allocateComplianceContribution(
   amount: number,
   savingsThreshold: number,
@@ -3671,9 +3713,9 @@ function GuidedCarryoverLoanCard({
               />
             </Field>
             <NumberField
-              label="Amount already paid"
+              label="Paid from lifetime net"
               value={loan.paidToDate}
-              onChange={(value) => onChange({ ...loan, paidToDate: value })}
+              readOnly
             />
             <NumberField
               label="Penalty waived"
@@ -3834,19 +3876,22 @@ function NumberField({
   value,
   onChange,
   disabled = false,
+  readOnly = false,
 }: {
   label: string;
   value: number;
-  onChange: (value: number) => void;
+  onChange?: (value: number) => void;
   disabled?: boolean;
+  readOnly?: boolean;
 }) {
   return (
     <Field label={label}>
       <input
         type="number"
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => onChange?.(Number(event.target.value))}
         disabled={disabled}
+        readOnly={readOnly}
         className="input"
       />
     </Field>

@@ -2,6 +2,7 @@ import {
   DEFAULT_POLICY_SETTINGS,
   normalizePolicyTermDays,
   policyInterestRateForTerm,
+  transactionFeeForAmount,
   type PolicySettings,
 } from "@/lib/policy-settings";
 
@@ -109,6 +110,32 @@ function moneyValue(value: unknown) {
   return Number.isFinite(next) ? Math.max(0, next) : 0;
 }
 
+function roundUpKES(amount: number, step: number) {
+  if (amount <= 0) return 0;
+  const normalizedStep = Number.isFinite(step) && step > 0 ? step : 1;
+  return Math.ceil(amount / normalizedStep) * normalizedStep;
+}
+
+function termPeriodsFromDays(termDays: number) {
+  return Math.max(1, Math.ceil(normalizeTermDays(termDays) / 30));
+}
+
+function defaultLoanServiceFees(principal: number, settings: PolicySettings) {
+  const normalizedPrincipal = Math.max(0, Number(principal ?? 0));
+  const processingFeeAmount = normalizedPrincipal * (settings.percentages.processingPct / 100);
+  const insuranceFeeAmount = normalizedPrincipal * (settings.percentages.insurancePct / 100);
+  const configuredTransactionFee = transactionFeeForAmount(normalizedPrincipal, settings);
+  const transactionFeeAmount =
+    configuredTransactionFee > 0
+      ? configuredTransactionFee
+      : normalizedPrincipal * (settings.percentages.transactionCostPct / 100);
+  return {
+    processingFeeAmount,
+    insuranceFeeAmount,
+    transactionFeeAmount,
+  };
+}
+
 export function normalizeLegacyCarryoverLoanFeeBreakdown(
   value?: LegacyCarryoverLoanFeeBreakdown | Record<string, unknown> | null,
   loanCycleNumber: number = 1,
@@ -174,17 +201,27 @@ export function summarizeLegacyCarryoverLoan(
     (feeBreakdown.processingFeeAmount ?? 0) +
     (feeBreakdown.insuranceFeeAmount ?? 0) +
     (feeBreakdown.transactionFeeAmount ?? 0);
+  const defaultServiceFees = defaultLoanServiceFees(principal, settings);
+  const financedLoanServiceFees =
+    loanServiceFees > 0
+      ? loanServiceFees
+      : defaultServiceFees.processingFeeAmount +
+        defaultServiceFees.insuranceFeeAmount +
+        defaultServiceFees.transactionFeeAmount;
   const subscriptionTotalBeforeWaiver =
     (feeBreakdown.monthlySubscriptionAmount ?? 0) * (feeBreakdown.subscriptionMonths ?? 0);
   const subscriptionDeducted = feeBreakdown.subscriptionWaived ? 0 : subscriptionTotalBeforeWaiver;
   const subscriptionWaivedAmount = feeBreakdown.subscriptionWaived
     ? subscriptionTotalBeforeWaiver
     : 0;
-  const feeChargesTotal = oneTimeFees + loanServiceFees + subscriptionDeducted;
-  const interest = principal * (ratePct / 100);
-  const totalRepayment = principal + interest + feeChargesTotal;
+  const feeChargesTotal = oneTimeFees + financedLoanServiceFees + subscriptionDeducted;
+  const financedPrincipal = principal + feeChargesTotal;
+  const periods = termPeriodsFromDays(termDays);
+  const interest = financedPrincipal * (ratePct / 100) * periods;
+  const totalRepayment = financedPrincipal + interest;
   const dailyLoanInstallment = termDays > 0 ? totalRepayment / termDays : totalRepayment;
-  const dailyInclusive = dailyLoanInstallment + dailySavingsAmount;
+  const rawDailyInclusive = dailyLoanInstallment + dailySavingsAmount;
+  const dailyInclusive = roundUpKES(rawDailyInclusive, settings.percentages.roundOffStep);
   const totalSavingsAccrued = dailySavingsAmount * termDays;
   const totalExpectedCollected = dailyInclusive * termDays;
   const dueDate = toDateOnly(loan.dueDate) || addDays(loan.startDate, termDays);
@@ -205,16 +242,20 @@ export function summarizeLegacyCarryoverLoan(
   return {
     termDays,
     ratePct,
+    periods,
+    financedPrincipal,
     interest,
     feeBreakdown,
+    defaultServiceFees,
     oneTimeFees,
-    loanServiceFees,
+    loanServiceFees: financedLoanServiceFees,
     subscriptionDeducted,
     subscriptionWaivedAmount,
     feeChargesTotal,
     totalRepayment,
     dailyLoanInstallment,
     dailyInclusive,
+    roundOff: Math.max(0, dailyInclusive - rawDailyInclusive),
     totalSavingsAccrued,
     totalExpectedCollected,
     scheduledCollectedToDate,

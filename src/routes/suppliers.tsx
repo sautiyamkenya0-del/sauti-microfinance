@@ -616,12 +616,13 @@ function SuppliersPage() {
                     <th className="px-5 py-3 text-left">Kind</th>
                     <th className="px-5 py-3 text-left">Contact</th>
                     <th className="px-5 py-3 text-right">Outstanding</th>
+                    <th className="px-5 py-3 text-right">Portal</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {suppliers.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                      <td colSpan={6} className="px-5 py-8 text-center text-muted-foreground">
                         No suppliers registered yet.
                       </td>
                     </tr>
@@ -653,6 +654,14 @@ function SuppliersPage() {
                         </td>
                         <td className="px-5 py-3 text-right font-semibold">
                           {fmtKES(Math.max(0, outstanding))}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <a
+                            href={`/supplier-portal?supplierId=${encodeURIComponent(supplier.id)}`}
+                            className="inline-flex rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                          >
+                            Open portal
+                          </a>
                         </td>
                       </tr>
                     );

@@ -252,7 +252,7 @@ function LoansHub() {
 
         {tab === "appraisal" && <AppraisalForm memberId={selectedMemberId || undefined} />}
         {tab === "review" && <PendingReview />}
-        {tab === "followups" && <FollowUps />}
+        {tab === "followups" && <FollowUps carryoverLoans={carryoverLoans} />}
         {tab === "visits" && <FieldVisits />}
         {tab === "simulator" && <Simulator />}
 
