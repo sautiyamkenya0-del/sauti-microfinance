@@ -2552,6 +2552,22 @@ function PolicyCenterPage() {
                         }
                       />
                       <NumberField
+                        label="Daily penalty amount"
+                        value={carryoverLoanDraftSummary.dailyPenaltyAmount}
+                        onChange={(value) =>
+                          setCarryoverLoanDraft((current) => ({
+                            ...current,
+                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                              {
+                                ...current.feeBreakdown,
+                                dailyPenaltyAmount: Math.max(0, value),
+                              },
+                              current.loanCycleNumber,
+                            ),
+                          }))
+                        }
+                      />
+                      <NumberField
                         label="Daily compliance contribution amount"
                         value={carryoverLoanDraft.dailySavingsAmount}
                         onChange={(value) =>
@@ -3766,6 +3782,11 @@ function GuidedCarryoverLoanCard({
           label="Daily penalty missed days"
           value={summary.dailyPenaltyDays}
           onChange={(value) => updateFee("dailyPenaltyDays", Math.max(0, Math.floor(value)))}
+        />
+        <NumberField
+          label="Daily penalty amount"
+          value={summary.dailyPenaltyAmount}
+          onChange={(value) => updateFee("dailyPenaltyAmount", Math.max(0, value))}
         />
         <NumberField
           label="Daily compliance contribution"

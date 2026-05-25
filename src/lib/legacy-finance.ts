@@ -46,6 +46,7 @@ export type LegacyCarryoverLoanFeeBreakdown = {
   subscriptionMonths?: number;
   subscriptionWaived?: boolean;
   dailyPenaltyDays?: number;
+  dailyPenaltyAmount?: number;
   dueDatePenaltyDays?: number;
 };
 
@@ -168,6 +169,7 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
     subscriptionMonths: Math.max(0, Math.floor(Number(source.subscriptionMonths ?? 0))),
     subscriptionWaived: source.subscriptionWaived === true,
     dailyPenaltyDays: wholeDaysValue(source.dailyPenaltyDays),
+    dailyPenaltyAmount: moneyValue(source.dailyPenaltyAmount),
     dueDatePenaltyDays: wholeDaysValue(source.dueDatePenaltyDays),
   };
 }
@@ -247,9 +249,11 @@ export function summarizeLegacyCarryoverLoan(
   const arrears = Math.max(0, scheduledCollectedToDate - paidToDate);
   const balance = Math.max(0, totalExpectedCollected - paidToDate);
   const dailyPenaltyDays = feeBreakdown.dailyPenaltyDays ?? 0;
+  const dailyPenaltyAmount = feeBreakdown.dailyPenaltyAmount ?? 0;
   const dueDatePenaltyDays = feeBreakdown.dueDatePenaltyDays ?? 0;
-  const arrearsPenalty =
+  const calculatedArrearsPenalty =
     dailyInclusive * dailyPenaltyDays * (settings.percentages.penaltyDailyPct / 100);
+  const arrearsPenalty = dailyPenaltyAmount > 0 ? dailyPenaltyAmount : calculatedArrearsPenalty;
   const automaticDaysPastDue = Math.max(0, diffDays(dueDate, asOfDate));
   const daysPastDue =
     loan.status === "active"
@@ -295,8 +299,10 @@ export function summarizeLegacyCarryoverLoan(
     elapsedDays,
     daysPastDue,
     dailyPenaltyDays,
+    dailyPenaltyAmount,
     dueDatePenaltyDays,
     dailyPenaltyBase: dailyInclusive,
+    calculatedArrearsPenalty,
     dueDatePenaltyBase,
     arrearsPenalty,
     overduePenalty,
