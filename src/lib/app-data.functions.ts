@@ -290,7 +290,7 @@ async function auditAction(args: {
   summary: string;
   details?: Record<string, unknown>;
 }) {
-  await recordAudit({
+  void recordAudit({
     actor_id: args.actor.id,
     actor_name: args.actor.name,
     actor_role: args.actor.role ?? null,
@@ -299,6 +299,8 @@ async function auditAction(args: {
     target_id: args.targetId ?? null,
     summary: args.summary,
     details: args.details,
+  }).catch((error) => {
+    console.error("Failed to record audit entry", error);
   });
 }
 
@@ -3739,9 +3741,9 @@ async function latestTableChangeMarker(
 ) {
   const selectColumns =
     column === "updated_at" ? `${idColumn}, updated_at, created_at` : `${idColumn}, created_at`;
-  const { data, error, count } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from(table)
-    .select(selectColumns, { count: "exact" })
+    .select(selectColumns)
     .order(column, { ascending: false })
     .limit(1);
 
@@ -3753,19 +3755,20 @@ async function latestTableChangeMarker(
     if (isMissingColumnError(error, "created_at")) {
       const fallback = await supabaseAdmin
         .from(table)
-        .select(idColumn, { count: "exact" })
+        .select(idColumn)
+        .order(idColumn, { ascending: false })
         .limit(1);
       if (fallback.error) {
         if (isMissingRelationError(fallback.error)) return `${table}:missing`;
         throw new Error(fallback.error.message);
       }
-      return `${table}:${fallback.count ?? 0}:${fallback.data?.[0]?.[idColumn] ?? ""}`;
+      return `${table}:${fallback.data?.[0]?.[idColumn] ?? ""}`;
     }
     throw new Error(error.message);
   }
 
   const row = data?.[0] ?? {};
-  return `${table}:${count ?? 0}:${row[idColumn] ?? ""}:${row.updated_at ?? row.created_at ?? ""}`;
+  return `${table}:${row[idColumn] ?? ""}:${row.updated_at ?? row.created_at ?? ""}`;
 }
 
 async function getAppDataVersion(supabaseAdmin: any) {

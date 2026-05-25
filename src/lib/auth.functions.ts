@@ -57,6 +57,12 @@ function clearAuthFailures(key: string) {
   authFailures.delete(key);
 }
 
+function recordAuditInBackground(entry: Parameters<typeof recordAudit>[0]) {
+  void recordAudit(entry).catch((error) => {
+    console.error("Failed to record auth audit entry", error);
+  });
+}
+
 export const signInStaff = createServerFn({ method: "POST" })
   .inputValidator((data: { email: string; password: string }) => ({
     email: String(data?.email ?? "")
@@ -81,7 +87,7 @@ export const signInStaff = createServerFn({ method: "POST" })
 
     const passwordCheck = verifyPassword(data.password, staffRow?.temp_password);
     if (!staffRow || !passwordCheck.ok) {
-      await recordAudit({
+      recordAuditInBackground({
         actor_id: staffRow?.id ?? null,
         actor_name: staffRow?.name ?? null,
         actor_role: staffRow?.role ?? "staff",
@@ -108,7 +114,7 @@ export const signInStaff = createServerFn({ method: "POST" })
 
     await signInStaffSession(staffRow.id);
     clearAuthFailures(throttleKey);
-    await recordAudit({
+    recordAuditInBackground({
       actor_id: staffRow.id,
       actor_name: staffRow.name,
       actor_role: staffRow.role,
@@ -162,7 +168,7 @@ export const signInMember = createServerFn({ method: "POST" })
     const suppliedPhone = toComparableKenyanPhone(data.phone);
     const memberPhone = toComparableKenyanPhone(memberRow?.phone ?? "");
     if (!memberRow || !suppliedPhone || memberPhone !== suppliedPhone) {
-      await recordAudit({
+      recordAuditInBackground({
         actor_id: memberRow?.id ?? null,
         actor_name: memberRow?.name ?? null,
         actor_role: "member",
@@ -189,7 +195,7 @@ export const signInMember = createServerFn({ method: "POST" })
     if (supplierError && supplierError.code !== "42P01") {
       throw new Error(supplierError.message);
     }
-    await recordAudit({
+    recordAuditInBackground({
       actor_id: memberRow.id,
       actor_name: memberRow.name,
       actor_role: "member",

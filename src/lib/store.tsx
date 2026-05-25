@@ -671,12 +671,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  async function refreshAfterAuth() {
-    const refresh = refreshFromDatabase({ force: true });
-    const timeout = new Promise<null>((resolve) => {
-      window.setTimeout(() => resolve(null), 5000);
+  function refreshAfterMutation(fallbackMessage = "Saved, but background sync failed.") {
+    const task = refreshFromDatabase();
+    void task.catch((error: any) => {
+      toast.error(error?.message ?? fallbackMessage);
     });
-    return Promise.race([refresh, timeout]);
+  }
+
+  async function refreshAfterAuth() {
+    return refreshFromDatabase({ force: true });
   }
 
   useEffect(() => {
@@ -704,7 +707,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const syncIfVisible = () => {
       if (!document.hidden) refreshInBackground("Auto-sync failed.");
     };
-    const interval = window.setInterval(syncIfVisible, authMode === "staff" ? 15000 : 30000);
+    const interval = window.setInterval(syncIfVisible, authMode === "staff" ? 60000 : 120000);
     window.addEventListener("focus", syncIfVisible);
     document.addEventListener("visibilitychange", syncIfVisible);
     window.addEventListener("sauti:data-changed", syncIfVisible);
@@ -796,7 +799,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             investorNotes: (m as any).investorNotes,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Member was saved, but background sync failed.");
         return result.id;
       },
       updateMember: async (m) => {
@@ -828,7 +831,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             category: m.category,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Member was updated, but background sync failed.");
         return result.id;
       },
       addLoan: async (l) => {
@@ -860,7 +863,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             supplierPayload: l.supplierPayload,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Loan was saved, but background sync failed.");
         return result.id;
       },
       approveLoan: async (loanId, approvedAmount, by, note) => {
@@ -873,7 +876,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             note,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Loan was approved, but background sync failed.");
       },
       rejectLoan: async (loanId, by, note) => {
         await reviewLoan({
@@ -884,7 +887,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             note,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Loan was rejected, but background sync failed.");
       },
       recordTransaction: async (t) => {
         const result = await createTransaction({
@@ -902,7 +905,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             allowOverdraw: t.allowOverdraw,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Transaction was saved, but background sync failed.");
         return result.id;
       },
       addPetty: async (p) => {
@@ -923,12 +926,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             openingBalance: p.openingBalance,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Petty cash entry was saved, but background sync failed.");
         return result.id;
       },
       addAppraisal: async (a) => {
         const result = await createAppraisal({ data: a as any });
-        await refreshFromDatabase();
+        refreshAfterMutation("Appraisal was saved, but background sync failed.");
         return result.id;
       },
       addInvestor: async (i) => {
@@ -944,7 +947,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             byStaff: currentUser.id,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Investor was saved, but background sync failed.");
         return result.id;
       },
       addFieldVisit: async (visit) => {
@@ -1012,24 +1015,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setIsAuthenticated(true);
         setAuthMode("member");
         setPortalMemberIdState(result.member.id);
-        const data = await refreshAfterAuth();
-        if (!data) {
-          refreshInBackground("Signed in, but the first data sync is still running.", true);
-        }
+        const sync = refreshAfterAuth();
+        void sync.catch((error: any) => {
+          toast.error(error?.message ?? "Signed in, but the first data sync failed.");
+        });
         return {
-          member:
-            data?.members.find((member) => member.id === result.member.id) ??
-            ({
-              id: result.member.id,
-              name: result.member.name,
-              phone: "",
-              joinedAt: new Date().toISOString().slice(0, 10),
-              status: "active",
-              shares: 0,
-              savingsBalance: 0,
-              fees: DEFAULT_FEES,
-              category: "member",
-            } satisfies Member),
+          member: {
+            id: result.member.id,
+            name: result.member.name,
+            phone: "",
+            joinedAt: new Date().toISOString().slice(0, 10),
+            status: "active",
+            shares: 0,
+            savingsBalance: 0,
+            fees: DEFAULT_FEES,
+            category: "member",
+          } satisfies Member,
           portal: result.portal === "supplier" ? "supplier" : "member",
         };
       },
@@ -1046,11 +1047,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setIsAuthenticated(true);
         setAuthMode("staff");
         setCurrentUserState(signedInStaff);
-        const data = await refreshAfterAuth();
-        if (!data) {
-          refreshInBackground("Signed in, but the first data sync is still running.", true);
-        }
-        return data?.staff.find((member) => member.id === result.user.id) ?? signedInStaff;
+        const sync = refreshAfterAuth();
+        void sync.catch((error: any) => {
+          toast.error(error?.message ?? "Signed in, but the first data sync failed.");
+        });
+        return signedInStaff;
       },
       logout: async () => {
         await signOut();
@@ -1079,7 +1080,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             fingerprintEnrolled: s.fingerprintEnrolled,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Staff member was saved, but background sync failed.");
         return result.id;
       },
       updateStaff: async (id, patch) => {
@@ -1104,11 +1105,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             },
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Staff member was updated, but background sync failed.");
       },
       removeStaff: async (id) => {
         await deleteStaff({ data: { id } });
-        await refreshFromDatabase();
+        refreshAfterMutation("Staff member was removed, but background sync failed.");
       },
       markAttendance: async (staffId, status, when = "in") => {
         await saveAttendance({
@@ -1121,7 +1122,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             when,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("Attendance was saved, but background sync failed.");
       },
       memberLoanCount: (memberId: string) =>
         loans.filter((l) => l.memberId === memberId && l.status !== "rejected").length,
@@ -1141,7 +1142,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const result = await settlePenaltyFromPoolServer({
           data: { penaltyId },
         });
-        if (result.ok) await refreshFromDatabase();
+        if (result.ok) refreshAfterMutation("Penalty was settled, but background sync failed.");
         return result.ok;
       },
       resolveMpesaAccount: (account: string) => {
@@ -1160,7 +1161,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             mpesaRef,
           },
         });
-        await refreshFromDatabase();
+        refreshAfterMutation("M-Pesa payment was applied, but background sync failed.");
         return result as MpesaAllocation;
       },
       reloadAppData: async () => {
