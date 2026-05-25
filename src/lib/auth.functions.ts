@@ -27,7 +27,7 @@ export const signInStaff = createServerFn({ method: "POST" })
     email: String(data?.email ?? "")
       .trim()
       .toLowerCase(),
-    password: String(data?.password ?? ""),
+    password: String(data?.password ?? "").trim(),
   }))
   .handler(async ({ data }) => {
     if (!data.email || !data.password) throw new Error("Enter your email and password.");

@@ -4961,7 +4961,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       address: data?.address?.trim() || undefined,
       notes: data?.notes?.trim() || undefined,
       photo: data?.photo || undefined,
-      tempPassword: data?.tempPassword || undefined,
+      tempPassword: data?.tempPassword?.trim() || undefined,
       canMarkAttendance: !!data?.canMarkAttendance,
       fingerprintEnrolled: !!data?.fingerprintEnrolled,
     }),
@@ -5045,7 +5045,8 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const actor = await requireDirectorActor();
     if (!data.id) throw new Error("Staff id is required.");
-    if (data.patch.tempPassword && data.patch.tempPassword.length < 6) {
+    const normalizedTempPassword = data.patch.tempPassword?.trim();
+    if (normalizedTempPassword && normalizedTempPassword.length < 6) {
       throw new Error("Temporary password must be at least 6 characters.");
     }
     if (data.id === actor.id && data.patch.role && data.patch.role !== "director") {
@@ -5063,7 +5064,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
     if (hasPatch("address")) updates.address = patch.address?.trim() || null;
     if (hasPatch("notes")) updates.notes = patch.notes?.trim() || null;
     if (hasPatch("photo")) updates.photo = patch.photo || null;
-    if (patch.tempPassword) updates.temp_password = hashPassword(patch.tempPassword);
+    if (normalizedTempPassword) updates.temp_password = hashPassword(normalizedTempPassword);
     if (hasPatch("canMarkAttendance")) {
       updates.can_mark_attendance = patch.role === "director" ? true : patch.canMarkAttendance;
     }

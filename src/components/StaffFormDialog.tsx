@@ -69,12 +69,13 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
 
   async function submit() {
     const name = [firstName, secondName, thirdName].filter(Boolean).join(" ").trim();
+    const normalizedTempPassword = tempPassword.trim();
     if (!firstName.trim()) return toast.error("First name is required");
     if (!email.trim()) return toast.error("Email is required");
-    if (!editing && tempPassword.length < 6) {
+    if (!editing && normalizedTempPassword.length < 6) {
       return toast.error("Temporary password must be at least 6 characters");
     }
-    if (editing && tempPassword && tempPassword.length < 6) {
+    if (editing && normalizedTempPassword && normalizedTempPassword.length < 6) {
       return toast.error("New temporary password must be at least 6 characters");
     }
 
@@ -90,7 +91,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
       address,
       notes,
       photo,
-      tempPassword: tempPassword.trim() || undefined,
+      tempPassword: normalizedTempPassword || undefined,
       canMarkAttendance: role === "director" ? true : canMarkAttendance,
       fingerprintEnrolled: enrolFp || editing?.fingerprintEnrolled,
     };

@@ -210,6 +210,7 @@ function PolicyCenterPage() {
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
   const [isRedistributing, setIsRedistributing] = useState(false);
   const [carryoverResetting, setCarryoverResetting] = useState(false);
+  const [carryoverSaving, setCarryoverSaving] = useState(false);
   const [showCarryoverAdvanced, setShowCarryoverAdvanced] = useState(false);
 
   useEffect(() => {
@@ -306,7 +307,11 @@ function PolicyCenterPage() {
   const filteredClients = memberAccounts.filter((member) => {
     const q = clientQuery.trim().toLowerCase();
     if (!q) return true;
-    return member.name.toLowerCase().includes(q) || member.id.toLowerCase().includes(q);
+    return (
+      member.name.toLowerCase().includes(q) ||
+      member.id.toLowerCase().includes(q) ||
+      member.phone.toLowerCase().includes(q)
+    );
   });
   const currentWaterfall =
     waterfallDraft.find((rule) => rule.scenario === waterfallScenario) ??
@@ -674,7 +679,7 @@ function PolicyCenterPage() {
   }
 
   async function saveCarryoverProfileDraft() {
-    if (!selectedClient) return;
+    if (!selectedClient || carryoverSaving) return;
     const nextClosedLoans = guidedClosedLoans.map((loan, index) => {
       const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
       return {
@@ -715,51 +720,61 @@ function PolicyCenterPage() {
       return;
     }
 
-    for (const loan of nextGuidedLoans) {
-      await saveCarryoverLoan({ data: loan });
+    setCarryoverSaving(true);
+    try {
+      for (const loan of nextGuidedLoans) {
+        await saveCarryoverLoan({ data: loan });
+      }
+
+      const keptGuidedLoanIds = new Set(
+        nextGuidedLoans
+          .map((loan) => loan.id)
+          .filter((loanId): loanId is string => Boolean(loanId)),
+      );
+      const removedGuidedLoanIds = carryoverLoans
+        .map((loan) => loan.id)
+        .filter((loanId) => loanId && !keptGuidedLoanIds.has(loanId));
+      for (const loanId of removedGuidedLoanIds) {
+        await deleteCarryoverLoan({ data: { id: loanId } });
+      }
+
+      const recordedTotalDeposits = resolveRecordedCarryoverTotal(
+        carryoverProfile,
+        carryoverBreakdown,
+        derivedCarryoverAllocatedTotal,
+      );
+
+      const nextBreakdown = {
+        ...readCarryoverBreakdown(carryoverProfile.collectionBreakdown),
+        totalDepositsRecorded: recordedTotalDeposits,
+        purposePoolBalance: carryoverBreakdown.purposePoolBalance,
+        feeBuckets: carryoverFeeBuckets,
+      };
+
+      await saveCarryoverProfile({
+        data: {
+          ...carryoverProfile,
+          memberId: selectedClient.id,
+          feesPaidTotal: carryoverFeeTotal,
+          loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
+          totalCollected: recordedTotalDeposits,
+          pendingBalance: [...nextDefaultedLoans, ...nextActiveLoans].reduce(
+            (sum, loan) => sum + summarizeLegacyCarryoverLoan(loan, policySettings).totalOwedNow,
+            0,
+          ),
+          completedLoanCycles: nextClosedLoans.length,
+          collectionBreakdown: nextBreakdown,
+        },
+      });
+      await reloadAppData();
+      await refreshCarryoverDetails(selectedClient.id);
+      await refreshAllCarryoverLoans();
+      toast.success("Carryover balances saved");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to save carryover balances.");
+    } finally {
+      setCarryoverSaving(false);
     }
-
-    const keptGuidedLoanIds = new Set(
-      nextGuidedLoans.map((loan) => loan.id).filter((loanId): loanId is string => Boolean(loanId)),
-    );
-    const removedGuidedLoanIds = carryoverLoans
-      .map((loan) => loan.id)
-      .filter((loanId) => loanId && !keptGuidedLoanIds.has(loanId));
-    for (const loanId of removedGuidedLoanIds) {
-      await deleteCarryoverLoan({ data: { id: loanId } });
-    }
-
-    const recordedTotalDeposits = resolveRecordedCarryoverTotal(
-      carryoverProfile,
-      carryoverBreakdown,
-      derivedCarryoverAllocatedTotal,
-    );
-
-    const nextBreakdown = {
-      ...readCarryoverBreakdown(carryoverProfile.collectionBreakdown),
-      totalDepositsRecorded: recordedTotalDeposits,
-      purposePoolBalance: carryoverBreakdown.purposePoolBalance,
-      feeBuckets: carryoverFeeBuckets,
-    };
-
-    await saveCarryoverProfile({
-      data: {
-        ...carryoverProfile,
-        feesPaidTotal: carryoverFeeTotal,
-        loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
-        totalCollected: recordedTotalDeposits,
-        pendingBalance: [...nextDefaultedLoans, ...nextActiveLoans].reduce(
-          (sum, loan) => sum + summarizeLegacyCarryoverLoan(loan, policySettings).totalOwedNow,
-          0,
-        ),
-        completedLoanCycles: nextClosedLoans.length,
-        collectionBreakdown: nextBreakdown,
-      },
-    });
-    await reloadAppData();
-    await refreshCarryoverDetails(selectedClient.id);
-    await refreshAllCarryoverLoans();
-    toast.success("Carryover balances saved");
   }
 
   async function saveCarryoverLoanDraft() {
@@ -1779,10 +1794,37 @@ function PolicyCenterPage() {
                     <input
                       value={clientQuery}
                       onChange={(event) => setClientQuery(event.target.value)}
-                      placeholder="Search by name or member ID"
+                      placeholder="Search by name, member ID, or phone"
                       className="input"
                     />
                   </Field>
+                  {clientQuery.trim() && (
+                    <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border bg-card p-1">
+                      {filteredClients.slice(0, 8).map((member) => {
+                        const active = member.id === clientId;
+                        return (
+                          <button
+                            key={member.id}
+                            type="button"
+                            onClick={() => setClientId(member.id)}
+                            className={`w-full rounded px-2 py-2 text-left text-sm transition ${
+                              active ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+                            }`}
+                          >
+                            <span className="block font-medium">{member.name}</span>
+                            <span className="block text-xs opacity-75">
+                              {member.id} - {member.phone}
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {filteredClients.length === 0 && (
+                        <div className="px-2 py-2 text-sm text-muted-foreground">
+                          No matching clients.
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <Field label="Client record">
                     <select
                       value={clientId}
@@ -1932,10 +1974,11 @@ function PolicyCenterPage() {
                       </button>
                       <button
                         onClick={() => void saveCarryoverProfileDraft()}
+                        disabled={carryoverSaving}
                         className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
                       >
                         <Save className="h-3.5 w-3.5" />
-                        Save carryover
+                        {carryoverSaving ? "Saving..." : "Save carryover"}
                       </button>
                     </div>
                   }
