@@ -13,6 +13,7 @@ import { Route as WithdrawalsRouteImport } from './routes/withdrawals'
 import { Route as TransactionsRouteImport } from './routes/transactions'
 import { Route as SupportInboxRouteImport } from './routes/support-inbox'
 import { Route as SuppliersRouteImport } from './routes/suppliers'
+import { Route as SupplierPortalRouteImport } from './routes/supplier-portal'
 import { Route as StockRouteImport } from './routes/stock'
 import { Route as StaffMgmtRouteImport } from './routes/staff-mgmt'
 import { Route as StaffRouteImport } from './routes/staff'
@@ -68,6 +69,11 @@ const SupportInboxRoute = SupportInboxRouteImport.update({
 const SuppliersRoute = SuppliersRouteImport.update({
   id: '/suppliers',
   path: '/suppliers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SupplierPortalRoute = SupplierPortalRouteImport.update({
+  id: '/supplier-portal',
+  path: '/supplier-portal',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StockRoute = StockRouteImport.update({
@@ -279,6 +285,7 @@ export interface FileRoutesByFullPath {
   '/staff': typeof StaffRoute
   '/staff-mgmt': typeof StaffMgmtRoute
   '/stock': typeof StockRoute
+  '/supplier-portal': typeof SupplierPortalRoute
   '/suppliers': typeof SuppliersRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
@@ -321,6 +328,7 @@ export interface FileRoutesByTo {
   '/staff': typeof StaffRoute
   '/staff-mgmt': typeof StaffMgmtRoute
   '/stock': typeof StockRoute
+  '/supplier-portal': typeof SupplierPortalRoute
   '/suppliers': typeof SuppliersRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
@@ -364,6 +372,7 @@ export interface FileRoutesById {
   '/staff': typeof StaffRoute
   '/staff-mgmt': typeof StaffMgmtRoute
   '/stock': typeof StockRoute
+  '/supplier-portal': typeof SupplierPortalRoute
   '/suppliers': typeof SuppliersRoute
   '/support-inbox': typeof SupportInboxRoute
   '/transactions': typeof TransactionsRoute
@@ -408,6 +417,7 @@ export interface FileRouteTypes {
     | '/staff'
     | '/staff-mgmt'
     | '/stock'
+    | '/supplier-portal'
     | '/suppliers'
     | '/support-inbox'
     | '/transactions'
@@ -450,6 +460,7 @@ export interface FileRouteTypes {
     | '/staff'
     | '/staff-mgmt'
     | '/stock'
+    | '/supplier-portal'
     | '/suppliers'
     | '/support-inbox'
     | '/transactions'
@@ -492,6 +503,7 @@ export interface FileRouteTypes {
     | '/staff'
     | '/staff-mgmt'
     | '/stock'
+    | '/supplier-portal'
     | '/suppliers'
     | '/support-inbox'
     | '/transactions'
@@ -535,6 +547,7 @@ export interface RootRouteChildren {
   StaffRoute: typeof StaffRoute
   StaffMgmtRoute: typeof StaffMgmtRoute
   StockRoute: typeof StockRoute
+  SupplierPortalRoute: typeof SupplierPortalRoute
   SuppliersRoute: typeof SuppliersRoute
   SupportInboxRoute: typeof SupportInboxRoute
   TransactionsRoute: typeof TransactionsRoute
@@ -584,6 +597,13 @@ declare module '@tanstack/react-router' {
       path: '/suppliers'
       fullPath: '/suppliers'
       preLoaderRoute: typeof SuppliersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/supplier-portal': {
+      id: '/supplier-portal'
+      path: '/supplier-portal'
+      fullPath: '/supplier-portal'
+      preLoaderRoute: typeof SupplierPortalRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/stock': {
@@ -863,6 +883,7 @@ const rootRouteChildren: RootRouteChildren = {
   StaffRoute: StaffRoute,
   StaffMgmtRoute: StaffMgmtRoute,
   StockRoute: StockRoute,
+  SupplierPortalRoute: SupplierPortalRoute,
   SuppliersRoute: SuppliersRoute,
   SupportInboxRoute: SupportInboxRoute,
   TransactionsRoute: TransactionsRoute,

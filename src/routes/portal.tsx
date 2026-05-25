@@ -33,11 +33,7 @@ import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
-import {
-  listClientNotices,
-  listMemberSupplierRequestsRecord,
-  listSupplierWorkspaceRecord,
-} from "@/lib/runtime-data.functions";
+import { listClientNotices, listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -160,7 +156,6 @@ function Portal() {
     : fees;
   const { submit } = useApprovalActions();
   const loadClientNotices = useServerFn(listClientNotices);
-  const loadMemberSupplierRequests = useServerFn(listMemberSupplierRequestsRecord);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const navigate = useNavigate();
@@ -169,7 +164,6 @@ function Portal() {
   const [pinOld, setPinOld] = useState("");
   const [pinNew, setPinNew] = useState("");
   const [payMember, setPayMember] = useState<Member | null>(null);
-  const [supplierRequests, setSupplierRequests] = useState<any[]>([]);
   const [clientNotices, setClientNotices] = useState<ClientNotice[]>([]);
   const [clientReadIds, setClientReadIds] = useState<Set<string>>(new Set());
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
@@ -196,7 +190,7 @@ function Portal() {
   }, [memberId]);
   useEffect(() => {
     const refreshNotices = () =>
-      loadClientNotices()
+      loadClientNotices({ data: isStaffView ? { memberId } : undefined })
         .then((rows) => setClientNotices(rows as ClientNotice[]))
         .catch(() => setClientNotices([]));
     refreshNotices();
@@ -206,24 +200,13 @@ function Portal() {
       window.clearInterval(timer);
       window.removeEventListener("focus", refreshNotices);
     };
-  }, [loadClientNotices]);
+  }, [isStaffView, loadClientNotices, memberId]);
   useEffect(() => {
     if (authMode !== "member") return;
     loadSupplierWorkspace()
-      .then(() => navigate({ to: "/suppliers" }))
+      .then(() => navigate({ to: "/supplier-portal" }))
       .catch(() => {});
   }, [authMode, loadSupplierWorkspace, navigate]);
-  useEffect(() => {
-    if (!memberId) {
-      setSupplierRequests([]);
-      return;
-    }
-    loadMemberSupplierRequests({
-      data: isStaffView ? { memberId } : undefined,
-    })
-      .then((rows) => setSupplierRequests(rows as any[]))
-      .catch(() => setSupplierRequests([]));
-  }, [isStaffView, loadMemberSupplierRequests, memberId]);
   const { data: mpesaReceiptRows = [] } = useQuery({
     queryKey: ["portal-mpesa-receipts", memberId, isStaffView],
     queryFn: () => fetchMpesaAudit({ data: isStaffView ? { memberId } : {} }),
@@ -375,8 +358,9 @@ function Portal() {
           subtitle="Staff view-as: audit a member's profile, loans, fees and support thread."
         />
       ) : (
-        <header className="border-b border-border bg-card/70 px-6 py-5 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
+        <header className="border-b border-border bg-card/70 px-4 pb-4 pt-0 backdrop-blur sm:px-6">
+          <div className="safe-area-spacer md:hidden" />
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 pt-3 sm:pt-5">
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
                 Sauti Microfinance
@@ -655,44 +639,6 @@ function Portal() {
                     ))}
                   </div>
                 </Section>
-                {supplierRequests.length > 0 && (
-                  <Section title="Supplier-backed requests">
-                    <div className="p-5 space-y-3 text-sm">
-                      {supplierRequests.map((request) => (
-                        <div key={request.id} className="rounded-md border border-border p-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="font-medium capitalize">
-                              {request.kind} request / {request.supplierName}
-                            </div>
-                            <Badge
-                              tone={
-                                request.status === "fulfilled"
-                                  ? "success"
-                                  : request.status === "paid"
-                                    ? "accent"
-                                    : "warning"
-                              }
-                            >
-                              {request.status}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {request.commodityName || request.fuelType || request.kind}
-                            {request.vehiclePlate ? ` / ${request.vehiclePlate}` : ""}
-                          </div>
-                          {request.verificationCode ? (
-                            <div className="mt-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
-                              Driver code:{" "}
-                              <span className="font-mono font-semibold text-foreground">
-                                {request.verificationCode}
-                              </span>
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </Section>
-                )}
                 {!isStaffView && member.category === "locomotive" && (
                   <Section title="Request fuel loan">
                     <div className="p-5 grid gap-3 sm:grid-cols-2">

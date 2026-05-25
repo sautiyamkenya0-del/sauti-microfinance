@@ -39,7 +39,9 @@ function LoginPage() {
       if (!result.member) return toast.error("The supplied sign-in details are not valid.");
 
       toast.success(`Welcome, ${result.member.name}`);
-      await router.navigate({ to: result.portal === "supplier" ? "/suppliers" : "/portal" });
+      await router.navigate({
+        to: result.portal === "supplier" ? "/supplier-portal" : "/portal",
+      });
     } catch (error: any) {
       toast.error(error?.message ?? "Sign-in failed. Please try again.");
     } finally {

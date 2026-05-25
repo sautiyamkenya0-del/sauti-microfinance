@@ -6531,7 +6531,9 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       by: string;
       byStaffId?: string;
       date?: string;
-      audience?: "staff" | "members" | "all";
+      audience?: "staff" | "members" | "member" | "suppliers" | "supplier" | "all";
+      targetMemberId?: string;
+      targetSupplierId?: string;
       kind?: "info" | "warning" | "alert";
       expiresAt?: string;
     }) => ({
@@ -6540,7 +6542,16 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       by: String(data?.by ?? "").trim(),
       byStaffId: data?.byStaffId?.trim() || undefined,
       date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
-      audience: data?.audience === "members" || data?.audience === "all" ? data.audience : "staff",
+      audience:
+        data?.audience === "members" ||
+        data?.audience === "member" ||
+        data?.audience === "suppliers" ||
+        data?.audience === "supplier" ||
+        data?.audience === "all"
+          ? data.audience
+          : "staff",
+      targetMemberId: data?.targetMemberId?.trim() || undefined,
+      targetSupplierId: data?.targetSupplierId?.trim() || undefined,
       kind: data?.kind === "warning" || data?.kind === "alert" ? data.kind : "info",
       expiresAt: data?.expiresAt?.trim() || undefined,
     }),
@@ -6549,6 +6560,12 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
     const actor = await requireStaffActor();
     if (!data.title || !data.body || !data.by)
       throw new Error("Memo title, body and author are required.");
+    if (data.audience === "member" && !data.targetMemberId) {
+      throw new Error("Choose the member who should receive this notice.");
+    }
+    if (data.audience === "supplier" && !data.targetSupplierId) {
+      throw new Error("Choose the supplier who should receive this notice.");
+    }
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const id = makeId("MEM");
@@ -6560,6 +6577,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       by_staff_id: actor.id,
       by_name: actor.name,
       audience: data.audience,
+      target_member_id: data.audience === "member" ? data.targetMemberId : null,
+      target_supplier_id: data.audience === "supplier" ? data.targetSupplierId : null,
       notice_kind: data.kind,
       expires_at: data.expiresAt ?? null,
     });
@@ -6573,6 +6592,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       details: {
         date: data.date,
         audience: data.audience,
+        targetMemberId: data.targetMemberId ?? null,
+        targetSupplierId: data.targetSupplierId ?? null,
         kind: data.kind,
         expiresAt: data.expiresAt ?? null,
         title: clipAuditText(data.title, 120),
@@ -6996,6 +7017,7 @@ type MemberDocket =
 type SupplierKind = "fuel" | "stock" | "service";
 type SupplierType = "individual" | "company";
 type SupplierRegistrationCategory = "goods" | "services" | "works";
+type SupplierClass = "normal" | "special_broker";
 type SupplierAgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
 
 const MEMBER_DOCKETS: MemberDocket[] = [
@@ -7086,6 +7108,10 @@ function normalizeSupplierType(value: unknown): SupplierType {
 
 function normalizeSupplierRegistrationCategory(value: unknown): SupplierRegistrationCategory {
   return value === "services" || value === "works" ? value : "goods";
+}
+
+function normalizeSupplierClass(value: unknown): SupplierClass {
+  return value === "special_broker" ? "special_broker" : "normal";
 }
 
 function normalizeAgpoCategory(value: unknown): SupplierAgpoCategory {
@@ -7612,6 +7638,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     (data: {
       name: string;
       kind: SupplierKind;
+      supplierClass?: SupplierClass;
       supplierType?: SupplierType;
       registrationCategory?: SupplierRegistrationCategory;
       phone?: string;
@@ -7647,6 +7674,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     }) => ({
       name: String(data?.name ?? "").trim(),
       kind: normalizeSupplierKind(data?.kind),
+      supplierClass: normalizeSupplierClass(data?.supplierClass),
       supplierType: normalizeSupplierType(data?.supplierType),
       registrationCategory: normalizeSupplierRegistrationCategory(data?.registrationCategory),
       phone: data?.phone?.trim() || undefined,
@@ -7687,6 +7715,8 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const actor = await requireStaffActor();
+    const isSpecialBroker = data.supplierClass === "special_broker";
+    const supplierKind = isSpecialBroker ? "service" : data.kind;
     const individualName = [
       data.individualFirstName,
       data.individualSecondName,
@@ -7708,11 +7738,11 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     if (data.supplierType === "individual" && !data.nationalId) {
       throw new Error("National ID or passport number is required for individual suppliers.");
     }
-    if (data.supplierType === "company" && !data.businessRegistrationNumber) {
+    if (!isSpecialBroker && data.supplierType === "company" && !data.businessRegistrationNumber) {
       throw new Error("Business registration or certificate number is required for companies.");
     }
-    if (!data.kraPin) throw new Error("KRA PIN is required.");
-    if (!data.bankName || !data.accountName || !data.accountNumber) {
+    if (!isSpecialBroker && !data.kraPin) throw new Error("KRA PIN is required.");
+    if (!isSpecialBroker && (!data.bankName || !data.accountName || !data.accountNumber)) {
       throw new Error("Supplier bank name, account name, and account number are required.");
     }
 
@@ -7780,7 +7810,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
       county: data.county ?? null,
       village: data.physicalLocation ?? null,
       business_name: data.supplierType === "company" ? data.name : null,
-      business_type: data.registrationCategory,
+      business_type: isSpecialBroker ? "broker" : data.registrationCategory,
       business_permanence: null,
       business_address: data.physicalLocation ?? location ?? null,
       field_officer_id: actor.id,
@@ -7793,10 +7823,11 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     const { error } = await runtimeDb.from("suppliers").insert({
       id,
       name: supplierName,
-      kind: data.kind,
+      kind: supplierKind,
       member_id: memberId,
+      supplier_class: data.supplierClass,
       supplier_type: data.supplierType,
-      registration_category: data.registrationCategory,
+      registration_category: isSpecialBroker ? "services" : data.registrationCategory,
       individual_first_name: data.individualFirstName ?? null,
       individual_second_name: data.individualSecondName ?? null,
       individual_third_name: data.individualThirdName ?? null,
@@ -7842,6 +7873,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
         ...data,
         memberId,
         supplierName,
+        supplierKind,
       },
     });
     return { id, memberId };
@@ -7873,12 +7905,15 @@ export const createSupplierFulfillmentRequestRecord = createServerFn({ method: "
     const detail = asJsonObject(data.detail);
     const { data: supplier, error: supplierError } = await runtimeDb
       .from("suppliers")
-      .select("id, kind, status")
+      .select("id, kind, status, supplier_class")
       .eq("id", data.supplierId)
       .maybeSingle();
     if (supplierError) throw new Error(supplierError.message);
     if (!supplier) throw new Error("Supplier was not found.");
     if (supplier.status !== "active") throw new Error("Supplier is not active.");
+    if (supplier.supplier_class === "special_broker") {
+      throw new Error("Special broker suppliers manage people and deposits, not commodity requests.");
+    }
     if (supplier.kind !== data.kind) {
       throw new Error(
         `This request is ${data.kind}, but the selected supplier is ${supplier.kind}.`,
@@ -8239,6 +8274,163 @@ export const saveSupplierInventoryItemRecord = createServerFn({ method: "POST" }
       },
     });
     return { id };
+  });
+
+export const createSupplierBrokerClientRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      supplierId: string;
+      firstName: string;
+      secondName?: string;
+      thirdName?: string;
+      nationalId?: string;
+      role?: string;
+      phone?: string;
+      openingBalance?: number;
+      notes?: string;
+    }) => ({
+      supplierId: String(data?.supplierId ?? "").trim(),
+      firstName: String(data?.firstName ?? "").trim(),
+      secondName: data?.secondName?.trim() || undefined,
+      thirdName: data?.thirdName?.trim() || undefined,
+      nationalId: data?.nationalId?.trim() || undefined,
+      role: data?.role?.trim() || undefined,
+      phone: data?.phone?.trim() || undefined,
+      openingBalance: Number(data?.openingBalance ?? 0),
+      notes: data?.notes?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.supplierId) throw new Error("Supplier is required.");
+    if (!data.firstName) throw new Error("First name is required.");
+    if (data.phone && !isValidLocalKenyanPhone(data.phone)) {
+      throw new Error("Use a local phone number starting with 07 or 01.");
+    }
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { actor } = await resolveSupplierMutationActor(runtimeDb, data.supplierId);
+    const { data: supplier, error: supplierError } = await runtimeDb
+      .from("suppliers")
+      .select("id, supplier_class")
+      .eq("id", data.supplierId)
+      .maybeSingle();
+    if (supplierError) throw new Error(supplierError.message);
+    if (!supplier) throw new Error("Supplier was not found.");
+    if (supplier.supplier_class !== "special_broker") {
+      throw new Error("People intake is only available for special broker suppliers.");
+    }
+
+    const openingBalance = Math.max(0, data.openingBalance);
+    const id = makeId("BRC");
+    const { error } = await runtimeDb.from("supplier_broker_clients").insert({
+      id,
+      supplier_id: data.supplierId,
+      first_name: data.firstName,
+      second_name: data.secondName ?? null,
+      third_name: data.thirdName ?? null,
+      national_id: data.nationalId ?? null,
+      role: data.role ?? null,
+      phone: data.phone ? toLocalKenyanPhone(data.phone) : null,
+      opening_balance: openingBalance,
+      current_balance: openingBalance,
+      notes: data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "supplier_broker_client.created",
+      targetType: "supplier_broker_client",
+      targetId: id,
+      summary: `${actor.name} added broker client ${data.firstName}`,
+      details: {
+        supplierId: data.supplierId,
+        nationalId: clipAuditText(data.nationalId, 40),
+        role: data.role ?? null,
+        openingBalance,
+      },
+    });
+    return { id };
+  });
+
+export const recordSupplierBrokerClientTransactionRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      supplierId: string;
+      clientId: string;
+      kind: "deposit" | "withdrawal";
+      amount: number;
+      note?: string;
+    }) => ({
+      supplierId: String(data?.supplierId ?? "").trim(),
+      clientId: String(data?.clientId ?? "").trim(),
+      kind: data?.kind === "withdrawal" ? "withdrawal" : "deposit",
+      amount: Number(data?.amount ?? 0),
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    if (!data.supplierId || !data.clientId) throw new Error("Supplier and client are required.");
+    if (data.amount <= 0) throw new Error("Amount must be above zero.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { actor } = await resolveSupplierMutationActor(runtimeDb, data.supplierId);
+    const { data: client, error: clientError } = await runtimeDb
+      .from("supplier_broker_clients")
+      .select("*")
+      .eq("id", data.clientId)
+      .eq("supplier_id", data.supplierId)
+      .maybeSingle();
+    if (clientError) throw new Error(clientError.message);
+    if (!client) throw new Error("Broker client was not found.");
+
+    const currentBalance = Number(client.current_balance ?? 0);
+    const nextBalance =
+      data.kind === "deposit" ? currentBalance + data.amount : currentBalance - data.amount;
+    if (nextBalance < 0) {
+      throw new Error("Withdrawal cannot be higher than the client's current balance.");
+    }
+
+    const now = new Date().toISOString();
+    const id = makeId("BRT");
+    const { error: txError } = await runtimeDb
+      .from("supplier_broker_client_transactions")
+      .insert({
+        id,
+        supplier_client_id: data.clientId,
+        supplier_id: data.supplierId,
+        kind: data.kind,
+        amount: data.amount,
+        balance_after: nextBalance,
+        note: data.note ?? null,
+        recorded_by: actor.id,
+        created_at: now,
+      });
+    if (txError) throw new Error(txError.message);
+
+    const { error: updateError } = await runtimeDb
+      .from("supplier_broker_clients")
+      .update({
+        current_balance: nextBalance,
+        updated_at: now,
+      })
+      .eq("id", data.clientId);
+    if (updateError) throw new Error(updateError.message);
+
+    await auditAction({
+      actor,
+      action: `supplier_broker_client.${data.kind}`,
+      targetType: "supplier_broker_client",
+      targetId: data.clientId,
+      summary: `${actor.name} recorded ${data.kind} of ${data.amount}/= for broker client ${data.clientId}`,
+      details: {
+        supplierId: data.supplierId,
+        amount: data.amount,
+        balanceAfter: nextBalance,
+        note: clipAuditText(data.note, 160),
+      },
+    });
+    return { id, balanceAfter: nextBalance };
   });
 
 export const saveInternalStoreItemRecord = createServerFn({ method: "POST" })

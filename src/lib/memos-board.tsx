@@ -11,7 +11,9 @@ export type StaffMemo = {
   body: string;
   by: string;
   byStaffId?: string;
-  audience?: "staff" | "members" | "all";
+  audience?: "staff" | "members" | "member" | "suppliers" | "supplier" | "all";
+  targetMemberId?: string;
+  targetSupplierId?: string;
   kind?: "info" | "warning" | "alert";
   expiresAt?: string;
   createdAt: string;
@@ -62,7 +64,9 @@ export function useStaffMemos(enabled = true) {
       by: string;
       byStaffId?: string;
       date?: string;
-      audience?: "staff" | "members" | "all";
+      audience?: "staff" | "members" | "member" | "suppliers" | "supplier" | "all";
+      targetMemberId?: string;
+      targetSupplierId?: string;
       kind?: "info" | "warning" | "alert";
       expiresAt?: string;
     }) => {

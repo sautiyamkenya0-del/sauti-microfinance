@@ -177,7 +177,7 @@ function AppLayout() {
   }
 
   if (authMode === "member") {
-    if (pathname !== "/portal" && pathname !== "/suppliers") {
+    if (pathname !== "/portal" && pathname !== "/supplier-portal") {
       return <Navigate to="/portal" replace />;
     }
 

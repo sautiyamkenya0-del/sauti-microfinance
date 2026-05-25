@@ -1,11 +1,14 @@
 import { Section, StatCard, Badge } from "@/components/ui-bits";
+import { createStaffMemoRecord } from "@/lib/app-data.functions";
 import { useStore, fmtKES, loanSummary, SBC_FEES } from "@/lib/store";
+import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
+import { Bell, Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
 
 export function FollowUps() {
   const { loans, members, transactions, followups, addFollowup, currentUser } = useStore();
+  const sendNotice = useServerFn(createStaffMemoRecord);
 
   const items = useMemo(() => {
     return loans
@@ -43,6 +46,28 @@ export function FollowUps() {
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);
   const totalDue = items.reduce((s, i) => s + i.totalDue, 0);
+
+  async function sendPaymentReminder(args: {
+    memberId: string;
+    memberName: string;
+    loanId: string;
+    amountDue: number;
+    daysMissed: number;
+  }) {
+    await sendNotice({
+      data: {
+        title: "Payment reminder",
+        body: `${args.memberName}, please pay ${fmtKES(args.amountDue)} for loan ${args.loanId}. You are ${args.daysMissed} day(s) behind. Contact your loan officer if you need help.`,
+        by: currentUser.name,
+        byStaffId: currentUser.id,
+        date: new Date().toISOString().slice(0, 10),
+        audience: "member",
+        targetMemberId: args.memberId,
+        kind: "warning",
+      },
+    });
+    toast.success("Payment reminder sent to the member portal.");
+  }
 
   return (
     <div className="space-y-6">
@@ -107,6 +132,20 @@ export function FollowUps() {
                     >
                       <Phone className="h-3 w-3" /> Call Client
                     </a>
+                    <button
+                      onClick={() =>
+                        sendPaymentReminder({
+                          memberId: member.id,
+                          memberName: member.name,
+                          loanId: loan.id,
+                          amountDue: totalDue,
+                          daysMissed,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 hover:bg-muted"
+                    >
+                      <Bell className="h-3 w-3" /> Send Reminder
+                    </button>
                     <button className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md hover:bg-muted">
                       <Building2 className="h-3 w-3" /> Record Business Visit
                     </button>

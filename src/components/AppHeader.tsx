@@ -16,6 +16,8 @@ import {
   Sparkles,
   IdCard,
   ShieldCheck,
+  Package,
+  Truck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -42,6 +44,15 @@ const ENTRIES: Entry[] = [
   { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, requires: ["dashboard"] },
   { id: "ai", to: "/ai", label: "SautiAI", icon: Sparkles, requires: ["ai"] },
   { id: "portal", to: "/portal", label: "Member Portal", icon: IdCard, requires: ["portal"] },
+  {
+    id: "supplier-portal",
+    to: "/supplier-portal",
+    label: "Supplier Portal",
+    icon: Truck,
+    requires: ["suppliers"],
+  },
+  { id: "suppliers", to: "/suppliers", label: "Suppliers", icon: Truck, requires: ["suppliers"] },
+  { id: "stock", to: "/stock", label: "Stock", icon: Package, requires: ["stock"] },
   {
     id: "lending",
     to: "/loans",

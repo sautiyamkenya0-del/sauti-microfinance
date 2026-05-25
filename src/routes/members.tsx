@@ -47,7 +47,7 @@ type MemberForm = {
   investorNotes: string;
 };
 
-type RegistryView = "all" | "normal" | "locomotive" | "stock" | "service";
+type RegistryView = "all" | "normal" | "locomotive" | "service";
 
 export const Route = createFileRoute("/members")({
   head: () => ({ meta: [{ title: "Members — Sauti Microfinance" }] }),
@@ -151,7 +151,7 @@ function MembersPage() {
     <>
       <AppHeader
         title="Members"
-        subtitle="Normal, locomotive, stock, and service members in one clean registry, with full Member 360 on each row."
+        subtitle="Normal, locomotive, and service members in one clean registry, with full Member 360 on each row."
       />
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <SectionTabs section="members" />
@@ -161,7 +161,6 @@ function MembersPage() {
               ["all", "All members"],
               ["normal", "Normal"],
               ["locomotive", "Locomotive"],
-              ["stock", "Stock"],
               ["service", "Service"],
             ] as const
           ).map(([value, label]) => (
@@ -367,7 +366,6 @@ function MembersPage() {
                           { value: "investor", label: "Investor" },
                           { value: "both", label: "Both" },
                           { value: "locomotive", label: "Locomotive" },
-                          { value: "stock", label: "Stock" },
                           { value: "service", label: "Service" },
                         ] as const
                       ).map((option) => (

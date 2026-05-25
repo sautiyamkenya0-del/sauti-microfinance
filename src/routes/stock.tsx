@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import { Package, RefreshCw, Save } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
-import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
 import { saveInternalStoreItemRecord } from "@/lib/app-data.functions";
 import { listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
@@ -130,8 +129,6 @@ function StockPage() {
         subtitle="Maintain internal inventory, buying prices, selling prices, reorder levels, and stock-loan availability."
       />
       <main className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
-        <SectionTabs section="members" />
-
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard
             label="Stock SKUs"

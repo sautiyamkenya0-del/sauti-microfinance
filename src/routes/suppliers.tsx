@@ -2,35 +2,17 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  Boxes,
-  Building2,
-  CheckCircle2,
-  Eye,
-  Fuel,
-  KeyRound,
-  Package,
-  Plus,
-  RefreshCw,
-  Store,
-  Truck,
-  Wrench,
-} from "lucide-react";
+import { Building2, CheckCircle2, ClipboardList, Plus, RefreshCw, Truck } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
-import { SectionTabs } from "@/components/SectionTabs";
-import { Section, StatCard } from "@/components/ui-bits";
+import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
   createSupplierFulfillmentRequestRecord,
   createSupplierRecord,
-  issueInternalStoreLoanRecord,
-  markSupplierFulfilledRecord,
   recordSystemOutflowRecord,
-  saveInternalStoreItemRecord,
-  saveSupplierInventoryItemRecord,
 } from "@/lib/app-data.functions";
 import { listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
-import { fmtKES, memberCategoryLabel, useStore } from "@/lib/store";
+import { fmtKES, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/suppliers")({
   head: () => ({ meta: [{ title: "Suppliers - Sauti Microfinance" }] }),
@@ -38,90 +20,51 @@ export const Route = createFileRoute("/suppliers")({
 });
 
 type SupplierKind = "fuel" | "stock" | "service";
+type SupplierClass = "normal" | "special_broker";
 type SupplierType = "individual" | "company";
-type SupplierRegistrationCategory = "goods" | "services" | "works";
-type AgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
-
-const emptySupplierDocuments = {
-  nationalId: false,
-  businessRegistrationCertificate: false,
-  kraPinCertificate: false,
-  taxComplianceCertificate: false,
-  cr12: false,
-  agpoCertificate: false,
-};
+type RegistrationCategory = "goods" | "services" | "works";
 
 function emptyRegisterForm() {
   return {
+    supplierClass: "normal" as SupplierClass,
     supplierType: "individual" as SupplierType,
-    registrationCategory: "goods" as SupplierRegistrationCategory,
-    name: "",
+    registrationCategory: "goods" as RegistrationCategory,
     kind: "stock" as SupplierKind,
+    name: "",
     individualFirstName: "",
     individualSecondName: "",
     individualThirdName: "",
     nationalId: "",
-    gender: "Male" as "Male" | "Female",
-    dateOfBirth: "",
-    businessRegistrationNumber: "",
-    registrationDate: "",
-    contactPerson: "",
-    contactPersonDesignation: "",
     phone: "",
     alternativePhone: "",
     email: "",
-    postalAddress: "",
-    postalCodeTown: "",
-    county: "",
-    subCountyTown: "",
-    physicalLocation: "",
+    contactPerson: "",
+    contactPersonDesignation: "",
+    businessRegistrationNumber: "",
     kraPin: "",
-    taxComplianceCertificateNumber: "",
-    agpoCategory: "not_applicable" as AgpoCategory,
-    regulatoryLicenseNumber: "",
     bankName: "",
     bankBranch: "",
     accountName: "",
     accountNumber: "",
     mpesaPaybillTill: "",
-    documentChecklist: { ...emptySupplierDocuments },
+    county: "",
+    subCountyTown: "",
+    physicalLocation: "",
+    postalAddress: "",
     notes: "",
   };
 }
 
 function SuppliersPage() {
-  const { authMode, currentUser, logout } = useStore();
+  const { currentUser } = useStore();
   const loadWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const registerSupplier = useServerFn(createSupplierRecord);
-  const saveSupplierInventory = useServerFn(saveSupplierInventoryItemRecord);
-  const saveInternalStoreItem = useServerFn(saveInternalStoreItemRecord);
   const createSupplierRequest = useServerFn(createSupplierFulfillmentRequestRecord);
-  const markFulfilled = useServerFn(markSupplierFulfilledRecord);
   const recordOutflow = useServerFn(recordSystemOutflowRecord);
-  const issueInternalStoreLoan = useServerFn(issueInternalStoreLoanRecord);
 
   const [workspace, setWorkspace] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const [simulationPickId, setSimulationPickId] = useState("");
-  const [simulatedSupplierId, setSimulatedSupplierId] = useState("");
   const [registerForm, setRegisterForm] = useState(emptyRegisterForm);
-  const [inventoryForm, setInventoryForm] = useState({
-    supplierId: "",
-    itemKind: "stock" as SupplierKind,
-    itemName: "",
-    unit: "unit",
-    quantityAvailable: 0,
-    unitPrice: 0,
-  });
-  const [storeForm, setStoreForm] = useState({
-    itemKind: "stock" as SupplierKind,
-    itemName: "",
-    unit: "unit",
-    quantityAvailable: 0,
-    reorderLevel: 0,
-    unitPrice: 0,
-    preferredSupplierId: "",
-  });
   const [requestForm, setRequestForm] = useState({
     kind: "stock" as SupplierKind,
     supplierId: "",
@@ -136,142 +79,45 @@ function SuppliersPage() {
     fuelType: "",
     notes: "",
   });
-  const [verificationInputs, setVerificationInputs] = useState<Record<string, string>>({});
 
-  const refresh = async () => {
+  async function refresh() {
     setBusy(true);
     try {
       const next = await loadWorkspace();
       setWorkspace(next);
-      const nextSuppliers = next.suppliers ?? [];
-      setSimulationPickId((current) => current || nextSuppliers[0]?.id || "");
-      setSimulatedSupplierId((current) =>
-        current && nextSuppliers.some((supplier: any) => supplier.id === current) ? current : "",
-      );
-      setInventoryForm((current) => ({
-        ...current,
-        supplierId: current.supplierId || next.signedSupplierId || next.suppliers?.[0]?.id || "",
-      }));
-      setStoreForm((current) => ({
-        ...current,
-        preferredSupplierId:
-          current.preferredSupplierId ||
-          next.suppliers?.find((row: any) => row.kind === "stock")?.id ||
-          "",
-      }));
+      const suppliers = (next as any).suppliers ?? [];
+      const members = (next as any).members ?? [];
       setRequestForm((current) => ({
         ...current,
-        supplierId: current.supplierId || next.suppliers?.[0]?.id || "",
-        memberId: current.memberId || next.members?.[0]?.id || "",
+        supplierId:
+          current.supplierId ||
+          suppliers.find((supplier: any) => supplier.supplier_class !== "special_broker")?.id ||
+          "",
+        memberId: current.memberId || members[0]?.id || "",
       }));
     } catch (error: any) {
-      toast.error(error?.message ?? "Failed to load the supplier workspace.");
+      toast.error(error?.message ?? "Failed to load suppliers.");
     } finally {
       setBusy(false);
     }
-  };
+  }
 
   useEffect(() => {
     refresh().catch(() => {});
   }, []);
 
-  const serverMode = workspace?.mode === "supplier" ? "supplier" : "staff";
-  const activeSimulatedSupplierId = serverMode === "staff" ? simulatedSupplierId : "";
-  const mode = serverMode === "supplier" || activeSimulatedSupplierId ? "supplier" : "staff";
-  const signedSupplierId =
-    serverMode === "supplier" ? (workspace?.signedSupplierId ?? "") : activeSimulatedSupplierId;
-  const allSuppliers = workspace?.suppliers ?? [];
-  const allRequests = workspace?.requests ?? [];
-  const allSupplierInventory = workspace?.supplierInventory ?? [];
-  const allInternalStore = workspace?.internalStore ?? [];
-  const allLoans = workspace?.loans ?? [];
-  const allOutflows = workspace?.outflows ?? [];
-  const suppliers =
-    mode === "supplier" && signedSupplierId
-      ? allSuppliers.filter((supplier: any) => supplier.id === signedSupplierId)
-      : allSuppliers;
+  const suppliers = workspace?.suppliers ?? [];
+  const normalSuppliers = suppliers.filter(
+    (supplier: any) => supplier.supplier_class !== "special_broker",
+  );
+  const brokerSuppliers = suppliers.filter(
+    (supplier: any) => supplier.supplier_class === "special_broker",
+  );
+  const requests = workspace?.requests ?? [];
+  const outflows = workspace?.outflows ?? [];
   const members = workspace?.members ?? [];
-  const requests =
-    mode === "supplier" && signedSupplierId
-      ? allRequests.filter((request: any) => request.supplier_id === signedSupplierId)
-      : allRequests;
-  const supplierInventory =
-    mode === "supplier" && signedSupplierId
-      ? allSupplierInventory.filter((item: any) => item.supplier_id === signedSupplierId)
-      : allSupplierInventory;
-  const internalStore = mode === "supplier" ? [] : allInternalStore;
-  const loans =
-    mode === "supplier" && signedSupplierId
-      ? allLoans.filter((loan: any) => loan.supplier_id === signedSupplierId)
-      : allLoans;
-  const outflows =
-    mode === "supplier" && signedSupplierId
-      ? allOutflows.filter((outflow: any) => outflow.supplier_id === signedSupplierId)
-      : allOutflows;
-  const simulatedSupplier = allSuppliers.find(
-    (supplier: any) => supplier.id === activeSimulatedSupplierId,
-  );
-  const activeSupplierName = simulatedSupplier?.name || signedSupplierId || "selected supplier";
-  const canPaySuppliers = authMode === "staff" && currentUser.role === "director";
-
-  const supplierDebt = requests
-    .filter((request: any) => request.status === "fulfilled" || request.status === "paid")
-    .reduce((sum: number, request: any) => sum + Number(request.amount ?? 0), 0);
-  const supplierPayments = outflows.reduce(
-    (sum: number, payment: any) => sum + Number(payment.amount ?? 0),
-    0,
-  );
-
-  const eligibleLoans = useMemo(
-    () =>
-      loans.filter(
-        (loan: any) =>
-          loan.member_id === requestForm.memberId &&
-          (loan.loan_kind ?? "stock") === requestForm.kind &&
-          loan.status !== "closed" &&
-          loan.status !== "rejected",
-      ),
-    [loans, requestForm.kind, requestForm.memberId],
-  );
-
-  const internalMatch = useMemo(() => {
-    if (requestForm.kind !== "stock" || !requestForm.commodityName || requestForm.quantity <= 0) {
-      return null;
-    }
-    const search = requestForm.commodityName.trim().toLowerCase();
-    return (
-      internalStore.find((item: any) => {
-        const sameKind = String(item.item_kind ?? "") === "stock";
-        const sameName = String(item.item_name ?? "")
-          .toLowerCase()
-          .includes(search);
-        const enough = Number(item.quantity_available ?? 0) >= requestForm.quantity;
-        return sameKind && sameName && enough;
-      }) ?? null
-    );
-  }, [internalStore, requestForm.commodityName, requestForm.kind, requestForm.quantity]);
-
-  const matchingSuppliers = useMemo(() => {
-    const sameKindSuppliers = suppliers.filter(
-      (supplier: any) => String(supplier.kind ?? "") === requestForm.kind,
-    );
-    if (requestForm.kind !== "stock" || !requestForm.commodityName.trim()) {
-      return sameKindSuppliers;
-    }
-    const search = requestForm.commodityName.trim().toLowerCase();
-    const matchingIds = new Set(
-      supplierInventory
-        .filter(
-          (item: any) =>
-            String(item.item_kind ?? "") === "stock" &&
-            String(item.item_name ?? "")
-              .toLowerCase()
-              .includes(search),
-        )
-        .map((item: any) => String(item.supplier_id ?? "")),
-    );
-    return sameKindSuppliers.filter((supplier: any) => matchingIds.has(String(supplier.id ?? "")));
-  }, [requestForm.commodityName, requestForm.kind, supplierInventory, suppliers]);
+  const loans = workspace?.loans ?? [];
+  const supplierInventory = workspace?.supplierInventory ?? [];
 
   const supplierDebtById = useMemo(() => {
     const totals = new Map<string, number>();
@@ -292,91 +138,112 @@ function SuppliersPage() {
     return totals;
   }, [outflows]);
 
+  const totalDebt = suppliers.reduce((sum: number, supplier: any) => {
+    return (
+      sum +
+      Math.max(
+        0,
+        (supplierDebtById.get(supplier.id) ?? 0) - (supplierPaymentsById.get(supplier.id) ?? 0),
+      )
+    );
+  }, 0);
+
+  const filteredRequestSuppliers = normalSuppliers.filter(
+    (supplier: any) => String(supplier.kind ?? "") === requestForm.kind,
+  );
+  const eligibleLoans = loans.filter(
+    (loan: any) =>
+      loan.member_id === requestForm.memberId &&
+      (loan.loan_kind ?? "stock") === requestForm.kind &&
+      loan.status !== "closed" &&
+      loan.status !== "rejected",
+  );
+  const canPaySuppliers = currentUser.role === "director";
+
   async function runAction(action: () => Promise<void>, success: string) {
     try {
       setBusy(true);
       await action();
-      if (success) toast.success(success);
+      toast.success(success);
       await refresh();
     } catch (error: any) {
-      toast.error(error?.message ?? "That action could not be completed.");
+      toast.error(error?.message ?? "Action failed.");
     } finally {
       setBusy(false);
     }
   }
 
+  function register() {
+    const payload = {
+      ...registerForm,
+      kind: registerForm.supplierClass === "special_broker" ? "service" : registerForm.kind,
+      registrationCategory:
+        registerForm.supplierClass === "special_broker"
+          ? "services"
+          : registerForm.registrationCategory,
+      name:
+        registerForm.supplierClass === "special_broker"
+          ? [registerForm.individualFirstName, registerForm.individualSecondName, registerForm.individualThirdName]
+              .filter(Boolean)
+              .join(" ")
+              .trim()
+          : registerForm.name,
+      location: registerForm.physicalLocation || registerForm.subCountyTown,
+      documentChecklist: {},
+    };
+    return runAction(async () => {
+      await registerSupplier({ data: payload });
+      setRegisterForm(emptyRegisterForm());
+    }, "Supplier registered.");
+  }
+
+  function sendRequest() {
+    return runAction(async () => {
+      await createSupplierRequest({
+        data: {
+          supplierId: requestForm.supplierId,
+          memberId: requestForm.memberId,
+          loanId: requestForm.loanId || undefined,
+          kind: requestForm.kind,
+          amount: requestForm.amount,
+          detail: {
+            item: requestForm.commodityName,
+            quantity: requestForm.quantity,
+            unit: requestForm.unit,
+            vehicle: requestForm.vehiclePlate,
+            fuelType: requestForm.fuelType,
+            unitPrice: requestForm.unitPrice,
+            notes: requestForm.notes,
+            driverMemberId: requestForm.memberId,
+          },
+        },
+      });
+      setRequestForm((current) => ({
+        ...current,
+        loanId: "",
+        amount: 0,
+        commodityName: "",
+        quantity: 0,
+        unitPrice: 0,
+        vehiclePlate: "",
+        fuelType: "",
+        notes: "",
+      }));
+    }, "Supplier request sent.");
+  }
+
   return (
     <>
-      {mode === "staff" ? (
-        <AppHeader
-          title="Supplier Hub"
-          subtitle="Register suppliers, check store stock first, dispatch supplier-backed loans, and clear supplier debt."
-        />
-      ) : (
-        <header className="border-b border-border bg-card/70 px-6 py-5 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                Sauti Microfinance
-              </div>
-              <h1 className="mt-1 font-display text-2xl font-semibold text-foreground">
-                {authMode === "staff" ? "Supplier Portal Simulation" : "Supplier Portal"}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {authMode === "staff"
-                  ? `Viewing as ${activeSupplierName}. Confirm requests, maintain stock, and inspect supplier debt from the portal view.`
-                  : "Confirm requests, maintain your stock list, and track what Sauti still owes you."}
-              </p>
-            </div>
-            {authMode === "staff" ? (
-              <button
-                onClick={() => setSimulatedSupplierId("")}
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
-              >
-                Back to supplier hub
-              </button>
-            ) : (
-              <button
-                onClick={() => void logout()}
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
-              >
-                Sign out
-              </button>
-            )}
-          </div>
-        </header>
-      )}
-
-      <main className="flex-1 space-y-6 p-6 lg:p-8">
-        {mode === "staff" ? <SectionTabs section="members" /> : null}
-
+      <AppHeader
+        title="Suppliers"
+        subtitle="Register normal suppliers and special broker suppliers. Supplier self-service lives in Supplier Portal."
+      />
+      <main className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            label={mode === "staff" ? "Suppliers" : "Open requests"}
-            value={
-              mode === "staff"
-                ? suppliers.length
-                : requests.filter((row: any) => row.status === "sent").length
-            }
-            icon={<Building2 className="h-5 w-5" />}
-          />
-          <StatCard
-            label="Outstanding supplier debt"
-            value={fmtKES(Math.max(0, supplierDebt - supplierPayments))}
-            icon={<Truck className="h-5 w-5" />}
-            tone="warning"
-          />
-          <StatCard
-            label="Supplier payments"
-            value={fmtKES(supplierPayments)}
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            tone="success"
-          />
-          <StatCard
-            label={mode === "staff" ? "Internal store SKUs" : "Inventory lines"}
-            value={mode === "staff" ? internalStore.length : supplierInventory.length}
-            icon={<Boxes className="h-5 w-5" />}
-          />
+          <StatCard label="Normal suppliers" value={normalSuppliers.length} icon={<Truck className="h-5 w-5" />} />
+          <StatCard label="Special brokers" value={brokerSuppliers.length} icon={<Building2 className="h-5 w-5" />} />
+          <StatCard label="Open requests" value={requests.filter((row: any) => row.status === "sent").length} icon={<ClipboardList className="h-5 w-5" />} />
+          <StatCard label="Outstanding supplier debt" value={fmtKES(totalDebt)} tone="warning" icon={<CheckCircle2 className="h-5 w-5" />} />
         </div>
 
         <div className="flex justify-end">
@@ -389,883 +256,377 @@ function SuppliersPage() {
           </button>
         </div>
 
-        {serverMode === "staff" && mode === "staff" ? (
-          <Section title="Simulate supplier portal">
-            <div className="flex flex-wrap items-end gap-3 p-5">
-              <label className="min-w-[260px] flex-1">
-                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                  Supplier portal to view
-                </span>
-                <Select
-                  value={simulationPickId}
-                  onChange={setSimulationPickId}
-                  options={
-                    allSuppliers.length
-                      ? allSuppliers.map((supplier: any) => [
-                          supplier.id,
-                          `${supplier.name} (${kindLabel(supplier.kind)})`,
-                        ])
-                      : [["", "No suppliers registered"]]
+        <Section title="Register supplier">
+          <div className="space-y-4 p-5">
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  ["normal", "Normal supplier"],
+                  ["special_broker", "Special broker"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() =>
+                    setRegisterForm((current) => ({
+                      ...current,
+                      supplierClass: value,
+                      supplierType: value === "special_broker" ? "individual" : current.supplierType,
+                      kind: value === "special_broker" ? "service" : current.kind,
+                      registrationCategory:
+                        value === "special_broker" ? "services" : current.registrationCategory,
+                    }))
                   }
-                />
-              </label>
-              <button
-                disabled={busy || !simulationPickId}
-                onClick={() => setSimulatedSupplierId(simulationPickId)}
-                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
-              >
-                <Eye className="h-4 w-4" /> Simulate portal
-              </button>
+                  className={`rounded-md border px-3 py-2 text-left text-sm font-medium ${
+                    registerForm.supplierClass === value
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:bg-muted"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-          </Section>
-        ) : null}
 
-        {mode === "staff" ? (
-          <div className="grid gap-6 xl:grid-cols-3">
-            <div className="xl:col-span-2">
-              <Section title="Register supplier">
-                <div className="space-y-4 p-5">
-                  <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        ["individual", "Individual / Sole Proprietor"],
-                        ["company", "Limited Company / Partnership"],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() =>
-                          setRegisterForm((current) => ({ ...current, supplierType: value }))
-                        }
-                        className={`rounded-md border px-3 py-2 text-left text-xs font-medium ${
-                          registerForm.supplierType === value
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-border hover:bg-muted"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Select
-                      value={registerForm.registrationCategory}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({
-                          ...current,
-                          registrationCategory: value as SupplierRegistrationCategory,
-                          kind: value === "goods" ? current.kind : "service",
-                        }))
-                      }
-                      options={[
-                        ["goods", "Goods / Products"],
-                        ["services", "Services"],
-                        ["works", "Works / Construction"],
-                      ]}
-                    />
-                    <Select
-                      value={registerForm.kind}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, kind: value as SupplierKind }))
-                      }
-                      options={[
-                        ["stock", "Stock / goods"],
-                        ["fuel", "Fuel"],
-                        ["service", "Service / works"],
-                      ]}
-                    />
-                  </div>
-
-                  {registerForm.supplierType === "individual" ? (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-3 gap-2">
-                        <Input
-                          value={registerForm.individualFirstName}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              individualFirstName: value,
-                            }))
-                          }
-                          placeholder="First name"
-                        />
-                        <Input
-                          value={registerForm.individualSecondName}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              individualSecondName: value,
-                            }))
-                          }
-                          placeholder="Second name"
-                        />
-                        <Input
-                          value={registerForm.individualThirdName}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              individualThirdName: value,
-                            }))
-                          }
-                          placeholder="Third name"
-                        />
-                      </div>
-                      <Input
-                        value={registerForm.nationalId}
-                        onChange={(value) =>
-                          setRegisterForm((current) => ({ ...current, nationalId: value }))
-                        }
-                        placeholder="National ID / Passport No."
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <Select
-                          value={registerForm.gender}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              gender: value as "Male" | "Female",
-                            }))
-                          }
-                          options={[
-                            ["Male", "Male"],
-                            ["Female", "Female"],
-                          ]}
-                        />
-                        <Input
-                          type="date"
-                          value={registerForm.dateOfBirth}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({ ...current, dateOfBirth: value }))
-                          }
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <Input
-                        value={registerForm.name}
-                        onChange={(value) =>
-                          setRegisterForm((current) => ({ ...current, name: value }))
-                        }
-                        placeholder="Registered business / company name"
-                      />
-                      <Input
-                        value={registerForm.businessRegistrationNumber}
-                        onChange={(value) =>
-                          setRegisterForm((current) => ({
-                            ...current,
-                            businessRegistrationNumber: value,
-                          }))
-                        }
-                        placeholder="Business registration / certificate No."
-                      />
-                      <Input
-                        type="date"
-                        value={registerForm.registrationDate}
-                        onChange={(value) =>
-                          setRegisterForm((current) => ({ ...current, registrationDate: value }))
-                        }
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input
-                          value={registerForm.contactPerson}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({ ...current, contactPerson: value }))
-                          }
-                          placeholder="Primary contact person"
-                        />
-                        <Input
-                          value={registerForm.contactPersonDesignation}
-                          onChange={(value) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              contactPersonDesignation: value,
-                            }))
-                          }
-                          placeholder="Designation"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.phone}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, phone: value }))
-                      }
-                      placeholder="Phone number"
-                    />
-                    <Input
-                      value={registerForm.alternativePhone}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, alternativePhone: value }))
-                      }
-                      placeholder="Alternative phone"
-                    />
-                  </div>
+            {registerForm.supplierClass === "normal" ? (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <Select
+                  value={registerForm.supplierType}
+                  onChange={(value) =>
+                    setRegisterForm((current) => ({ ...current, supplierType: value as SupplierType }))
+                  }
+                  options={[
+                    ["individual", "Individual"],
+                    ["company", "Company"],
+                  ]}
+                />
+                <Select
+                  value={registerForm.registrationCategory}
+                  onChange={(value) =>
+                    setRegisterForm((current) => ({
+                      ...current,
+                      registrationCategory: value as RegistrationCategory,
+                      kind: value === "goods" ? current.kind : "service",
+                    }))
+                  }
+                  options={[
+                    ["goods", "Goods / products"],
+                    ["services", "Services"],
+                    ["works", "Works"],
+                  ]}
+                />
+                <Select
+                  value={registerForm.kind}
+                  onChange={(value) =>
+                    setRegisterForm((current) => ({ ...current, kind: value as SupplierKind }))
+                  }
+                  options={[
+                    ["stock", "Stock / goods"],
+                    ["fuel", "Fuel"],
+                    ["service", "Service"],
+                  ]}
+                />
+                {registerForm.supplierType === "company" ? (
                   <Input
-                    type="email"
-                    value={registerForm.email}
-                    onChange={(value) =>
-                      setRegisterForm((current) => ({ ...current, email: value }))
-                    }
-                    placeholder="Email address"
+                    value={registerForm.name}
+                    onChange={(name) => setRegisterForm({ ...registerForm, name })}
+                    placeholder="Company / business name"
                   />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.postalAddress}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, postalAddress: value }))
-                      }
-                      placeholder="Postal address / P.O. Box"
-                    />
-                    <Input
-                      value={registerForm.postalCodeTown}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, postalCodeTown: value }))
-                      }
-                      placeholder="Postal code & town"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.county}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, county: value }))
-                      }
-                      placeholder="County"
-                    />
-                    <Input
-                      value={registerForm.subCountyTown}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, subCountyTown: value }))
-                      }
-                      placeholder="Sub-county / town"
-                    />
-                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+                Special brokers do not supply stock, fuel, or commodities. They register people in
+                their supplier portal and keep each person's deposits, withdrawals, and balance.
+              </div>
+            )}
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <Input
+                value={registerForm.individualFirstName}
+                onChange={(individualFirstName) =>
+                  setRegisterForm({ ...registerForm, individualFirstName })
+                }
+                placeholder="First name"
+              />
+              <Input
+                value={registerForm.individualSecondName}
+                onChange={(individualSecondName) =>
+                  setRegisterForm({ ...registerForm, individualSecondName })
+                }
+                placeholder="Second name"
+              />
+              <Input
+                value={registerForm.individualThirdName}
+                onChange={(individualThirdName) =>
+                  setRegisterForm({ ...registerForm, individualThirdName })
+                }
+                placeholder="Third name"
+              />
+              <Input
+                value={registerForm.nationalId}
+                onChange={(nationalId) => setRegisterForm({ ...registerForm, nationalId })}
+                placeholder="ID / passport number"
+              />
+              <Input
+                value={registerForm.phone}
+                onChange={(phone) => setRegisterForm({ ...registerForm, phone })}
+                placeholder="Phone"
+              />
+              <Input
+                value={registerForm.email}
+                onChange={(email) => setRegisterForm({ ...registerForm, email })}
+                placeholder="Email"
+              />
+              <Input
+                value={registerForm.county}
+                onChange={(county) => setRegisterForm({ ...registerForm, county })}
+                placeholder="County"
+              />
+              <Input
+                value={registerForm.physicalLocation}
+                onChange={(physicalLocation) =>
+                  setRegisterForm({ ...registerForm, physicalLocation })
+                }
+                placeholder={
+                  registerForm.supplierClass === "special_broker"
+                    ? "Area of work"
+                    : "Physical location"
+                }
+              />
+            </div>
+
+            {registerForm.supplierClass === "normal" ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <Input
-                    value={registerForm.physicalLocation}
-                    onChange={(value) =>
-                      setRegisterForm((current) => ({ ...current, physicalLocation: value }))
+                    value={registerForm.businessRegistrationNumber}
+                    onChange={(businessRegistrationNumber) =>
+                      setRegisterForm({ ...registerForm, businessRegistrationNumber })
                     }
-                    placeholder="Physical location"
+                    placeholder="Business registration number"
                   />
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.kraPin}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, kraPin: value.toUpperCase() }))
-                      }
-                      placeholder="KRA PIN number"
-                    />
-                    <Input
-                      value={registerForm.taxComplianceCertificateNumber}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({
-                          ...current,
-                          taxComplianceCertificateNumber: value,
-                        }))
-                      }
-                      placeholder="Tax compliance certificate No."
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Select
-                      value={registerForm.agpoCategory}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({
-                          ...current,
-                          agpoCategory: value as AgpoCategory,
-                        }))
-                      }
-                      options={[
-                        ["not_applicable", "AGPO: Not applicable"],
-                        ["youth", "AGPO: Youth"],
-                        ["women", "AGPO: Women"],
-                        ["pwd", "AGPO: PWD"],
-                      ]}
-                    />
-                    <Input
-                      value={registerForm.regulatoryLicenseNumber}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({
-                          ...current,
-                          regulatoryLicenseNumber: value,
-                        }))
-                      }
-                      placeholder="Regulatory license No."
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.bankName}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, bankName: value }))
-                      }
-                      placeholder="Bank name"
-                    />
-                    <Input
-                      value={registerForm.bankBranch}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, bankBranch: value }))
-                      }
-                      placeholder="Bank branch"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={registerForm.accountName}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, accountName: value }))
-                      }
-                      placeholder="Account name"
-                    />
-                    <Input
-                      value={registerForm.accountNumber}
-                      onChange={(value) =>
-                        setRegisterForm((current) => ({ ...current, accountNumber: value }))
-                      }
-                      placeholder="Account number"
-                    />
-                  </div>
+                  <Input
+                    value={registerForm.kraPin}
+                    onChange={(kraPin) => setRegisterForm({ ...registerForm, kraPin })}
+                    placeholder="KRA PIN"
+                  />
+                  <Input
+                    value={registerForm.bankName}
+                    onChange={(bankName) => setRegisterForm({ ...registerForm, bankName })}
+                    placeholder="Bank name"
+                  />
+                  <Input
+                    value={registerForm.bankBranch}
+                    onChange={(bankBranch) => setRegisterForm({ ...registerForm, bankBranch })}
+                    placeholder="Bank branch"
+                  />
+                  <Input
+                    value={registerForm.accountName}
+                    onChange={(accountName) => setRegisterForm({ ...registerForm, accountName })}
+                    placeholder="Account name"
+                  />
+                  <Input
+                    value={registerForm.accountNumber}
+                    onChange={(accountNumber) => setRegisterForm({ ...registerForm, accountNumber })}
+                    placeholder="Account number"
+                  />
                   <Input
                     value={registerForm.mpesaPaybillTill}
-                    onChange={(value) =>
-                      setRegisterForm((current) => ({ ...current, mpesaPaybillTill: value }))
+                    onChange={(mpesaPaybillTill) =>
+                      setRegisterForm({ ...registerForm, mpesaPaybillTill })
                     }
-                    placeholder="M-Pesa Paybill / Till (optional)"
-                  />
-
-                  <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
-                    {supplierDocumentOptions(registerForm.supplierType).map(([key, label]) => (
-                      <label key={key} className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={!!registerForm.documentChecklist[key]}
-                          onChange={(event) =>
-                            setRegisterForm((current) => ({
-                              ...current,
-                              documentChecklist: {
-                                ...current.documentChecklist,
-                                [key]: event.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                  </div>
-
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      runAction(async () => {
-                        const result = await registerSupplier({
-                          data: registerForm,
-                        });
-                        setRegisterForm(emptyRegisterForm());
-                        toast.success(`Supplier SBC number: ${result.memberId}`);
-                      }, "")
-                    }
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                  >
-                    <Plus className="h-4 w-4" /> Save supplier
-                  </button>
-                </div>
-              </Section>
-            </div>
-
-            <Section title="Load supplier inventory">
-              <div className="space-y-3 p-5">
-                <Select
-                  value={inventoryForm.supplierId}
-                  onChange={(value) =>
-                    setInventoryForm((current) => ({ ...current, supplierId: value }))
-                  }
-                  options={suppliers.map((supplier: any) => [
-                    supplier.id,
-                    `${supplier.name} (${kindLabel(supplier.kind)})`,
-                  ])}
-                />
-                <Select
-                  value={inventoryForm.itemKind}
-                  onChange={(value) =>
-                    setInventoryForm((current) => ({ ...current, itemKind: value as SupplierKind }))
-                  }
-                  options={[
-                    ["stock", "Stock"],
-                    ["fuel", "Fuel"],
-                    ["service", "Service"],
-                  ]}
-                />
-                <Input
-                  value={inventoryForm.itemName}
-                  onChange={(value) =>
-                    setInventoryForm((current) => ({ ...current, itemName: value }))
-                  }
-                  placeholder="Commodity / service name"
-                />
-                <div className="grid grid-cols-3 gap-2">
-                  <Input
-                    value={inventoryForm.unit}
-                    onChange={(value) =>
-                      setInventoryForm((current) => ({ ...current, unit: value }))
-                    }
-                    placeholder="Unit"
-                  />
-                  <Input
-                    type="number"
-                    value={inventoryForm.quantityAvailable || ""}
-                    onChange={(value) =>
-                      setInventoryForm((current) => ({
-                        ...current,
-                        quantityAvailable: Number(value),
-                      }))
-                    }
-                    placeholder="Qty"
-                  />
-                  <Input
-                    type="number"
-                    value={inventoryForm.unitPrice || ""}
-                    onChange={(value) =>
-                      setInventoryForm((current) => ({ ...current, unitPrice: Number(value) }))
-                    }
-                    placeholder="Unit price"
+                    placeholder="M-Pesa paybill / till"
                   />
                 </div>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    runAction(async () => {
-                      await saveSupplierInventory({
-                        data: inventoryForm,
-                      });
-                      setInventoryForm((current) => ({
-                        ...current,
-                        itemName: "",
-                        quantityAvailable: 0,
-                        unitPrice: 0,
-                      }));
-                    }, "Supplier inventory saved.")
-                  }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border py-2 text-sm hover:bg-muted disabled:opacity-50"
-                >
-                  <Package className="h-4 w-4" /> Save inventory line
-                </button>
-              </div>
-            </Section>
+              </>
+            ) : null}
 
-            <Section title="Load internal store">
-              <div className="space-y-3 p-5">
-                <Select
-                  value={storeForm.itemKind}
-                  onChange={(value) =>
-                    setStoreForm((current) => ({ ...current, itemKind: value as SupplierKind }))
-                  }
-                  options={[
-                    ["stock", "Stock"],
-                    ["fuel", "Fuel"],
-                    ["service", "Service"],
-                  ]}
-                />
-                <Input
-                  value={storeForm.itemName}
-                  onChange={(value) => setStoreForm((current) => ({ ...current, itemName: value }))}
-                  placeholder="Store item name"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    value={storeForm.unit}
-                    onChange={(value) => setStoreForm((current) => ({ ...current, unit: value }))}
-                    placeholder="Unit"
-                  />
-                  <Input
-                    type="number"
-                    value={storeForm.unitPrice || ""}
-                    onChange={(value) =>
-                      setStoreForm((current) => ({ ...current, unitPrice: Number(value) }))
-                    }
-                    placeholder="Unit price"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number"
-                    value={storeForm.quantityAvailable || ""}
-                    onChange={(value) =>
-                      setStoreForm((current) => ({
-                        ...current,
-                        quantityAvailable: Number(value),
-                      }))
-                    }
-                    placeholder="Available"
-                  />
-                  <Input
-                    type="number"
-                    value={storeForm.reorderLevel || ""}
-                    onChange={(value) =>
-                      setStoreForm((current) => ({ ...current, reorderLevel: Number(value) }))
-                    }
-                    placeholder="Reorder level"
-                  />
-                </div>
-                <Select
-                  value={storeForm.preferredSupplierId}
-                  onChange={(value) =>
-                    setStoreForm((current) => ({ ...current, preferredSupplierId: value }))
-                  }
-                  options={[
-                    ["", "No preferred supplier"],
-                    ...suppliers.map((supplier: any) => [supplier.id, supplier.name]),
-                  ]}
-                />
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    runAction(async () => {
-                      await saveInternalStoreItem({ data: storeForm });
-                      setStoreForm((current) => ({
-                        ...current,
-                        itemName: "",
-                        quantityAvailable: 0,
-                        reorderLevel: 0,
-                        unitPrice: 0,
-                      }));
-                    }, "Internal store item saved.")
-                  }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border py-2 text-sm hover:bg-muted disabled:opacity-50"
-                >
-                  <Store className="h-4 w-4" /> Save store item
-                </button>
-              </div>
-            </Section>
+            <Textarea
+              value={registerForm.notes}
+              onChange={(notes) => setRegisterForm({ ...registerForm, notes })}
+              placeholder={
+                registerForm.supplierClass === "special_broker"
+                  ? "Broker notes, route, association, or driver network"
+                  : "Supplier notes"
+              }
+            />
+            <button
+              onClick={register}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" /> Save supplier
+            </button>
           </div>
-        ) : (
-          <Section title="Your supplier profile">
-            <div className="p-5 text-sm text-muted-foreground">
-              Requests assigned to this supplier can be fulfilled here. Fuel requests require the
-              driver's verification code before the loan activates in Sauti.
-            </div>
-          </Section>
-        )}
+        </Section>
 
-        {mode === "staff" ? (
-          <Section title="Source stock, fuel, or service">
-            <div className="grid gap-5 p-5 lg:grid-cols-[1.1fr_1fr]">
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <Select
-                    value={requestForm.kind}
-                    onChange={(value) =>
-                      setRequestForm((current) => ({
-                        ...current,
-                        kind: value as SupplierKind,
-                        supplierId: "",
-                        commodityName: "",
-                        vehiclePlate: "",
-                        fuelType: "",
-                        quantity: 0,
-                        unit: value === "fuel" ? "litres" : "unit",
-                        unitPrice: 0,
-                      }))
-                    }
-                    options={[
-                      ["stock", "Stock"],
-                      ["fuel", "Fuel"],
-                      ["service", "Service"],
-                    ]}
-                  />
-                  <Select
-                    value={requestForm.memberId}
-                    onChange={(value) =>
-                      setRequestForm((current) => ({ ...current, memberId: value, loanId: "" }))
-                    }
-                    options={members.map((member: any) => [
-                      member.id,
-                      `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
-                    ])}
-                  />
-                </div>
-                <Select
-                  value={requestForm.loanId}
-                  onChange={(value) => setRequestForm((current) => ({ ...current, loanId: value }))}
-                  options={[
-                    ["", "No linked loan selected"],
-                    ...eligibleLoans.map((loan: any) => [
-                      loan.id,
-                      `${loan.id} - ${String(loan.supplier_request_status ?? loan.status)} - ${fmtKES(Number(loan.approved_amount ?? loan.principal ?? 0))}`,
-                    ]),
-                  ]}
-                />
-                {requestForm.kind === "fuel" ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      value={requestForm.vehiclePlate}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, vehiclePlate: value }))
-                      }
-                      placeholder="Vehicle / plate"
-                    />
-                    <Input
-                      value={requestForm.fuelType}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, fuelType: value }))
-                      }
-                      placeholder="Fuel type"
-                    />
-                    <Input
-                      type="number"
-                      value={requestForm.quantity || ""}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, quantity: Number(value) }))
-                      }
-                      placeholder="Litres requested"
-                    />
-                    <Input
-                      type="number"
-                      value={requestForm.unitPrice || ""}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, unitPrice: Number(value) }))
-                      }
-                      placeholder="Price per litre"
-                    />
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-3 gap-2">
-                    <Input
-                      value={requestForm.commodityName}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, commodityName: value }))
-                      }
-                      placeholder={requestForm.kind === "service" ? "Service needed" : "Commodity"}
-                    />
-                    <Input
-                      type="number"
-                      value={requestForm.quantity || ""}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, quantity: Number(value) }))
-                      }
-                      placeholder="Qty"
-                    />
-                    <Input
-                      value={requestForm.unit}
-                      onChange={(value) =>
-                        setRequestForm((current) => ({ ...current, unit: value }))
-                      }
-                      placeholder="Unit"
-                    />
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number"
-                    value={requestForm.amount || ""}
-                    onChange={(value) =>
-                      setRequestForm((current) => ({ ...current, amount: Number(value) }))
-                    }
-                    placeholder="Amount to charge"
-                  />
-                  <Select
-                    value={requestForm.supplierId}
-                    onChange={(value) =>
-                      setRequestForm((current) => ({ ...current, supplierId: value }))
-                    }
-                    options={[
-                      ["", "Select supplier"],
-                      ...matchingSuppliers.map((supplier: any) => [
-                        supplier.id,
-                        `${supplier.name} (${kindLabel(supplier.kind)})`,
-                      ]),
-                    ]}
-                  />
-                </div>
+        <Section title="Send supplier-backed request">
+          <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+            <Select
+              value={requestForm.kind}
+              onChange={(kind) =>
+                setRequestForm((current) => ({
+                  ...current,
+                  kind: kind as SupplierKind,
+                  supplierId: normalSuppliers.find((supplier: any) => supplier.kind === kind)?.id ?? "",
+                  loanId: "",
+                }))
+              }
+              options={[
+                ["stock", "Stock"],
+                ["fuel", "Fuel"],
+                ["service", "Service"],
+              ]}
+            />
+            <Select
+              value={requestForm.memberId}
+              onChange={(memberId) => setRequestForm({ ...requestForm, memberId, loanId: "" })}
+              options={members.map((member: any) => [member.id, `${member.name} (${member.id})`])}
+            />
+            <Select
+              value={requestForm.loanId}
+              onChange={(loanId) => setRequestForm({ ...requestForm, loanId })}
+              options={[
+                ["", "No linked loan"],
+                ...eligibleLoans.map((loan: any) => [
+                  loan.id,
+                  `${loan.id} - ${fmtKES(Number(loan.approved_amount ?? loan.principal ?? 0))}`,
+                ]),
+              ]}
+            />
+            <Select
+              value={requestForm.supplierId}
+              onChange={(supplierId) => setRequestForm({ ...requestForm, supplierId })}
+              options={
+                filteredRequestSuppliers.length
+                  ? filteredRequestSuppliers.map((supplier: any) => [
+                      supplier.id,
+                      `${supplier.name} (${kindLabel(supplier.kind)})`,
+                    ])
+                  : [["", "No normal supplier for this kind"]]
+              }
+            />
+            <Input
+              value={requestForm.commodityName}
+              onChange={(commodityName) => setRequestForm({ ...requestForm, commodityName })}
+              placeholder={requestForm.kind === "fuel" ? "Vehicle / route" : "Commodity / service"}
+            />
+            {requestForm.kind === "fuel" ? (
+              <>
                 <Input
-                  value={requestForm.notes}
-                  onChange={(value) => setRequestForm((current) => ({ ...current, notes: value }))}
-                  placeholder="Notes"
+                  value={requestForm.vehiclePlate}
+                  onChange={(vehiclePlate) => setRequestForm({ ...requestForm, vehiclePlate })}
+                  placeholder="Vehicle plate"
                 />
-                <button
-                  disabled={busy || !requestForm.supplierId}
-                  onClick={() =>
-                    runAction(async () => {
-                      const result = await createSupplierRequest({
-                        data: {
-                          supplierId: requestForm.supplierId,
-                          memberId: requestForm.memberId,
-                          loanId: requestForm.loanId || undefined,
-                          kind: requestForm.kind,
-                          amount: requestForm.amount,
-                          detail: {
-                            item: requestForm.commodityName,
-                            quantity: requestForm.quantity,
-                            unit: requestForm.unit,
-                            vehicle: requestForm.vehiclePlate,
-                            fuelType: requestForm.fuelType,
-                            unitPrice: requestForm.unitPrice,
-                            notes: requestForm.notes,
-                            driverMemberId: requestForm.memberId,
-                          },
-                        },
-                      });
-                      if (result.verificationCode) {
-                        toast.success(`Fuel verification code: ${result.verificationCode}`);
-                      }
-                      setRequestForm((current) => ({
-                        ...current,
-                        supplierId: "",
-                        loanId: "",
-                        amount: 0,
-                        commodityName: "",
-                        quantity: 0,
-                        unitPrice: 0,
-                        notes: "",
-                        vehiclePlate: "",
-                        fuelType: "",
-                      }));
-                    }, "Supplier request sent.")
-                  }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  <Truck className="h-4 w-4" /> Send to supplier
-                </button>
-              </div>
+                <Input
+                  value={requestForm.fuelType}
+                  onChange={(fuelType) => setRequestForm({ ...requestForm, fuelType })}
+                  placeholder="Fuel type"
+                />
+              </>
+            ) : null}
+            <Input
+              type="number"
+              value={requestForm.quantity || ""}
+              onChange={(quantity) =>
+                setRequestForm((current) => ({
+                  ...current,
+                  quantity: Number(quantity),
+                  amount: Number(quantity) * current.unitPrice || current.amount,
+                }))
+              }
+              placeholder={requestForm.kind === "fuel" ? "Litres" : "Quantity"}
+            />
+            <Input
+              value={requestForm.unit}
+              onChange={(unit) => setRequestForm({ ...requestForm, unit })}
+              placeholder="Unit"
+            />
+            <Input
+              type="number"
+              value={requestForm.unitPrice || ""}
+              onChange={(unitPrice) =>
+                setRequestForm((current) => ({
+                  ...current,
+                  unitPrice: Number(unitPrice),
+                  amount: current.quantity * Number(unitPrice) || current.amount,
+                }))
+              }
+              placeholder="Unit price"
+            />
+            <Input
+              type="number"
+              value={requestForm.amount || ""}
+              onChange={(amount) => setRequestForm({ ...requestForm, amount: Number(amount) })}
+              placeholder="Total amount"
+            />
+            <Textarea
+              value={requestForm.notes}
+              onChange={(notes) => setRequestForm({ ...requestForm, notes })}
+              placeholder="Request notes"
+            />
+            <button
+              onClick={sendRequest}
+              disabled={busy || !requestForm.supplierId}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              Send request
+            </button>
+          </div>
+        </Section>
 
-              <div className="space-y-4">
-                <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
-                  <div className="font-medium">Internal store check</div>
-                  {internalMatch ? (
-                    <div className="mt-2 space-y-2">
-                      <div className="text-muted-foreground">
-                        {internalMatch.item_name} is already in stock:{" "}
-                        <span className="font-medium text-foreground">
-                          {Number(internalMatch.quantity_available ?? 0)} {internalMatch.unit}
-                        </span>
-                        .
-                      </div>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          runAction(async () => {
-                            await issueInternalStoreLoan({
-                              data: {
-                                itemId: internalMatch.id,
-                                memberId: requestForm.memberId,
-                                loanId: requestForm.loanId || undefined,
-                                quantity: requestForm.quantity,
-                                note: requestForm.notes || `Issued ${internalMatch.item_name}`,
-                              },
-                            });
-                          }, "Issued from internal store.")
-                        }
-                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                      >
-                        <Store className="h-4 w-4" /> Issue from store
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-muted-foreground">
-                      No matching internal stock is currently enough for this request, so the system
-                      should source it from a supplier.
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
-                  <div className="font-medium">Matching suppliers</div>
-                  <div className="mt-2 space-y-2">
-                    {matchingSuppliers.length === 0 ? (
-                      <div className="text-muted-foreground">
-                        No supplier match yet for this commodity or service.
-                      </div>
-                    ) : (
-                      matchingSuppliers.map((supplier: any) => (
-                        <div
-                          key={supplier.id}
-                          className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
-                        >
-                          <div>
-                            <div className="font-medium">{supplier.name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {supplier.location || supplier.phone || kindLabel(supplier.kind)}
-                            </div>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            Owed{" "}
-                            {fmtKES(
-                              Math.max(
-                                0,
-                                (supplierDebtById.get(supplier.id) ?? 0) -
-                                  (supplierPaymentsById.get(supplier.id) ?? 0),
-                              ),
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Section>
-        ) : null}
-
-        <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
-          <Section title={mode === "staff" ? "Supplier directory" : "Your inventory"}>
+        <div className="grid gap-6 xl:grid-cols-[1fr_1.1fr]">
+          <Section title={`Supplier directory (${suppliers.length})`}>
             <div className="overflow-x-auto">
-              {mode === "staff" ? (
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Supplier</th>
+                    <th className="px-5 py-3 text-left">Class</th>
+                    <th className="px-5 py-3 text-left">Kind</th>
+                    <th className="px-5 py-3 text-left">Contact</th>
+                    <th className="px-5 py-3 text-right">Outstanding</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {suppliers.length === 0 ? (
                     <tr>
-                      <th className="px-5 py-3 text-left">Supplier</th>
-                      <th className="px-5 py-3 text-left">SBC supplier No.</th>
-                      <th className="px-5 py-3 text-left">Kind</th>
-                      <th className="px-5 py-3 text-left">Contact</th>
-                      <th className="px-5 py-3 text-right">Outstanding debt</th>
+                      <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                        No suppliers registered yet.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {suppliers.map((supplier: any) => {
-                      const outstanding =
-                        (supplierDebtById.get(supplier.id) ?? 0) -
-                        (supplierPaymentsById.get(supplier.id) ?? 0);
-                      return (
-                        <tr key={supplier.id}>
-                          <td className="px-5 py-3 font-medium">{supplier.name}</td>
-                          <td className="px-5 py-3 text-xs text-muted-foreground">
-                            {supplier.member_id || "Pending"}
-                          </td>
-                          <td className="px-5 py-3 capitalize">{supplier.kind}</td>
-                          <td className="px-5 py-3 text-xs text-muted-foreground">
-                            {supplier.phone || supplier.location || "No contact yet"}
-                          </td>
-                          <td className="px-5 py-3 text-right font-semibold">
-                            {fmtKES(Math.max(0, outstanding))}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="space-y-4 p-5">
-                  <SupplierInventoryForm
-                    busy={busy}
-                    supplierId={workspace?.signedSupplierId ?? suppliers[0]?.id ?? ""}
-                    onSave={async (payload) => {
-                      await runAction(async () => {
-                        await saveSupplierInventory({ data: payload });
-                      }, "Inventory saved.");
-                    }}
-                  />
-                  <InventoryTable rows={supplierInventory} />
-                </div>
-              )}
+                  ) : null}
+                  {suppliers.map((supplier: any) => {
+                    const outstanding =
+                      (supplierDebtById.get(supplier.id) ?? 0) -
+                      (supplierPaymentsById.get(supplier.id) ?? 0);
+                    return (
+                      <tr key={supplier.id}>
+                        <td className="px-5 py-3 font-medium">
+                          {supplier.name}
+                          <div className="text-xs text-muted-foreground">
+                            Login account: {supplier.member_id || "Pending"}
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <Badge tone={supplier.supplier_class === "special_broker" ? "accent" : "default"}>
+                            {supplierClassLabel(supplier.supplier_class)}
+                          </Badge>
+                        </td>
+                        <td className="px-5 py-3">{kindLabel(supplier.kind)}</td>
+                        <td className="px-5 py-3 text-xs text-muted-foreground">
+                          {supplier.phone || supplier.location || "No contact"}
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold">
+                          {fmtKES(Math.max(0, outstanding))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </Section>
 
@@ -1274,7 +635,7 @@ function SuppliersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                   <tr>
-                    <th className="px-5 py-3 text-left">Client / loan</th>
+                    <th className="px-5 py-3 text-left">Client / supplier</th>
                     <th className="px-5 py-3 text-left">Request</th>
                     <th className="px-5 py-3 text-right">Amount</th>
                     <th className="px-5 py-3 text-left">Status</th>
@@ -1285,119 +646,61 @@ function SuppliersPage() {
                   {requests.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
-                        No supplier work is waiting here.
+                        No supplier requests yet.
                       </td>
                     </tr>
                   ) : null}
                   {requests.map((request: any) => {
                     const member = members.find((row: any) => row.id === request.member_id);
                     const supplier = suppliers.find((row: any) => row.id === request.supplier_id);
-                    const requestSummary = summarizeRequest(request);
-                    const verificationValue = verificationInputs[request.id] ?? "";
                     return (
                       <tr key={request.id}>
                         <td className="px-5 py-3">
                           <div className="font-medium">{member?.name ?? request.member_id}</div>
                           <div className="text-xs text-muted-foreground">
-                            {request.loan_id || supplier?.name || "No loan linked"}
+                            {supplier?.name ?? request.supplier_id}
                           </div>
                         </td>
                         <td className="px-5 py-3">
-                          <div className="flex items-center gap-1.5">
-                            {request.kind === "fuel" ? (
-                              <Fuel className="h-3.5 w-3.5" />
-                            ) : request.kind === "service" ? (
-                              <Wrench className="h-3.5 w-3.5" />
-                            ) : (
-                              <Package className="h-3.5 w-3.5" />
-                            )}
-                            {requestSummary}
+                          <div className="capitalize">{request.kind}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {request.commodity_name || request.fuel_type || request.detail?.item || "Request"}
                           </div>
-                          {request.verification_code ? (
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              Driver code: {request.verification_code}
-                            </div>
-                          ) : null}
                         </td>
                         <td className="px-5 py-3 text-right font-semibold">
                           {fmtKES(Number(request.amount ?? 0))}
                         </td>
                         <td className="px-5 py-3 capitalize">{request.status}</td>
-                        <td className="px-5 py-3">
-                          <div className="flex justify-end gap-2">
-                            {request.status === "sent" ? (
-                              <>
-                                {request.kind === "fuel" ? (
-                                  <input
-                                    value={verificationValue}
-                                    onChange={(event) =>
-                                      setVerificationInputs((current) => ({
-                                        ...current,
-                                        [request.id]: event.target.value,
-                                      }))
-                                    }
-                                    placeholder="Driver code"
-                                    className="w-28 rounded-md border border-border bg-muted px-2 py-1 text-xs"
-                                  />
-                                ) : null}
-                                <button
-                                  onClick={() =>
-                                    runAction(
-                                      async () => {
-                                        await markFulfilled({
-                                          data: {
-                                            requestId: request.id,
-                                            verificationCode:
-                                              request.kind === "fuel"
-                                                ? verificationValue
-                                                : undefined,
-                                          },
-                                        });
-                                      },
-                                      request.kind === "fuel"
-                                        ? "Fuel delivery confirmed."
-                                        : "Supplier request fulfilled.",
-                                    )
-                                  }
-                                  className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90"
-                                >
-                                  {request.kind === "fuel" ? (
-                                    <>
-                                      <KeyRound className="mr-1 inline h-3.5 w-3.5" />
-                                      Confirm code
-                                    </>
-                                  ) : (
-                                    "Mark fulfilled"
-                                  )}
-                                </button>
-                              </>
-                            ) : null}
-                            {request.status === "fulfilled" && canPaySuppliers ? (
-                              <button
-                                onClick={() =>
-                                  runAction(async () => {
-                                    await recordOutflow({
-                                      data: {
-                                        kind: "supplier_payment",
-                                        amount: Number(request.amount ?? 0),
-                                        receiverName: supplier?.name ?? "Supplier",
-                                        receiverPhone: supplier?.phone ?? undefined,
-                                        method: "cash",
-                                        supplierId: request.supplier_id,
-                                        loanId: request.loan_id ?? undefined,
-                                        memberId: request.member_id ?? undefined,
-                                        supplierRequestId: request.id,
-                                        note: `Payment for ${request.kind} request ${request.id}`,
-                                      },
-                                    });
-                                  }, "Supplier payment recorded.")
-                                }
-                                className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
-                              >
-                                Pay supplier
-                              </button>
-                            ) : null}
-                          </div>
+                        <td className="px-5 py-3 text-right">
+                          {request.status === "fulfilled" && canPaySuppliers ? (
+                            <button
+                              onClick={() =>
+                                runAction(async () => {
+                                  await recordOutflow({
+                                    data: {
+                                      kind: "supplier_payment",
+                                      amount: Number(request.amount ?? 0),
+                                      receiverName: supplier?.name ?? "Supplier",
+                                      receiverPhone: supplier?.phone ?? undefined,
+                                      method: "cash",
+                                      supplierId: request.supplier_id,
+                                      loanId: request.loan_id ?? undefined,
+                                      memberId: request.member_id ?? undefined,
+                                      supplierRequestId: request.id,
+                                      note: `Payment for ${request.kind} request ${request.id}`,
+                                    },
+                                  });
+                                }, "Supplier payment recorded.")
+                              }
+                              className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                            >
+                              Pay supplier
+                            </button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              {request.status === "sent" ? "Supplier portal" : "-"}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1408,144 +711,56 @@ function SuppliersPage() {
           </Section>
         </div>
 
-        {mode === "staff" ? (
-          <div className="grid gap-6 xl:grid-cols-2">
-            <Section title="Internal store levels">
-              <InventoryTable rows={internalStore} />
-            </Section>
-            <Section title="Supplier catalogue">
-              <InventoryTable rows={supplierInventory} />
-            </Section>
-          </div>
-        ) : null}
+        <Section title={`Supplier catalogue (${supplierInventory.length})`}>
+          <InventoryTable rows={supplierInventory} suppliers={suppliers} />
+        </Section>
       </main>
     </>
   );
 }
 
-function SupplierInventoryForm({
-  supplierId,
-  busy,
-  onSave,
-}: {
-  supplierId: string;
-  busy: boolean;
-  onSave: (payload: {
-    supplierId: string;
-    itemKind: SupplierKind;
-    itemName: string;
-    unit: string;
-    quantityAvailable: number;
-    unitPrice: number;
-  }) => Promise<void>;
-}) {
-  const [form, setForm] = useState({
-    itemKind: "stock" as SupplierKind,
-    itemName: "",
-    unit: "unit",
-    quantityAvailable: 0,
-    unitPrice: 0,
-  });
-
-  return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4">
-      <div className="font-medium">Add inventory line</div>
-      <Select
-        value={form.itemKind}
-        onChange={(value) =>
-          setForm((current) => ({ ...current, itemKind: value as SupplierKind }))
-        }
-        options={[
-          ["stock", "Stock"],
-          ["fuel", "Fuel"],
-          ["service", "Service"],
-        ]}
-      />
-      <Input
-        value={form.itemName}
-        onChange={(value) => setForm((current) => ({ ...current, itemName: value }))}
-        placeholder="Commodity / service"
-      />
-      <div className="grid grid-cols-3 gap-2">
-        <Input
-          value={form.unit}
-          onChange={(value) => setForm((current) => ({ ...current, unit: value }))}
-          placeholder="Unit"
-        />
-        <Input
-          type="number"
-          value={form.quantityAvailable || ""}
-          onChange={(value) =>
-            setForm((current) => ({ ...current, quantityAvailable: Number(value) }))
-          }
-          placeholder="Qty"
-        />
-        <Input
-          type="number"
-          value={form.unitPrice || ""}
-          onChange={(value) => setForm((current) => ({ ...current, unitPrice: Number(value) }))}
-          placeholder="Unit price"
-        />
-      </div>
-      <button
-        disabled={busy}
-        onClick={() =>
-          onSave({
-            supplierId,
-            ...form,
-          }).then(() =>
-            setForm({
-              itemKind: "stock",
-              itemName: "",
-              unit: "unit",
-              quantityAvailable: 0,
-              unitPrice: 0,
-            }),
-          )
-        }
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-      >
-        <Plus className="h-4 w-4" /> Save inventory
-      </button>
-    </div>
-  );
-}
-
-function InventoryTable({ rows }: { rows: any[] }) {
+function InventoryTable({ rows, suppliers }: { rows: any[]; suppliers: any[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
           <tr>
             <th className="px-5 py-3 text-left">Item</th>
+            <th className="px-5 py-3 text-left">Supplier</th>
             <th className="px-5 py-3 text-left">Kind</th>
             <th className="px-5 py-3 text-right">Qty</th>
-            <th className="px-5 py-3 text-right">Unit price</th>
+            <th className="px-5 py-3 text-right">Selling</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={4} className="px-5 py-8 text-center text-muted-foreground">
-                No inventory loaded yet.
+              <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                No supplier catalogue items yet.
               </td>
             </tr>
           ) : null}
-          {rows.map((row: any) => (
-            <tr key={row.id}>
-              <td className="px-5 py-3 font-medium">
-                {row.item_name}
-                <div className="text-xs text-muted-foreground">{row.unit || "unit"}</div>
-              </td>
-              <td className="px-5 py-3 capitalize">{row.item_kind}</td>
-              <td className="px-5 py-3 text-right">
-                {Number(row.quantity_available ?? 0).toLocaleString()}
-              </td>
-              <td className="px-5 py-3 text-right font-semibold">
-                {fmtKES(Number(row.unit_price ?? 0))}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row: any) => {
+            const supplier = suppliers.find((item: any) => item.id === row.supplier_id);
+            return (
+              <tr key={row.id}>
+                <td className="px-5 py-3 font-medium">
+                  {row.item_name}
+                  <div className="text-xs text-muted-foreground">
+                    {[row.brand, row.quality, row.unit].filter(Boolean).join(" / ")}
+                  </div>
+                </td>
+                <td className="px-5 py-3">{supplier?.name ?? row.supplier_id}</td>
+                <td className="px-5 py-3">{kindLabel(row.item_kind)}</td>
+                <td className="px-5 py-3 text-right">
+                  {Number(row.quantity_available ?? 0).toLocaleString()}
+                </td>
+                <td className="px-5 py-3 text-right font-semibold">
+                  {fmtKES(Number(row.selling_price ?? row.unit_price ?? 0))}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1558,36 +773,8 @@ function kindLabel(value: string) {
   return "Stock";
 }
 
-function supplierDocumentOptions(
-  supplierType: SupplierType,
-): Array<[keyof typeof emptySupplierDocuments, string]> {
-  const shared: Array<[keyof typeof emptySupplierDocuments, string]> = [
-    ["kraPinCertificate", "Valid KRA PIN certificate"],
-    ["taxComplianceCertificate", "Valid tax compliance certificate"],
-  ];
-  if (supplierType === "company") {
-    return [
-      ["businessRegistrationCertificate", "Certificate of incorporation / registration"],
-      ...shared,
-      ["cr12", "CR12 form"],
-      ["agpoCertificate", "AGPO certificate, if applicable"],
-    ];
-  }
-  return [
-    ["nationalId", "Copy of national ID / passport"],
-    ...shared,
-    ["agpoCertificate", "AGPO certificate, if applicable"],
-  ];
-}
-
-function summarizeRequest(request: any) {
-  if (request.kind === "fuel") {
-    return `${request.fuel_type || "Fuel"} for ${request.vehicle_plate || "vehicle"}`;
-  }
-  if (request.kind === "service") {
-    return request.commodity_name || request.detail?.serviceType || "Service request";
-  }
-  return `${request.commodity_name || request.detail?.item || "Stock"} ${request.quantity_requested ? `x ${request.quantity_requested}` : ""}`.trim();
+function supplierClassLabel(value: string) {
+  return value === "special_broker" ? "Special broker" : "Normal";
 }
 
 function Input({
@@ -1608,6 +795,26 @@ function Input({
       placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
       className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+    />
+  );
+}
+
+function Textarea({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <textarea
+      rows={3}
+      value={value}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+      className="min-h-20 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm md:col-span-2 xl:col-span-4"
     />
   );
 }

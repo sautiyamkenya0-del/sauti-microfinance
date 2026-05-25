@@ -40,6 +40,11 @@ function isMissingColumnError(error: any, column: string) {
   return error?.code === "42703" || message.includes(column);
 }
 
+function isMissingRelationError(error: any) {
+  const message = String(error?.message ?? "").toLowerCase();
+  return error?.code === "42P01" || message.includes("does not exist");
+}
+
 function mapStaffMessageRow(row: DbRow) {
   const attachment =
     row.attachment && typeof row.attachment === "object"
@@ -73,6 +78,8 @@ function mapMemoRow(row: DbRow) {
     by: readText(row.by_name),
     byStaffId: optionalText(row.by_staff_id),
     audience: optionalText(row.audience) ?? "staff",
+    targetMemberId: optionalText(row.target_member_id),
+    targetSupplierId: optionalText(row.target_supplier_id),
     kind: optionalText(row.notice_kind) ?? "info",
     expiresAt: optionalText(row.expires_at),
     createdAt: readText(row.created_at),
@@ -282,33 +289,103 @@ export const listStaffMemos = createServerFn({ method: "POST" }).handler(async (
   return (data ?? []).map((row) => mapMemoRow(row as DbRow));
 });
 
-export const listClientNotices = createServerFn({ method: "GET" }).handler(async () => {
-  const session = await requireSignedInSession();
-  if (session.authMode === "member") {
-    await requireMemberActor();
-  } else {
-    await requireStaffActor();
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-  const supabaseAdmin = requireSupabaseAdmin();
-  const { data, error } = await supabaseAdmin
-    .from("staff_memos")
-    .select("*")
-    .in("audience", ["members", "all"])
-    .or(`expires_at.is.null,expires_at.gte.${today}`)
-    .order("memo_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  if (error) {
-    if (isMissingColumnError(error, "audience") || isMissingColumnError(error, "expires_at")) {
-      return [];
+export const listClientNotices = createServerFn({ method: "GET" })
+  .inputValidator((data: { memberId?: string } | undefined) => ({
+    memberId: data?.memberId?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    let targetMemberId = data.memberId ?? "";
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      targetMemberId = member.id;
+    } else {
+      await requireStaffActor();
     }
-    throw new Error(error.message);
-  }
-  return (data ?? []).map((row) => mapMemoRow(row as DbRow));
-});
+
+    const today = new Date().toISOString().slice(0, 10);
+    const supabaseAdmin = requireSupabaseAdmin();
+    const { data: rows, error } = await supabaseAdmin
+      .from("staff_memos")
+      .select("*")
+      .in("audience", ["members", "member", "all"])
+      .or(`expires_at.is.null,expires_at.gte.${today}`)
+      .order("memo_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(40);
+
+    if (error) {
+      if (
+        isMissingColumnError(error, "audience") ||
+        isMissingColumnError(error, "expires_at") ||
+        isMissingColumnError(error, "target_member_id")
+      ) {
+        return [];
+      }
+      throw new Error(error.message);
+    }
+    return (rows ?? [])
+      .filter((row) => {
+        const memo = row as DbRow;
+        if (readText(memo.audience) !== "member") return true;
+        return !!targetMemberId && readText(memo.target_member_id) === targetMemberId;
+      })
+      .map((row) => mapMemoRow(row as DbRow));
+  });
+
+export const listSupplierNotices = createServerFn({ method: "GET" })
+  .inputValidator((data: { supplierId?: string } | undefined) => ({
+    supplierId: data?.supplierId?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    const supabaseAdmin = requireSupabaseAdmin();
+    let targetSupplierId = data.supplierId ?? "";
+
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      const { data: supplier, error: supplierError } = await supabaseAdmin
+        .from("suppliers")
+        .select("id")
+        .eq("member_id", member.id)
+        .maybeSingle();
+      if (supplierError) throw new Error(supplierError.message);
+      targetSupplierId = readText((supplier as DbRow | null)?.id);
+    } else {
+      await requireStaffActor();
+    }
+
+    if (!targetSupplierId) return [];
+
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: rows, error } = await supabaseAdmin
+      .from("staff_memos")
+      .select("*")
+      .in("audience", ["suppliers", "supplier", "all"])
+      .or(`expires_at.is.null,expires_at.gte.${today}`)
+      .order("memo_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(40);
+
+    if (error) {
+      if (
+        isMissingColumnError(error, "audience") ||
+        isMissingColumnError(error, "expires_at") ||
+        isMissingColumnError(error, "target_supplier_id")
+      ) {
+        return [];
+      }
+      throw new Error(error.message);
+    }
+
+    return (rows ?? [])
+      .filter((row) => {
+        const memo = row as DbRow;
+        if (readText(memo.audience) !== "supplier") return true;
+        return readText(memo.target_supplier_id) === targetSupplierId;
+      })
+      .map((row) => mapMemoRow(row as DbRow));
+  });
 
 export const listApprovalRequests = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();
@@ -540,6 +617,28 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
           )
           .in("loan_kind", ["fuel", "stock", "service"])
           .order("created_at", { ascending: false });
+  const brokerClientsQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("supplier_broker_clients")
+          .select("*")
+          .eq("supplier_id", signedSupplierId)
+          .order("updated_at", { ascending: false })
+      : supabaseAdmin
+          .from("supplier_broker_clients")
+          .select("*")
+          .order("updated_at", { ascending: false });
+  const brokerTransactionsQuery =
+    mode === "supplier"
+      ? supabaseAdmin
+          .from("supplier_broker_client_transactions")
+          .select("*")
+          .eq("supplier_id", signedSupplierId)
+          .order("created_at", { ascending: false })
+      : supabaseAdmin
+          .from("supplier_broker_client_transactions")
+          .select("*")
+          .order("created_at", { ascending: false });
 
   const [
     suppliersResult,
@@ -549,6 +648,8 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
     loansResult,
     membersResult,
     internalStoreResult,
+    brokerClientsResult,
+    brokerTransactionsResult,
   ] = await Promise.all([
     suppliersQuery,
     supplierInventoryQuery,
@@ -565,6 +666,8 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
           .from("internal_store_items")
           .select("*")
           .order("updated_at", { ascending: false }),
+    brokerClientsQuery,
+    brokerTransactionsQuery,
   ]);
 
   const failed = [
@@ -575,7 +678,9 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
     loansResult,
     membersResult,
     internalStoreResult,
-  ].find((result) => result.error);
+    brokerClientsResult,
+    brokerTransactionsResult,
+  ].find((result) => result.error && !isMissingRelationError(result.error));
   if (failed?.error) throw new Error(failed.error.message);
 
   const visibleSupplierMemberIds = new Set([
@@ -603,6 +708,10 @@ export const listSupplierWorkspaceRecord = createServerFn({ method: "GET" }).han
     loans: (loansResult.data ?? []) as DbRow[],
     members: memberRows,
     internalStore: (internalStoreResult.data ?? []) as DbRow[],
+    brokerClients: (brokerClientsResult.error ? [] : (brokerClientsResult.data ?? [])) as DbRow[],
+    brokerTransactions: (brokerTransactionsResult.error
+      ? []
+      : (brokerTransactionsResult.data ?? [])) as DbRow[],
   };
 });
 

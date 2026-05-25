@@ -34,9 +34,16 @@ const ENTRIES: Entry[] = [
   { id: "ai", to: "/ai", label: "SautiAI", icon: Sparkles, requires: ["ai"] },
   { id: "portal", to: "/portal", label: "Member Portal", icon: IdCard, requires: ["portal"] },
   {
+    id: "supplier-portal",
+    to: "/supplier-portal",
+    label: "Supplier Portal",
+    icon: Truck,
+    requires: ["suppliers"],
+  },
+  {
     id: "suppliers",
     to: "/suppliers",
-    label: "Supplier Portal",
+    label: "Suppliers",
     icon: Truck,
     requires: ["suppliers"],
   },

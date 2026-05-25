@@ -19,7 +19,6 @@ import {
   BookOpen,
   HandCoins,
   Landmark,
-  Package,
 } from "lucide-react";
 
 export type Tab = { to: string; label: string; icon: ComponentType<{ className?: string }> };
@@ -31,8 +30,6 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
   members: [
     { to: "/members", label: "Members", icon: Users },
-    { to: "/suppliers", label: "Suppliers", icon: Landmark },
-    { to: "/stock", label: "Stock", icon: Package },
     { to: "/investors", label: "Investors", icon: Building2 },
   ],
   capital: [
