@@ -15,7 +15,7 @@ import { Simulator } from "@/components/loans/Simulator";
 import { SectionTabs } from "@/components/SectionTabs";
 import { type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
-import { isMemberCategory, useStore, type LoanKind } from "@/lib/store";
+import { hasMemberTag, isMemberCategory, useStore, type LoanKind } from "@/lib/store";
 import { toast } from "sonner";
 
 type Tab = "book" | "new" | "appraisal" | "simulator" | "review" | "followups" | "visits";
@@ -27,11 +27,11 @@ const LOAN_KIND_OPTIONS: { value: LoanKind; label: string; memberHint: string }[
   { value: "service", label: "Service loan", memberHint: "Service members only" },
 ];
 
-function memberMatchesLoanKind(member: { category?: string }, loanKind: LoanKind) {
+function memberMatchesLoanKind(member: { category?: string; memberTags?: string[] }, loanKind: LoanKind) {
   if (loanKind === "financial") return true;
-  if (loanKind === "fuel") return member.category === "locomotive" || !member.category;
-  if (loanKind === "stock") return member.category === "stock" || !member.category;
-  if (loanKind === "service") return member.category === "service" || !member.category;
+  if (loanKind === "fuel") return hasMemberTag(member.memberTags, "locomotive", member.category as never) || !member.category;
+  if (loanKind === "stock") return hasMemberTag(member.memberTags, "stock", member.category as never) || !member.category;
+  if (loanKind === "service") return hasMemberTag(member.memberTags, "service", member.category as never) || !member.category;
   return true;
 }
 
@@ -70,11 +70,11 @@ function LoansHub() {
         (counts, option) => ({
           ...counts,
           [option.value]: loans.filter((loan) => (loan.loanKind ?? "financial") === option.value)
-            .length,
+            .length + carryoverLoans.filter((loan) => (loan.loanKind ?? "financial") === option.value).length,
         }),
         { financial: 0, fuel: 0, stock: 0, service: 0 },
       ),
-    [loans],
+    [carryoverLoans, loans],
   );
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const eligibleMemberAccounts = useMemo(

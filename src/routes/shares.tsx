@@ -6,21 +6,11 @@ import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PieChart as PieIcon } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 
 export const Route = createFileRoute("/shares")({
   head: () => ({ meta: [{ title: "Shares — Sauti Microfinance" }] }),
   component: SharesPage,
 });
-
-const COLORS = [
-  "var(--color-chart-1)",
-  "var(--color-chart-2)",
-  "var(--color-chart-3)",
-  "var(--color-chart-4)",
-  "var(--color-chart-5)",
-  "var(--color-primary)",
-];
 
 function SharesPage() {
   const { members, sharePrice, recordTransaction, currentUser } = useStore();
@@ -40,9 +30,18 @@ function SharesPage() {
   const totalUnits = memberAccounts.reduce((s, m) => s + m.shares, 0);
   const totalCapital = totalUnits * sharePrice;
 
-  const data = memberAccounts
+  const ownershipRows = memberAccounts
     .filter((m) => m.shares > 0)
-    .map((m) => ({ name: m.name, value: m.shares }));
+    .sort((a, b) => b.shares - a.shares)
+    .map((m) => ({
+      ...m,
+      stake: totalUnits > 0 ? (m.shares / totalUnits) * 100 : 0,
+      value: m.shares * sharePrice,
+    }));
+  const topOwners = ownershipRows.slice(0, 12);
+  const otherOwners = ownershipRows.slice(12);
+  const otherUnits = otherOwners.reduce((sum, member) => sum + member.shares, 0);
+  const otherStake = totalUnits > 0 ? (otherUnits / totalUnits) * 100 : 0;
 
   return (
     <>
@@ -109,31 +108,38 @@ function SharesPage() {
 
           <div className="lg:col-span-2">
             <Section title="Ownership Distribution">
-              <div className="p-4 h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={data}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={60}
-                      outerRadius={110}
-                      paddingAngle={2}
-                    >
-                      {data.map((_, i) => (
-                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        background: "var(--color-card)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: 8,
-                      }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                  </PieChart>
-                </ResponsiveContainer>
+              <div className="space-y-3 p-5">
+                {topOwners.map((member, index) => (
+                  <div key={member.id} className="grid gap-1">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <span className="font-medium">{index + 1}. {member.name}</span>
+                        <span className="ml-2 text-muted-foreground">{member.shares} units</span>
+                      </div>
+                      <span className="font-semibold">{member.stake.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary"
+                        style={{ width: `${Math.min(100, member.stake)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                {otherOwners.length > 0 && (
+                  <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+                    <div className="flex justify-between">
+                      <span>{otherOwners.length} smaller shareholders grouped as Other</span>
+                      <span className="font-semibold">{otherStake.toFixed(1)}%</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-accent"
+                        style={{ width: `${Math.min(100, otherStake)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </Section>
           </div>
@@ -150,17 +156,13 @@ function SharesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {memberAccounts
-                .filter((m) => m.shares > 0)
-                .sort((a, b) => b.shares - a.shares)
+              {ownershipRows
                 .map((m) => (
                   <tr key={m.id}>
                     <td className="px-5 py-3 font-medium">{m.name}</td>
                     <td className="px-5 py-3 text-right">{m.shares}</td>
-                    <td className="px-5 py-3 text-right">{fmtKES(m.shares * sharePrice)}</td>
-                    <td className="px-5 py-3 text-right">
-                      {((m.shares / totalUnits) * 100).toFixed(1)}%
-                    </td>
+                    <td className="px-5 py-3 text-right">{fmtKES(m.value)}</td>
+                    <td className="px-5 py-3 text-right">{m.stake.toFixed(1)}%</td>
                   </tr>
                 ))}
             </tbody>

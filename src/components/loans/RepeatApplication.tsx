@@ -42,6 +42,7 @@ export function RepeatApplication({
   const [loanCategory, setLoanCategory] = useState<"Normal" | "Premium">("Premium");
   const [loanKind, setLoanKind] = useState<LoanKind>(initialLoanKind);
   const [loanAmount, setLoanAmount] = useState(10000);
+  const [overrideRatePct, setOverrideRatePct] = useState(0);
   const [purpose, setPurpose] = useState("Stock/Goods");
   const [vehiclePlate, setVehiclePlate] = useState("");
   const [fuelType, setFuelType] = useState("Petrol");
@@ -81,6 +82,7 @@ export function RepeatApplication({
       loanKind,
       netAmount: loanAmount,
       termDays: repaymentDays,
+      ratePct: overrideRatePct > 0 ? overrideRatePct : undefined,
       processingFeeMode,
       insuranceFeeMode,
       dailySavingsAmount: Number(compliancePlan),
@@ -96,7 +98,16 @@ export function RepeatApplication({
       financedPrincipal: pricing.financedPrincipal,
       daily: pricing.dailyLoanInstallment,
     };
-  }, [insuranceFeeMode, loanAmount, loanType, processingFeeMode, repaymentDays, compliancePlan]);
+  }, [
+    insuranceFeeMode,
+    loanAmount,
+    loanKind,
+    loanType,
+    overrideRatePct,
+    processingFeeMode,
+    repaymentDays,
+    compliancePlan,
+  ]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
 
@@ -236,6 +247,12 @@ export function RepeatApplication({
               );
             }}
           />
+          <Input
+            type="number"
+            label="Override Interest %"
+            value={String(overrideRatePct)}
+            onChange={(v) => setOverrideRatePct(Math.max(0, Number(v)))}
+          />
           <Select
             label="Purpose"
             value={purpose}
@@ -318,7 +335,7 @@ export function RepeatApplication({
           />
           <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
             Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
-            at {calc.ratePct}%.
+            at {calc.ratePct}%. Enter an override above to use a custom percentage for this loan.
           </div>
           <Select
             label="Daily Compliance Contribution Plan"

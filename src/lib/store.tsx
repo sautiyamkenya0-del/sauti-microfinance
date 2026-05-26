@@ -82,6 +82,7 @@ export type Member = {
   savingsBalance: number;
   fees: MandatoryFees;
   category: MemberCategory;
+  memberTags?: MemberCategory[];
   isInvestor?: boolean;
   investorId?: string;
   // Extended applicant profile (per SBC registration form)
@@ -418,6 +419,7 @@ const seedAttendance: Attendance[] = [];
 export type { MemberCategory } from "@/lib/membership";
 export {
   formatMembershipNumber,
+  hasMemberTag,
   isInvestorCategory,
   isMemberCategory,
   isInvestorOnlyCategory,
@@ -426,6 +428,7 @@ export {
   membershipSequenceValue,
   memberCategoryLabel,
   normalizeMembershipNumber,
+  normalizeMemberTags,
   resolveMemberCategory,
 } from "@/lib/membership";
 
@@ -467,6 +470,7 @@ type Store = {
     m: Omit<Member, "id" | "fees" | "isInvestor" | "investorId"> & {
       memberId?: string;
       fees?: MandatoryFees;
+      memberTags?: MemberCategory[];
       investorContribution?: number;
       investorNotes?: string;
     },
@@ -480,6 +484,7 @@ type Store = {
     shares: number;
     savingsBalance: number;
     category: MemberCategory;
+    memberTags?: MemberCategory[];
     firstName?: string;
     secondName?: string;
     thirdName?: string;
@@ -795,6 +800,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             businessAddress: m.businessAddress,
             fieldOfficerId: m.fieldOfficerId || currentUser.id,
             category: m.category,
+            memberTags: (m as any).memberTags,
             investorContribution: (m as any).investorContribution,
             investorNotes: (m as any).investorNotes,
           },
@@ -829,6 +835,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             businessAddress: m.businessAddress,
             fieldOfficerId: m.fieldOfficerId,
             category: m.category,
+            memberTags: m.memberTags,
           },
         });
         refreshAfterMutation("Member was updated, but background sync failed.");

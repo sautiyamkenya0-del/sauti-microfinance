@@ -22,6 +22,7 @@ import {
   isInvestorOnlyCategory,
   membershipIdCandidates,
   nextMembershipNumber,
+  normalizeMemberTags,
   normalizeMembershipNumber,
   resolveMemberCategory,
   type MemberCategory,
@@ -2868,6 +2869,7 @@ function mapMemberRow(row: any) {
   const businessPermanence =
     (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
   const category = resolveMemberCategory(row.member_category, row.is_investor);
+  const memberTags = normalizeMemberTags(row.member_tags, row.member_category, row.is_investor);
 
   return {
     id: row.id,
@@ -2891,7 +2893,8 @@ function mapMemberRow(row: any) {
       firstUpfrontPaid: row.fee_first_upfront_paid,
     },
     category,
-    isInvestor: isInvestorCategory(category),
+    memberTags,
+    isInvestor: memberTags.includes("investor") || isInvestorCategory(category),
     investorId: row.investor_id ?? undefined,
     firstName: row.first_name ?? undefined,
     secondName: row.second_name ?? legacyNames.secondName,
@@ -4384,6 +4387,8 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       businessAddress?: string;
       fieldOfficerId?: string;
       category?: MemberCategory;
+      memberTags?: MemberCategory[];
+      memberTags?: MemberCategory[];
       investorContribution?: number;
       investorNotes?: string;
     }) => ({
@@ -4414,6 +4419,8 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
+      memberTags: normalizeMemberTags(data?.memberTags, data?.category),
+      memberTags: normalizeMemberTags(data?.memberTags, data?.category),
       investorContribution: Number(data?.investorContribution ?? 0),
       investorNotes: data?.investorNotes?.trim() || undefined,
     }),
@@ -4433,6 +4440,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
     const memberCategory = resolveMemberCategory(data.category);
+    const memberTags = normalizeMemberTags(data.memberTags, memberCategory);
     const requestedMemberId = data.memberId ? normalizeMembershipNumber(data.memberId) : undefined;
     if (data.memberId && !requestedMemberId) {
       throw new Error("Membership number must follow the SBC0001K format.");
@@ -4468,8 +4476,9 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || undefined;
     const hasShop = data.businessPermanence === "permanent";
     const fieldOfficerId = data.fieldOfficerId ?? actor.id;
-    const shares = memberCategory === "investor" ? 0 : data.shares;
-    const savingsBalance = memberCategory === "investor" ? 0 : data.savingsBalance;
+    const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
+    const shares = investorOnly ? 0 : data.shares;
+    const savingsBalance = investorOnly ? 0 : data.savingsBalance;
 
     const { error: memberError } = await supabaseAdmin.from("members").insert({
       id: memberId,
@@ -4498,11 +4507,12 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       business_address: data.businessAddress ?? null,
       field_officer_id: fieldOfficerId,
       member_category: memberCategory,
-      is_investor: isInvestorCategory(memberCategory),
+      member_tags: memberTags,
+      is_investor: memberTags.includes("investor") || isInvestorCategory(memberCategory),
     });
     if (memberError) throw new Error(memberError.message);
 
-    if (isInvestorCategory(memberCategory)) {
+    if (memberTags.includes("investor") || isInvestorCategory(memberCategory)) {
       const investorId = await nextPrefixedId("investors", "I", 1);
 
       const { error: investorError } = await supabaseAdmin.from("investors").insert({
@@ -4700,7 +4710,8 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       business_address: data.businessAddress ?? null,
       field_officer_id: data.fieldOfficerId ?? null,
       member_category: memberCategory,
-      is_investor: isInvestorCategory(memberCategory),
+      member_tags: memberTags,
+      is_investor: memberTags.includes("investor") || isInvestorCategory(memberCategory),
     };
 
     const syncSelectedMemberFeePolicies = async (fromMemberId: string, toMemberId: string) => {
@@ -4731,10 +4742,10 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     };
 
     const syncMemberBackedInvestor = async (memberId: string) => {
-      if (!isInvestorCategory(memberCategory) && !currentMember.investor_id) return;
+      if (!memberTags.includes("investor") && !isInvestorCategory(memberCategory) && !currentMember.investor_id) return;
 
       let investorId = currentMember.investor_id ?? null;
-      if (isInvestorCategory(memberCategory) && !investorId) {
+      if ((memberTags.includes("investor") || isInvestorCategory(memberCategory)) && !investorId) {
         const investor = await ensureInvestorForMember({
           id: memberId,
           name: data.name,
@@ -8853,6 +8864,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       id?: string;
       memberId: string;
       label: string;
+      loanKind?: "financial" | "fuel" | "stock" | "service";
       loanCycleNumber: number;
       principal: number;
       interestRatePct: number;
@@ -8871,6 +8883,10 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       id: String(data?.id ?? "").trim() || undefined,
       memberId: String(data?.memberId ?? "").trim(),
       label: String(data?.label ?? "").trim() || "Legacy loan",
+      loanKind:
+        data?.loanKind === "fuel" || data?.loanKind === "stock" || data?.loanKind === "service"
+          ? data.loanKind
+          : "financial",
       loanCycleNumber: Math.max(1, Math.floor(Number(data?.loanCycleNumber ?? 1))),
       principal: Math.max(0, Number(data?.principal ?? 0)),
       interestRatePct: Math.max(0, Number(data?.interestRatePct ?? 0)),
@@ -8929,6 +8945,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       id,
       member_id: data.memberId,
       label: data.label,
+      loan_kind: data.loanKind,
       loan_cycle_number: data.loanCycleNumber,
       principal: data.principal,
       interest_rate_pct: data.interestRatePct,
@@ -8957,6 +8974,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       summary: `${actor.name} saved legacy loan ${id} for ${data.memberId}`,
       details: {
         label: data.label,
+        loanKind: data.loanKind,
         principal: data.principal,
         termDays: data.termDays,
         paidToDate: data.paidToDate,

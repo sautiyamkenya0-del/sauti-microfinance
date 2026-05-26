@@ -48,12 +48,14 @@ export type LegacyCarryoverLoanFeeBreakdown = {
   dailyPenaltyDays?: number;
   dailyPenaltyAmount?: number;
   dueDatePenaltyDays?: number;
+  productMeta?: Record<string, unknown>;
 };
 
 export type LegacyCarryoverLoan = {
   id: string;
   memberId: string;
   label: string;
+  loanKind?: "financial" | "fuel" | "stock" | "service";
   loanCycleNumber: number;
   principal: number;
   interestRatePct: number;
@@ -171,6 +173,10 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
     dailyPenaltyDays: wholeDaysValue(source.dailyPenaltyDays),
     dailyPenaltyAmount: moneyValue(source.dailyPenaltyAmount),
     dueDatePenaltyDays: wholeDaysValue(source.dueDatePenaltyDays),
+    productMeta:
+      source.productMeta && typeof source.productMeta === "object"
+        ? (source.productMeta as Record<string, unknown>)
+        : {},
   };
 }
 

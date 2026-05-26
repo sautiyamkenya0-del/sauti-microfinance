@@ -80,6 +80,7 @@ import {
   upfrontRequirementForAmount,
   upfrontTotalsForAmount,
   useStore,
+  type LoanKind,
 } from "@/lib/store";
 
 type PolicyCenterTab = "fees" | "percentages" | "interest" | "waterfall" | "clients" | "targets";
@@ -2036,6 +2037,14 @@ function PolicyCenterPage() {
                         {carryoverResetting ? "Resetting..." : "Reset carryover"}
                       </button>
                       <button
+                        onClick={() => void runManualRedistribution()}
+                        disabled={isRedistributing}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${isRedistributing ? "animate-spin" : ""}`} />
+                        {isRedistributing ? "Redistributing..." : "Redistribute"}
+                      </button>
+                      <button
                         onClick={() => void saveCarryoverProfileDraft()}
                         disabled={carryoverSaving}
                         className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
@@ -2496,6 +2505,159 @@ function PolicyCenterPage() {
                           className="input"
                         />
                       </Field>
+                      <Field label="Carryover product">
+                        <select
+                          value={carryoverLoanDraft.loanKind ?? "financial"}
+                          onChange={(event) =>
+                            setCarryoverLoanDraft((current) => ({
+                              ...current,
+                              loanKind: event.target.value as LoanKind,
+                              label:
+                                current.label === "Legacy loan" || !current.label
+                                  ? `${event.target.value === "fuel" ? "Fuel" : event.target.value === "stock" ? "Stock" : "Financial"} carryover`
+                                  : current.label,
+                            }))
+                          }
+                          className="input"
+                        >
+                          <option value="financial">Financial</option>
+                          <option value="fuel">Fuel</option>
+                          <option value="stock">Stock</option>
+                          <option value="service">Service</option>
+                        </select>
+                      </Field>
+                      {carryoverLoanDraft.loanKind === "fuel" && (
+                        <>
+                          <Field label="Vehicle / plate">
+                            <input
+                              value={String(carryoverLoanDraft.feeBreakdown?.productMeta?.vehiclePlate ?? "")}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                    {
+                                      ...current.feeBreakdown,
+                                      productMeta: {
+                                        ...(current.feeBreakdown?.productMeta ?? {}),
+                                        vehiclePlate: event.target.value,
+                                      },
+                                    },
+                                    current.loanCycleNumber,
+                                  ),
+                                }))
+                              }
+                              className="input"
+                            />
+                          </Field>
+                          <NumberField
+                            label="Fuel amount"
+                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.fuelAmount ?? carryoverLoanDraft.principal)}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                principal: value,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    productMeta: {
+                                      ...(current.feeBreakdown?.productMeta ?? {}),
+                                      fuelAmount: value,
+                                    },
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
+                          <NumberField
+                            label="Fuel charge"
+                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.fuelCharge ?? 0)}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                interestRatePct: 0,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    processingFeeAmount: value,
+                                    productMeta: {
+                                      ...(current.feeBreakdown?.productMeta ?? {}),
+                                      fuelCharge: value,
+                                    },
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
+                        </>
+                      )}
+                      {carryoverLoanDraft.loanKind === "stock" && (
+                        <>
+                          <Field label="Stock item">
+                            <input
+                              value={String(carryoverLoanDraft.feeBreakdown?.productMeta?.stockItem ?? "")}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                    {
+                                      ...current.feeBreakdown,
+                                      productMeta: {
+                                        ...(current.feeBreakdown?.productMeta ?? {}),
+                                        stockItem: event.target.value,
+                                      },
+                                    },
+                                    current.loanCycleNumber,
+                                  ),
+                                }))
+                              }
+                              className="input"
+                            />
+                          </Field>
+                          <NumberField
+                            label="Stock amount"
+                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.stockAmount ?? carryoverLoanDraft.principal)}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                principal: value,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    productMeta: {
+                                      ...(current.feeBreakdown?.productMeta ?? {}),
+                                      stockAmount: value,
+                                    },
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
+                          <NumberField
+                            label="Stock charge"
+                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.stockCharge ?? 0)}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                interestRatePct: 0,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    processingFeeAmount: value,
+                                    productMeta: {
+                                      ...(current.feeBreakdown?.productMeta ?? {}),
+                                      stockCharge: value,
+                                    },
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
+                        </>
+                      )}
                       <NumberField
                         label="Loan cycle #"
                         value={carryoverLoanDraft.loanCycleNumber}
@@ -3244,6 +3406,7 @@ function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryo
     id: "",
     memberId,
     label: "Legacy loan",
+    loanKind: "financial",
     loanCycleNumber: Math.max(1, cycleNumber),
     principal: 0,
     interestRatePct: 0,

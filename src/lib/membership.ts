@@ -93,6 +93,44 @@ export function resolveMemberCategory(
   return isInvestor ? "both" : "member";
 }
 
+export function normalizeMemberTags(
+  values?: Array<string | null | undefined> | string | null,
+  fallbackCategory?: string | null,
+  isInvestor?: boolean | null,
+): MemberCategory[] {
+  const rawValues = Array.isArray(values)
+    ? values
+    : String(values ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+  const tags = new Set<MemberCategory>();
+
+  for (const value of rawValues) {
+    tags.add(resolveMemberCategory(value));
+  }
+
+  const fallback = resolveMemberCategory(fallbackCategory, isInvestor);
+  if (tags.size === 0 || fallback !== "member") tags.add(fallback);
+  if (isInvestor) tags.add("investor");
+  if (tags.size === 0) tags.add("member");
+  if (tags.has("both")) {
+    tags.delete("both");
+    tags.add("member");
+    tags.add("investor");
+  }
+
+  return Array.from(tags);
+}
+
+export function hasMemberTag(
+  tags: Array<string | null | undefined> | undefined,
+  category: MemberCategory,
+  fallbackCategory?: MemberCategory | null,
+) {
+  return normalizeMemberTags(tags, fallbackCategory).includes(category);
+}
+
 export function isInvestorCategory(category?: MemberCategory | null) {
   const resolved = resolveMemberCategory(category);
   return resolved === "investor" || resolved === "both";

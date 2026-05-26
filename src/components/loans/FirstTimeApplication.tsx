@@ -78,6 +78,7 @@ export function FirstTimeApplication({
     kinRelationship: "",
     kinAddress: "",
     loanAmount: 5000,
+    overrideRatePct: 0,
     loanKind: initialLoanKind,
     purpose: "Stock/Goods",
     vehiclePlate: "",
@@ -188,6 +189,7 @@ export function FirstTimeApplication({
       loanKind: f.loanKind,
       netAmount: f.loanAmount,
       termDays: f.repaymentDays,
+      ratePct: f.overrideRatePct > 0 ? f.overrideRatePct : undefined,
       processingFeeMode: f.processingFeeMode,
       insuranceFeeMode: f.insuranceFeeMode,
       dailySavingsAmount: Number(f.dailyCompliancePlan),
@@ -228,6 +230,8 @@ export function FirstTimeApplication({
     cardFeeDue,
     f.cardFeeMode,
     f.loanAmount,
+    f.loanKind,
+    f.overrideRatePct,
     f.insuranceFeeMode,
     f.processingFeeMode,
     f.repaymentDays,
@@ -480,6 +484,12 @@ export function FirstTimeApplication({
             value={String(f.loanAmount)}
             onChange={(v) => set("loanAmount", Number(v))}
           />
+          <Input
+            type="number"
+            label="Override Interest %"
+            value={String(f.overrideRatePct)}
+            onChange={(v) => set("overrideRatePct", Math.max(0, Number(v)))}
+          />
           <Select
             label="Purpose"
             value={f.purpose}
@@ -570,7 +580,7 @@ export function FirstTimeApplication({
           />
           <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
             Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
-            at {calc.ratePct}%.
+            at {calc.ratePct}%. Enter an override above to use a custom percentage for this loan.
           </div>
           <Select
             label="Daily Compliance Contribution Plan"

@@ -182,6 +182,12 @@ function mapCarryoverLoanRow(row: DbRow) {
     id: readText(row.id),
     memberId: readText(row.member_id),
     label: readText(row.label) || "Legacy loan",
+    loanKind:
+      readText(row.loan_kind) === "fuel" ||
+      readText(row.loan_kind) === "stock" ||
+      readText(row.loan_kind) === "service"
+        ? (readText(row.loan_kind) as "fuel" | "stock" | "service")
+        : "financial",
     loanCycleNumber: Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
     principal: readNumber(row.principal),
     interestRatePct: readNumber(row.interest_rate_pct),

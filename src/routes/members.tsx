@@ -25,6 +25,7 @@ import { Smartphone, Send } from "lucide-react";
 type MemberForm = {
   memberNo: string;
   category: MemberCategory;
+  memberTags: MemberCategory[];
   firstName: string;
   secondName: string;
   thirdName: string;
@@ -69,6 +70,7 @@ function MembersPage() {
   const buildEmptyForm = (memberNo: string): MemberForm => ({
     memberNo,
     category: "member" as MemberCategory,
+    memberTags: ["member"] as MemberCategory[],
     firstName: "",
     secondName: "",
     thirdName: "",
@@ -104,6 +106,7 @@ function MembersPage() {
   const buildFormFromMember = (member: Member): MemberForm => ({
     memberNo: member.id,
     category: member.category,
+    memberTags: member.memberTags?.length ? member.memberTags : [member.category],
     firstName: member.firstName ?? "",
     secondName: member.secondName ?? "",
     thirdName: member.thirdName ?? "",
@@ -145,7 +148,7 @@ function MembersPage() {
     return m.category === registryView;
   });
   const showMemberFields = !isInvestorOnlyCategory(form.category);
-  const showInvestorFields = isInvestorCategory(form.category);
+  const showInvestorFields = isInvestorCategory(form.category) || form.memberTags.includes("investor");
 
   return (
     <>
@@ -358,7 +361,7 @@ function MembersPage() {
                       }}
                     />
                   </Field>
-                  <Field label="Registration Category">
+                  <Field label="Primary Registration Category">
                     <div className="grid grid-cols-3 gap-2">
                       {(
                         [
@@ -382,6 +385,52 @@ function MembersPage() {
                           {option.label}
                         </button>
                       ))}
+                    </div>
+                  </Field>
+                  <Field label="Member Roles">
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { value: "member", label: "Member" },
+                          { value: "investor", label: "Investor" },
+                          { value: "locomotive", label: "Locomotive" },
+                          { value: "stock", label: "Stock" },
+                          { value: "service", label: "Service" },
+                        ] as const
+                      ).map((option) => {
+                        const checked = form.memberTags.includes(option.value);
+                        return (
+                          <label
+                            key={option.value}
+                            className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                              checked
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border hover:bg-muted"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => {
+                                const next = event.target.checked
+                                  ? [...new Set([...form.memberTags, option.value])]
+                                  : form.memberTags.filter((tag) => tag !== option.value);
+                                setForm({
+                                  ...form,
+                                  memberTags: next.length ? next : ["member"],
+                                  category:
+                                    form.category === "both"
+                                      ? event.target.checked && option.value === "investor"
+                                        ? "both"
+                                        : form.category
+                                      : form.category,
+                                });
+                              }}
+                            />
+                            {option.label}
+                          </label>
+                        );
+                      })}
                     </div>
                   </Field>
                   <div className="grid grid-cols-3 gap-3">
@@ -647,6 +696,7 @@ function MembersPage() {
                         shares: form.shares,
                         savingsBalance: form.savingsBalance,
                         category: form.category,
+                        memberTags: form.memberTags,
                         firstName: form.firstName || undefined,
                         secondName: form.secondName || undefined,
                         thirdName: form.thirdName || undefined,
@@ -689,6 +739,7 @@ function MembersPage() {
                         businessAddress: form.businessAddress || undefined,
                         fieldOfficerId: form.fieldOfficerId || undefined,
                         category: form.category,
+                        memberTags: form.memberTags,
                         investorContribution: showInvestorFields
                           ? form.investorContribution
                           : undefined,

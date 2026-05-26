@@ -101,7 +101,7 @@ export function LoanBook({
     ];
 
     list = list.filter((row) => {
-      const rowLoanKind = row.kind === "live" ? (row.loan.loanKind ?? "financial") : "financial";
+      const rowLoanKind = row.loan.loanKind ?? "financial";
       if (productFilter !== "all" && rowLoanKind !== productFilter) return false;
 
       const status = row.loan.status;
@@ -314,7 +314,7 @@ export function LoanBook({
                           : "muted"
                       }
                     >
-                      {loanKindLabel(row.kind === "live" ? liveLoan.loanKind : "financial")}
+                      {loanKindLabel(row.loan.loanKind ?? "financial")}
                     </Badge>
                   </td>
                   <td className="px-5 py-3">
