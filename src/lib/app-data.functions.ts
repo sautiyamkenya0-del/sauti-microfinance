@@ -4420,7 +4420,6 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
       memberTags: normalizeMemberTags(data?.memberTags, data?.category),
-      memberTags: normalizeMemberTags(data?.memberTags, data?.category),
       investorContribution: Number(data?.investorContribution ?? 0),
       investorNotes: data?.investorNotes?.trim() || undefined,
     }),
@@ -4598,6 +4597,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       businessAddress?: string;
       fieldOfficerId?: string;
       category?: MemberCategory;
+      memberTags?: MemberCategory[];
     }) => ({
       memberId: String(data?.memberId ?? "").trim(),
       nextMemberId: data?.nextMemberId?.trim() || undefined,
@@ -4626,6 +4626,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       businessAddress: data?.businessAddress?.trim() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
+      memberTags: normalizeMemberTags(data?.memberTags, data?.category),
     }),
   )
   .handler(async ({ data }) => {
@@ -4641,6 +4642,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
     const memberCategory = resolveMemberCategory(data.category);
+    const memberTags = normalizeMemberTags(data.memberTags, memberCategory);
     const lastName = [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || null;
     const currentMemberId = String(data.memberId).trim();
     const requestedNextMemberId = data.nextMemberId

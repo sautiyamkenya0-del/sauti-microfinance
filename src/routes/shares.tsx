@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
-import { useStore, fmtKES, isMemberCategory } from "@/lib/store";
+import { useStore, fmtKES, hasMemberTag, isMemberCategory } from "@/lib/store";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PieChart as PieIcon } from "lucide-react";
@@ -15,7 +15,11 @@ export const Route = createFileRoute("/shares")({
 function SharesPage() {
   const { members, sharePrice, recordTransaction, currentUser } = useStore();
   const memberAccounts = useMemo(
-    () => members.filter((member) => isMemberCategory(member.category)),
+    () =>
+      members.filter(
+        (member) =>
+          isMemberCategory(member.category) || hasMemberTag(member.memberTags, "member", member.category),
+      ),
     [members],
   );
   const [memberId, setMemberId] = useState(memberAccounts[0]?.id ?? "");
@@ -38,8 +42,8 @@ function SharesPage() {
       stake: totalUnits > 0 ? (m.shares / totalUnits) * 100 : 0,
       value: m.shares * sharePrice,
     }));
-  const topOwners = ownershipRows.slice(0, 12);
-  const otherOwners = ownershipRows.slice(12);
+  const topOwners = ownershipRows.slice(0, 10);
+  const otherOwners = ownershipRows.slice(10);
   const otherUnits = otherOwners.reduce((sum, member) => sum + member.shares, 0);
   const otherStake = totalUnits > 0 ? (otherUnits / totalUnits) * 100 : 0;
 
@@ -109,14 +113,66 @@ function SharesPage() {
           <div className="lg:col-span-2">
             <Section title="Ownership Distribution">
               <div className="space-y-3 p-5">
+                <div className="flex h-4 overflow-hidden rounded-full bg-muted">
+                  {topOwners.map((member, index) => (
+                    <div
+                      key={member.id}
+                      title={`${member.name}: ${member.stake.toFixed(1)}%`}
+                      className={[
+                        "h-full",
+                        [
+                          "bg-primary",
+                          "bg-success",
+                          "bg-warning",
+                          "bg-destructive",
+                          "bg-accent",
+                          "bg-foreground/70",
+                          "bg-primary/60",
+                          "bg-success/60",
+                          "bg-warning/60",
+                          "bg-accent/60",
+                        ][index],
+                      ].join(" ")}
+                      style={{ width: `${Math.max(1.5, member.stake)}%` }}
+                    />
+                  ))}
+                  {otherOwners.length > 0 && (
+                    <div
+                      title={`Other shareholders: ${otherStake.toFixed(1)}%`}
+                      className="h-full bg-muted-foreground/40"
+                      style={{ width: `${Math.max(1.5, otherStake)}%` }}
+                    />
+                  )}
+                </div>
                 {topOwners.map((member, index) => (
                   <div key={member.id} className="grid gap-1">
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <div className="min-w-0">
-                        <span className="font-medium">{index + 1}. {member.name}</span>
-                        <span className="ml-2 text-muted-foreground">{member.shares} units</span>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={[
+                            "h-2.5 w-2.5 shrink-0 rounded-full",
+                            [
+                              "bg-primary",
+                              "bg-success",
+                              "bg-warning",
+                              "bg-destructive",
+                              "bg-accent",
+                              "bg-foreground/70",
+                              "bg-primary/60",
+                              "bg-success/60",
+                              "bg-warning/60",
+                              "bg-accent/60",
+                            ][index],
+                          ].join(" ")}
+                        />
+                        <span className="truncate font-medium">
+                          {index + 1}. {member.name}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {member.shares} units
+                        </span>
                       </div>
-                      <span className="font-semibold">{member.stake.toFixed(1)}%</span>
+                      <span className="shrink-0 font-semibold">{member.stake.toFixed(1)}%</span>
                     </div>
                     <div className="h-2 rounded-full bg-muted">
                       <div

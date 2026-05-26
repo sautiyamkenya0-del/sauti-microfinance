@@ -6,6 +6,7 @@ import {
   useStore,
   fmtKES,
   formatMembershipNumber,
+  hasMemberTag,
   isInvestorCategory,
   isInvestorOnlyCategory,
   isMemberCategory,
@@ -48,7 +49,7 @@ type MemberForm = {
   investorNotes: string;
 };
 
-type RegistryView = "all" | "normal" | "locomotive" | "service";
+type RegistryView = "all" | "normal" | "locomotive" | "stock" | "service";
 
 export const Route = createFileRoute("/members")({
   head: () => ({ meta: [{ title: "Members — Sauti Microfinance" }] }),
@@ -144,8 +145,14 @@ function MembersPage() {
     const matchesSearch = m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q);
     if (!matchesSearch) return false;
     if (registryView === "all") return true;
-    if (registryView === "normal") return m.category === "member" || m.category === "both";
-    return m.category === registryView;
+    if (registryView === "normal") {
+      return (
+        m.category === "member" ||
+        m.category === "both" ||
+        hasMemberTag(m.memberTags, "member", m.category)
+      );
+    }
+    return hasMemberTag(m.memberTags, registryView, m.category);
   });
   const showMemberFields = !isInvestorOnlyCategory(form.category);
   const showInvestorFields = isInvestorCategory(form.category) || form.memberTags.includes("investor");
@@ -164,6 +171,7 @@ function MembersPage() {
               ["all", "All members"],
               ["normal", "Normal"],
               ["locomotive", "Locomotive"],
+              ["stock", "Stock"],
               ["service", "Service"],
             ] as const
           ).map(([value, label]) => (
@@ -369,6 +377,7 @@ function MembersPage() {
                           { value: "investor", label: "Investor" },
                           { value: "both", label: "Both" },
                           { value: "locomotive", label: "Locomotive" },
+                          { value: "stock", label: "Stock" },
                           { value: "service", label: "Service" },
                         ] as const
                       ).map((option) => (
