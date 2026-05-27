@@ -4,7 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
 import { fmtKES, useStore } from "@/lib/store";
-import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
+import { listMpesaReceiptAudit, updateCurrentSnapshotRecord } from "@/lib/app-data.functions";
 import {
   listRuntimeSecrets,
   setRuntimeSecret,
@@ -28,6 +28,7 @@ import {
   RefreshCw,
   AlertCircle,
   ReceiptText,
+  Users,
 } from "lucide-react";
 
 export const Route = createFileRoute("/secret-keys")({
@@ -170,7 +171,7 @@ const SUGGESTED: Suggested[] = [
 const GROUPS: Array<Suggested["group"]> = ["AI", "M-Pesa"];
 
 function SecretKeysPage() {
-  const { currentUser } = useStore();
+  const { currentUser, members, loans, sharePrice, reloadAppData } = useStore();
   const navigate = useNavigate();
   const list = useServerFn(listRuntimeSecrets);
   const save = useServerFn(setRuntimeSecret);
@@ -178,11 +179,13 @@ function SecretKeysPage() {
   const fetchAudit = useServerFn(listAudit);
   const fetchActors = useServerFn(listAuditActors);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
+  const updateSnapshot = useServerFn(updateCurrentSnapshotRecord);
   const ask = useServerFn(askWatchdog);
   const errorLogsList = useServerFn(listErrorLogs);
   const errorLogsClear = useServerFn(deleteOldErrorLogs);
 
-  const [tab, setTab] = useState<"keys" | "audit" | "mpesa" | "ai" | "errors">("keys");
+  const [tab, setTab] = useState<"keys" | "clients" | "audit" | "mpesa" | "ai" | "errors">("keys");
+  const [snapshotUpdating, setSnapshotUpdating] = useState(false);
 
   const [items, setItems] = useState<
     Array<{ key: string; preview: string; length: number; updated_at: string }>
@@ -267,6 +270,28 @@ function SecretKeysPage() {
     }
   }
 
+  async function onUpdateSnapshot() {
+    if (
+      !confirm(
+        "Update current member, share, live-loan, and carryover-loan records using the current system logic?",
+      )
+    ) {
+      return;
+    }
+    setSnapshotUpdating(true);
+    try {
+      const result = await updateSnapshot();
+      await reloadAppData();
+      toast.success(
+        `Snapshot updated: ${result.membersUpdated} member(s), ${result.liveLoansUpdated} live loan(s), ${result.carryoverLoansUpdated} carryover loan(s).`,
+      );
+    } catch (e: any) {
+      toast.error(e?.message ?? "Snapshot update failed");
+    } finally {
+      setSnapshotUpdating(false);
+    }
+  }
+
   if (currentUser.role !== "director") return null;
 
   return (
@@ -280,6 +305,7 @@ function SecretKeysPage() {
           {(
             [
               { id: "keys", label: "Keys", Icon: KeyRound },
+              { id: "clients", label: "Client records", Icon: Users },
               { id: "audit", label: "Audit log", Icon: ScrollText },
               { id: "mpesa", label: "Paybill audit", Icon: ReceiptText },
               { id: "errors", label: "Error logs", Icon: AlertCircle },
@@ -453,6 +479,15 @@ function SecretKeysPage() {
         )}
 
         {tab === "audit" && <AuditTab fetchAudit={fetchAudit} fetchActors={fetchActors} />}
+        {tab === "clients" && (
+          <ClientRecordsTab
+            members={members}
+            loans={loans}
+            sharePrice={sharePrice}
+            updating={snapshotUpdating}
+            onUpdateSnapshot={onUpdateSnapshot}
+          />
+        )}
         {tab === "mpesa" && <MpesaAuditTab fetchMpesaAudit={fetchMpesaAudit} />}
         {tab === "errors" && (
           <ErrorLogsTab errorLogsList={errorLogsList} errorLogsClear={errorLogsClear} />
@@ -593,6 +628,146 @@ function localDateKey(value: Date = new Date()) {
   const month = String(value.getMonth() + 1).padStart(2, "0");
   const day = String(value.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function ClientRecordsTab({
+  members,
+  loans,
+  sharePrice,
+  updating,
+  onUpdateSnapshot,
+}: {
+  members: ReturnType<typeof useStore>["members"];
+  loans: ReturnType<typeof useStore>["loans"];
+  sharePrice: number;
+  updating: boolean;
+  onUpdateSnapshot: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const memberRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return members
+      .filter((member) => member.category !== "investor")
+      .filter((member) => {
+        if (!q) return true;
+        return (
+          member.name.toLowerCase().includes(q) ||
+          member.id.toLowerCase().includes(q) ||
+          member.phone.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [members, query]);
+  const openLoans = loans.filter((loan) => loan.status === "active" || loan.status === "defaulted");
+  const defaultedLoans = loans.filter((loan) => loan.status === "defaulted");
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+        <div className="font-semibold">Restricted client records</div>
+        <div className="mt-1 opacity-80">
+          This page includes system-wide repair controls. Keep it inside the secret vault area and
+          run updates only after confirming current policy settings.
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-semibold">Current snapshot</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Recalculates member shares and savings from the ledger, refreshes live-loan paid
+              totals, and reapplies carryover lifetime net oldest-first.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onUpdateSnapshot}
+            disabled={updating}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${updating ? "animate-spin" : ""}`} />
+            {updating ? "Updating..." : "Update current snapshot"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Clients</div>
+          <div className="mt-1 text-lg font-semibold">{memberRows.length}</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Open loans
+          </div>
+          <div className="mt-1 text-lg font-semibold">{openLoans.length}</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Defaulted live loans
+          </div>
+          <div className="mt-1 text-lg font-semibold">{defaultedLoans.length}</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Share price
+          </div>
+          <div className="mt-1 text-lg font-semibold">{fmtKES(sharePrice)}</div>
+        </div>
+      </div>
+
+      <section className="rounded-xl border border-border bg-card">
+        <div className="border-b border-border p-4">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search client records..."
+            className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="max-h-[58vh] overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-muted/70 text-xs uppercase tracking-wider text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2 text-left">Client</th>
+                <th className="px-4 py-2 text-right">Savings</th>
+                <th className="px-4 py-2 text-right">Shares</th>
+                <th className="px-4 py-2 text-right">Open loans</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {memberRows.map((member) => {
+                const memberOpenLoans = openLoans.filter((loan) => loan.memberId === member.id);
+                return (
+                  <tr key={member.id}>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{member.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {member.id} - {member.phone}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">{fmtKES(member.savingsBalance)}</td>
+                    <td className="px-4 py-3 text-right">
+                      {member.shares} units / {fmtKES(member.shares * sharePrice)}
+                    </td>
+                    <td className="px-4 py-3 text-right">{memberOpenLoans.length}</td>
+                  </tr>
+                );
+              })}
+              {memberRows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">
+                    No matching client records.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  );
 }
 
 /* ---------------- Audit tab ---------------- */
