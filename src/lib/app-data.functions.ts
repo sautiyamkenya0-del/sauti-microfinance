@@ -457,6 +457,111 @@ function loanBalanceSummary(loan: {
   };
 }
 
+function normalizeLoanKindValue(value?: string | null) {
+  return value === "fuel" || value === "stock" || value === "service" ? value : "financial";
+}
+
+function openLoanDateValue(loan: {
+  start_date?: string | null;
+  created_at?: string | null;
+  id?: string | null;
+}) {
+  return String(loan.start_date ?? loan.created_at ?? loan.id ?? "");
+}
+
+function sortOpenLoansByDispatchDate<
+  T extends { start_date?: string | null; created_at?: string | null; id?: string | null },
+>(loans: T[]) {
+  return [...loans].sort((left, right) => {
+    const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
+    if (byDate !== 0) return byDate;
+    return String(left.id ?? "").localeCompare(String(right.id ?? ""));
+  });
+}
+
+function carryoverLoanBalanceSummary(
+  loan: Record<string, unknown>,
+  settings: typeof DEFAULT_POLICY_SETTINGS,
+) {
+  const summary = summarizeLegacyCarryoverLoan(
+    {
+      principal: toNumber(loan.principal as number | string | null | undefined),
+      interestRatePct: toNumber(loan.interest_rate_pct as number | string | null | undefined),
+      termDays: normalizeLoanTermDays(Number(loan.term_days ?? 30)),
+      dailySavingsAmount: toNumber(loan.daily_savings_amount as number | string | null | undefined),
+      startDate: String(loan.start_date ?? new Date().toISOString().slice(0, 10)),
+      dueDate: loan.due_date ? String(loan.due_date) : undefined,
+      paidToDate: toNumber(loan.paid_to_date as number | string | null | undefined),
+      status:
+        loan.status === "closed" || loan.status === "defaulted" || loan.status === "active"
+          ? loan.status
+          : "active",
+      finished: loan.finished === true,
+      penaltyWaivedAmount: toNumber(
+        loan.penalty_waived_amount as number | string | null | undefined,
+      ),
+      loanCycleNumber: Math.max(1, Math.floor(Number(loan.loan_cycle_number ?? 1))),
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        (loan.fee_breakdown ?? {}) as Record<string, unknown>,
+        Math.max(1, Math.floor(Number(loan.loan_cycle_number ?? 1))),
+      ),
+    },
+    settings,
+  );
+
+  return {
+    total: summary.totalExpectedCollected,
+    paid: toNumber(loan.paid_to_date as number | string | null | undefined),
+    balance: summary.balance,
+  };
+}
+
+async function assertNoDuplicateOpenLoanKind(
+  supabaseAdmin: any,
+  args: { memberId: string; loanKind?: string | null; excludeLoanId?: string | null },
+) {
+  const loanKind = normalizeLoanKindValue(args.loanKind);
+  let query = (supabaseAdmin as any)
+    .from("loans")
+    .select("id, status")
+    .eq("member_id", args.memberId)
+    .eq("loan_kind", loanKind)
+    .in("status", ["pending", "active", "defaulted"])
+    .limit(1);
+
+  if (args.excludeLoanId) query = query.neq("id", args.excludeLoanId);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  let carryoverQuery = (supabaseAdmin as any)
+    .from("member_carryover_loans")
+    .select("id, status")
+    .eq("member_id", args.memberId)
+    .eq("loan_kind", loanKind)
+    .in("status", ["active", "defaulted"])
+    .eq("finished", false)
+    .limit(1);
+
+  if (args.excludeLoanId) carryoverQuery = carryoverQuery.neq("id", args.excludeLoanId);
+
+  const { data: carryoverData, error: carryoverError } = await carryoverQuery;
+  if (carryoverError) throw new Error(carryoverError.message);
+
+  if ((data ?? []).length > 0 || (carryoverData ?? []).length > 0) {
+    const label =
+      loanKind === "financial"
+        ? "financial"
+        : loanKind === "fuel"
+          ? "fuel"
+          : loanKind === "stock"
+            ? "stock"
+            : "service";
+    throw new Error(
+      `This member already has an open ${label} loan. Close that loan before creating another one in the same category.`,
+    );
+  }
+}
+
 function loanDailyRepaymentObligation(loan: {
   principal: number | string | null;
   approved_amount?: number | string | null;
@@ -1475,13 +1580,19 @@ export async function applyMpesaPaymentToDatabase(args: {
     | undefined;
   let toRoundOff = 0;
   let primaryTransactionId: string | undefined;
-  let activeLoanPatch:
-    | {
-        id: string;
-        paid: number;
-        status: "pending" | "active" | "closed" | "defaulted" | "rejected";
-      }
-    | undefined;
+  const liveLoanPatches: Array<{
+    id: string;
+    paid: number;
+    status: "pending" | "active" | "closed" | "defaulted" | "rejected";
+  }> = [];
+  const carryoverLoanPatches: Array<{
+    id: string;
+    memberId: string;
+    paidToDate: number;
+    status: "active" | "closed" | "defaulted";
+    finished: boolean;
+    closedOn?: string | null;
+  }> = [];
 
   if (isInvestorOnlyCategory(memberCategory)) {
     const investor = await ensureInvestorForMember(member);
@@ -1565,11 +1676,60 @@ export async function applyMpesaPaymentToDatabase(args: {
     .order("start_date", { ascending: true })
     .limit(10);
   if (activeLoanError) throw new Error(activeLoanError.message);
+  const liveOpenLoans = sortOpenLoansByDispatchDate((loanRows ?? []) as Record<string, any>[]);
+
+  const { data: carryoverRows, error: carryoverLoanError } = await (supabaseAdmin as any)
+    .from("member_carryover_loans")
+    .select("*")
+    .eq("member_id", memberId)
+    .in("status", ["defaulted", "active"])
+    .eq("finished", false)
+    .order("start_date", { ascending: true })
+    .limit(25);
+  if (carryoverLoanError) throw new Error(carryoverLoanError.message);
+  const carryoverOpenLoans = sortOpenLoansByDispatchDate(
+    ((carryoverRows ?? []) as Record<string, any>[]).filter((loan) => loan.finished !== true),
+  );
+  const openLoanTargets = sortOpenLoansByDispatchDate([
+    ...liveOpenLoans.map((loan) => {
+      const summary = loanBalanceSummary(loan as any);
+      return {
+        source: "live" as const,
+        id: String(loan.id),
+        memberId,
+        start_date: loan.start_date ?? null,
+        created_at: loan.created_at ?? null,
+        loan,
+        status: String(loan.status ?? "active"),
+        paid: summary.paid,
+        balance: summary.balance,
+        total: summary.total,
+      };
+    }),
+    ...carryoverOpenLoans.map((loan) => {
+      const summary = carryoverLoanBalanceSummary(loan, policySettings);
+      return {
+        source: "carryover" as const,
+        id: String(loan.id),
+        memberId: String(loan.member_id ?? memberId),
+        start_date: loan.start_date ?? null,
+        created_at: loan.created_at ?? null,
+        loan,
+        status: String(loan.status ?? "active"),
+        paid: summary.paid,
+        balance: summary.balance,
+        total: summary.total,
+      };
+    }),
+  ]);
   const activeLoan =
-    (loanRows ?? []).find((loan: any) => loan.status === "defaulted") ??
-    (loanRows ?? []).find((loan: any) => loan.status === "active") ??
+    liveOpenLoans.find((loan: any) => loan.status === "defaulted") ??
+    liveOpenLoans.find((loan: any) => loan.status === "active") ??
     null;
-  const hasDefaultedLoan = activeLoan?.status === "defaulted";
+  const hasOpenLoan = openLoanTargets.some((loan) => loan.balance > 0);
+  const hasDefaultedLoan = openLoanTargets.some(
+    (loan) => loan.status === "defaulted" && loan.balance > 0,
+  );
 
   const feeApplies = (key: string) => {
     const policy = normalizedFeePolicies.find((row) => row.key === key);
@@ -1582,7 +1742,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         category: member.member_category ?? undefined,
         isInvestor: member.is_investor ?? undefined,
       },
-      { hasActiveLoan: !!activeLoan },
+      { hasActiveLoan: hasOpenLoan },
     );
   };
   const feeQueue: Record<
@@ -1616,7 +1776,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     },
   };
 
-  const scenario = activeLoan ? "member_with_loan" : "member_without_loan";
+  const scenario = hasOpenLoan ? "member_with_loan" : "member_without_loan";
   const waterfall = waterfallRuleForScenario(scenario, policySettings).steps;
   const preprocessingSteps = waterfall.filter(
     (step) =>
@@ -1871,58 +2031,84 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   async function applyLoanRepayment(applied: number) {
-    if (!activeLoan || applied <= 0) return 0;
-    const summary = loanBalanceSummary(activeLoan);
-    const safeApplied = Math.min(applied, summary.balance);
-    if (safeApplied <= 0) return applied;
+    let available = roundMoney(applied);
+    if (available <= 0 || !hasOpenLoan) return available;
 
-    const rounded = roundUpKES(safeApplied, roundOffStep);
-    const surplus = Math.max(0, rounded - safeApplied);
-    if (surplus > 0) toRoundOff += surplus;
+    for (const target of openLoanTargets) {
+      if (available <= 0) break;
+      const balance = roundMoney(target.balance);
+      if (balance <= 0) continue;
 
-    setPrimaryIfMissing(
-      "loan_repayment",
-      safeApplied,
-      `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
-      activeLoan.id,
-    );
-    queueTransaction(
-      {
-        date: paymentDate,
-        created_at: paymentCreatedAt ?? null,
-        type: "loan_repayment",
-        amount: safeApplied,
-        member_id: memberId,
-        loan_id: activeLoan.id,
-        by_staff: MPESA_SYSTEM_STAFF_ID,
-        ref: args.mpesaRef,
-        account: norm,
-        payer_name: args.payerName,
-        note: `Paybill ${norm} - ${args.payerName ?? ""}`,
-      },
-      "loan_repayment",
-    );
+      const safeApplied = Math.min(available, balance);
+      if (safeApplied <= 0) continue;
 
-    const nextPaid = Number(activeLoan.paid ?? 0) + safeApplied;
-    const nextBalance = Math.max(0, summary.total - nextPaid);
-    const nextStatus = (nextBalance <= 0 ? "closed" : activeLoan.status) as
-      | "pending"
-      | "active"
-      | "closed"
-      | "defaulted"
-      | "rejected";
-    activeLoan.paid = nextPaid;
-    activeLoan.status = nextStatus;
-    activeLoanPatch = {
-      id: activeLoan.id,
-      paid: nextPaid,
-      status: nextStatus,
-    };
+      const rounded = roundUpKES(safeApplied, roundOffStep);
+      const surplus = Math.max(0, rounded - safeApplied);
+      if (surplus > 0) toRoundOff += surplus;
 
-    notes.push(
-      `Applied ${safeApplied}/= to loan ${activeLoan.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
-    );
-    return Math.max(0, applied - safeApplied);
+      const note =
+        target.source === "carryover"
+          ? `Carryover loan repayment ${target.id} via Paybill ${norm}`
+          : `Paybill ${norm} - ${args.payerName ?? ""}`;
+      setPrimaryIfMissing(
+        "loan_repayment",
+        safeApplied,
+        `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
+        target.source === "live" ? target.id : undefined,
+      );
+      queueTransaction(
+        {
+          date: paymentDate,
+          created_at: paymentCreatedAt ?? null,
+          type: "loan_repayment",
+          amount: safeApplied,
+          member_id: memberId,
+          loan_id: target.source === "live" ? target.id : null,
+          by_staff: MPESA_SYSTEM_STAFF_ID,
+          ref: args.mpesaRef,
+          account: norm,
+          payer_name: args.payerName,
+          note,
+        },
+        target.source === "carryover" ? "carryover_loan_repayment" : "loan_repayment",
+      );
+
+      const nextPaid = roundMoney(target.paid + safeApplied);
+      const nextBalance = Math.max(0, roundMoney(target.total - nextPaid));
+      const nextStatus = nextBalance <= 0 ? "closed" : target.status;
+      target.paid = nextPaid;
+      target.balance = nextBalance;
+      target.status = nextStatus;
+
+      if (target.source === "live") {
+        target.loan.paid = nextPaid;
+        target.loan.status = nextStatus;
+        liveLoanPatches.push({
+          id: target.id,
+          paid: nextPaid,
+          status: nextStatus as "pending" | "active" | "closed" | "defaulted" | "rejected",
+        });
+      } else {
+        target.loan.paid_to_date = nextPaid;
+        target.loan.status = nextStatus;
+        target.loan.finished = nextBalance <= 0;
+        carryoverLoanPatches.push({
+          id: target.id,
+          memberId: target.memberId,
+          paidToDate: nextPaid,
+          status: nextStatus as "active" | "closed" | "defaulted",
+          finished: nextBalance <= 0,
+          closedOn: nextBalance <= 0 ? paymentDate : null,
+        });
+      }
+
+      notes.push(
+        `Applied ${safeApplied}/= to ${target.source === "carryover" ? "carryover " : ""}loan ${target.id}; rounded up to ${rounded}/=, surplus ${surplus}/= -> round-off pool.`,
+      );
+      available = roundMoney(available - safeApplied);
+    }
+
+    return available;
   }
 
   function allocatePremiumUpfrontRequirement(applied: number) {
@@ -2009,9 +2195,9 @@ export async function applyMpesaPaymentToDatabase(args: {
   async function allocateSpecialMemberPayment(kind: "locomotive" | "stock") {
     if (remaining <= 0) return;
     const label = kind === "locomotive" ? "Locomotive fuel" : "Stock";
-    const activeBalance = activeLoan ? loanBalanceSummary(activeLoan).balance : 0;
+    const openLoanBalance = openLoanTargets.reduce((sum, loan) => sum + loan.balance, 0);
 
-    if (activeLoan && activeBalance > 0) {
+    if (openLoanBalance > 0) {
       if (kind === "locomotive") {
         const interest = Math.min(remaining, SPECIAL_MEMBER_TRANSACTION_INTEREST);
         queueSpecialInterest(interest, kind);
@@ -2118,14 +2304,18 @@ export async function applyMpesaPaymentToDatabase(args: {
       return;
     }
 
-    if (!activeLoan || memberCategory === "both") {
+    if (!hasOpenLoan || memberCategory === "both") {
       allocateComplianceBasket(remaining, "Non-loan flow:");
       remaining = 0;
       return;
     }
 
-    const approvedAmount = Number(activeLoan.approved_amount ?? activeLoan.principal ?? 0);
-    remaining = allocatePremiumUpfrontRequirement(remaining);
+    const approvedAmount = activeLoan
+      ? Number(activeLoan.approved_amount ?? activeLoan.principal ?? 0)
+      : 0;
+    if (activeLoan) {
+      remaining = allocatePremiumUpfrontRequirement(remaining);
+    }
 
     const complianceContribution = Math.min(remaining, approvedAmount <= 5000 ? 50 : 100);
     if (complianceContribution > 0) {
@@ -2217,7 +2407,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     };
   }
 
-  if (hasDefaultedLoan && activeLoan) {
+  if (hasDefaultedLoan) {
     const overflow = await applyLoanRepayment(remaining);
     remaining = 0;
     if (overflow > 0) {
@@ -2356,15 +2546,39 @@ export async function applyMpesaPaymentToDatabase(args: {
     }
   }
 
-  if (activeLoanPatch) {
+  const uniqueLiveLoanPatches = Array.from(
+    new Map(liveLoanPatches.map((patch) => [patch.id, patch])).values(),
+  );
+  for (const patch of uniqueLiveLoanPatches) {
     const { error: loanUpdateError } = await supabaseAdmin
       .from("loans")
       .update({
-        paid: activeLoanPatch.paid,
-        status: activeLoanPatch.status,
+        paid: patch.paid,
+        status: patch.status,
       })
-      .eq("id", activeLoanPatch.id);
+      .eq("id", patch.id);
     if (loanUpdateError) throw new Error(loanUpdateError.message);
+  }
+
+  const uniqueCarryoverLoanPatches = Array.from(
+    new Map(carryoverLoanPatches.map((patch) => [patch.id, patch])).values(),
+  );
+  const carryoverMemberIds = new Set<string>();
+  for (const patch of uniqueCarryoverLoanPatches) {
+    const { error: carryoverUpdateError } = await (supabaseAdmin as any)
+      .from("member_carryover_loans")
+      .update({
+        paid_to_date: patch.paidToDate,
+        status: patch.status,
+        finished: patch.finished,
+        closed_on: patch.closedOn,
+      })
+      .eq("id", patch.id);
+    if (carryoverUpdateError) throw new Error(carryoverUpdateError.message);
+    carryoverMemberIds.add(patch.memberId);
+  }
+  for (const carryoverMemberId of carryoverMemberIds) {
+    await refreshCarryoverMemberSummary(supabaseAdmin, carryoverMemberId);
   }
 
   if (Object.keys(memberPatch).length > 0) {
@@ -5428,6 +5642,10 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
 
     const supabaseAdmin = await requireSupabaseAdmin();
+    await assertNoDuplicateOpenLoanKind(supabaseAdmin, {
+      memberId: data.memberId,
+      loanKind: data.loanKind,
+    });
     const id = await nextPrefixedId("loans", "L", 1001);
     const netAmount =
       data.status === "active" ? (data.approvedAmount ?? data.principal) : data.approvedAmount;
@@ -5689,6 +5907,11 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
 
     const approvedAmount = data.approvedAmount ?? Number(loan.principal ?? 0);
     if (approvedAmount <= 0) throw new Error("Approved amount must be above zero.");
+    await assertNoDuplicateOpenLoanKind(supabaseAdmin, {
+      memberId: String(loan.member_id ?? ""),
+      loanKind: String((loan as any).loan_kind ?? "financial"),
+      excludeLoanId: data.loanId,
+    });
     const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
     const pricing = computeLoanPricing({
       netAmount: approvedAmount,
@@ -8963,6 +9186,13 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
             ? "defaulted"
             : "active"
           : data.status;
+    if (status !== "closed") {
+      await assertNoDuplicateOpenLoanKind(runtimeDb, {
+        memberId: data.memberId,
+        loanKind: data.loanKind,
+        excludeLoanId: id,
+      });
+    }
     const { error } = await runtimeDb.from("member_carryover_loans").upsert({
       id,
       member_id: data.memberId,
