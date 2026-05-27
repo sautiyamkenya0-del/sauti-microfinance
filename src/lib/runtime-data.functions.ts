@@ -191,7 +191,7 @@ function mapCarryoverLoanRow(row: DbRow) {
     loanCycleNumber: Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
     principal: readNumber(row.principal),
     interestRatePct: readNumber(row.interest_rate_pct),
-    termDays: Math.max(7, Math.floor(readNumber(row.term_days))) as 7 | 14 | 30 | 60 | 90,
+    termDays: Math.max(1, Math.floor(readNumber(row.term_days))),
     dailySavingsAmount: readNumber(row.daily_savings_amount),
     startDate: readText(row.start_date),
     dueDate: optionalText(row.due_date),

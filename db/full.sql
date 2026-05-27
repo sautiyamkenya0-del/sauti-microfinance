@@ -861,7 +861,7 @@ create table if not exists public.member_carryover_loans (
   constraint member_carryover_loans_status_check
     check (status in ('active', 'closed', 'defaulted')),
   constraint member_carryover_loans_term_days_check
-    check (term_days in (7, 14, 30, 60, 90))
+    check (term_days >= 1)
 );
 
 alter table public.member_carryover_loans enable row level security;

@@ -24,7 +24,9 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  */
 export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
   const { loans, feePolicies } = useStore();
-  const activeLoan = loans.find((l) => l.memberId === member.id && l.status === "active");
+  const activeLoan = loans.find(
+    (l) => l.memberId === member.id && (l.status === "active" || l.status === "defaulted"),
+  );
   const [busy, setBusy] = useState(false);
 
   const [legacyStickerOn, setLegacyStickerOn] = useState(member.fees.hasShop || false);

@@ -2061,7 +2061,9 @@ function PolicyCenterPage() {
                         disabled={isRedistributing}
                         className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
                       >
-                        <RefreshCw className={`h-3.5 w-3.5 ${isRedistributing ? "animate-spin" : ""}`} />
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 ${isRedistributing ? "animate-spin" : ""}`}
+                        />
                         {isRedistributing ? "Redistributing..." : "Redistribute"}
                       </button>
                       <button
@@ -2123,7 +2125,9 @@ function PolicyCenterPage() {
                           </span>
                           <select
                             value={guidedLoanKind}
-                            onChange={(event) => changeGuidedLoanKind(event.target.value as LoanKind)}
+                            onChange={(event) =>
+                              changeGuidedLoanKind(event.target.value as LoanKind)
+                            }
                             className="input mt-1"
                           >
                             <option value="financial">Financial</option>
@@ -2142,11 +2146,11 @@ function PolicyCenterPage() {
                                 setGuidedClosedLoans((current) =>
                                   resizeGuidedCarryoverLoans(
                                     current,
-                                     value,
-                                     selectedClient.id,
-                                     "closed",
-                                     guidedLoanKind,
-                                   ),
+                                    value,
+                                    selectedClient.id,
+                                    "closed",
+                                    guidedLoanKind,
+                                  ),
                                 )
                               }
                             />
@@ -2157,11 +2161,11 @@ function PolicyCenterPage() {
                                 setGuidedDefaultedLoans((current) =>
                                   resizeGuidedCarryoverLoans(
                                     current,
-                                     value,
-                                     selectedClient.id,
-                                     "defaulted",
-                                     guidedLoanKind,
-                                   ),
+                                    value,
+                                    selectedClient.id,
+                                    "defaulted",
+                                    guidedLoanKind,
+                                  ),
                                 )
                               }
                             />
@@ -2172,11 +2176,11 @@ function PolicyCenterPage() {
                                 setGuidedActiveLoans((current) =>
                                   resizeGuidedCarryoverLoans(
                                     current,
-                                     value,
-                                     selectedClient.id,
-                                     "active",
-                                     guidedLoanKind,
-                                   ),
+                                    value,
+                                    selectedClient.id,
+                                    "active",
+                                    guidedLoanKind,
+                                  ),
                                 )
                               }
                             />
@@ -2551,7 +2555,7 @@ function PolicyCenterPage() {
                             setCarryoverLoanDraft((current) => ({
                               ...current,
                               loanKind: event.target.value as LoanKind,
-                              termDays: event.target.value === "fuel" ? 1 : current.termDays,
+                              termDays: Math.max(1, Number(current.termDays) || 30),
                               label:
                                 current.label === "Legacy loan" || !current.label
                                   ? `${event.target.value === "fuel" ? "Fuel" : event.target.value === "stock" ? "Stock" : "Financial"} carryover`
@@ -2570,7 +2574,9 @@ function PolicyCenterPage() {
                         <>
                           <Field label="Vehicle / plate">
                             <input
-                              value={String(carryoverLoanDraft.feeBreakdown?.productMeta?.vehiclePlate ?? "")}
+                              value={String(
+                                carryoverLoanDraft.feeBreakdown?.productMeta?.vehiclePlate ?? "",
+                              )}
                               onChange={(event) =>
                                 setCarryoverLoanDraft((current) => ({
                                   ...current,
@@ -2591,7 +2597,10 @@ function PolicyCenterPage() {
                           </Field>
                           <NumberField
                             label="Fuel amount"
-                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.fuelAmount ?? carryoverLoanDraft.principal)}
+                            value={Number(
+                              carryoverLoanDraft.feeBreakdown?.productMeta?.fuelAmount ??
+                                carryoverLoanDraft.principal,
+                            )}
                             onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
@@ -2611,7 +2620,9 @@ function PolicyCenterPage() {
                           />
                           <NumberField
                             label="Fuel charge"
-                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.fuelCharge ?? 0)}
+                            value={Number(
+                              carryoverLoanDraft.feeBreakdown?.productMeta?.fuelCharge ?? 0,
+                            )}
                             onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
@@ -2636,7 +2647,9 @@ function PolicyCenterPage() {
                         <>
                           <Field label="Stock item">
                             <input
-                              value={String(carryoverLoanDraft.feeBreakdown?.productMeta?.stockItem ?? "")}
+                              value={String(
+                                carryoverLoanDraft.feeBreakdown?.productMeta?.stockItem ?? "",
+                              )}
                               onChange={(event) =>
                                 setCarryoverLoanDraft((current) => ({
                                   ...current,
@@ -2657,7 +2670,10 @@ function PolicyCenterPage() {
                           </Field>
                           <NumberField
                             label="Stock amount"
-                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.stockAmount ?? carryoverLoanDraft.principal)}
+                            value={Number(
+                              carryoverLoanDraft.feeBreakdown?.productMeta?.stockAmount ??
+                                carryoverLoanDraft.principal,
+                            )}
                             onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
@@ -2677,7 +2693,9 @@ function PolicyCenterPage() {
                           />
                           <NumberField
                             label="Stock charge"
-                            value={Number(carryoverLoanDraft.feeBreakdown?.productMeta?.stockCharge ?? 0)}
+                            value={Number(
+                              carryoverLoanDraft.feeBreakdown?.productMeta?.stockCharge ?? 0,
+                            )}
                             onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
@@ -2720,9 +2738,7 @@ function PolicyCenterPage() {
                         }
                       />
                       <Field label="Term days">
-                        {carryoverLoanDraft.loanKind === "fuel" ? (
-                          <input value="1" readOnly className="input" />
-                        ) : carryoverLoanDraft.loanKind === "stock" ? (
+                        {carryoverLoanDraft.loanKind !== "financial" ? (
                           <input
                             type="number"
                             min={1}
@@ -2942,8 +2958,7 @@ function PolicyCenterPage() {
                         <MetricCard
                           label="Round-off basket"
                           value={fmtKES(
-                            carryoverLoanDraftSummary.roundOff *
-                              carryoverLoanDraftSummary.termDays,
+                            carryoverLoanDraftSummary.roundOff * carryoverLoanDraftSummary.termDays,
                           )}
                         />
                         <MetricCard
@@ -3525,11 +3540,9 @@ function applyGuidedCarryoverLoanKind(
     interestRatePct: nextKind === "financial" ? loan.interestRatePct : 0,
     dailySavingsAmount: nextKind === "financial" ? loan.dailySavingsAmount : 0,
     termDays:
-      nextKind === "fuel"
-        ? 1
-        : nextKind === "stock" || nextKind === "service"
-          ? Math.max(1, Number(loan.termDays) || 14)
-          : loan.termDays,
+      nextKind === "fuel" || nextKind === "stock" || nextKind === "service"
+        ? Math.max(1, Number(loan.termDays) || (nextKind === "fuel" ? 1 : 14))
+        : loan.termDays,
   };
 }
 
@@ -3549,14 +3562,17 @@ function resizeGuidedCarryoverLoans(
         : "Active loan";
   return Array.from({ length: count }, (_, index) => {
     const existing = current[index];
-    return applyGuidedCarryoverLoanKind({
-      ...(existing ?? blankCarryoverLoan(memberId, index + 1)),
-      memberId,
-      label: existing?.label || `${labelPrefix} ${index + 1}`,
-      loanCycleNumber: index + 1,
-      status,
-      finished: status === "closed",
-    }, loanKind);
+    return applyGuidedCarryoverLoanKind(
+      {
+        ...(existing ?? blankCarryoverLoan(memberId, index + 1)),
+        memberId,
+        label: existing?.label || `${labelPrefix} ${index + 1}`,
+        loanCycleNumber: index + 1,
+        status,
+        finished: status === "closed",
+      },
+      loanKind,
+    );
   });
 }
 
@@ -4096,7 +4112,9 @@ function GuidedCarryoverLoanCard({
             />
             <NumberField
               label="Fuel charge"
-              value={Number(feeBreakdown.productMeta?.fuelCharge ?? feeBreakdown.processingFeeAmount ?? 0)}
+              value={Number(
+                feeBreakdown.productMeta?.fuelCharge ?? feeBreakdown.processingFeeAmount ?? 0,
+              )}
               onChange={(value) =>
                 onChange({
                   ...loan,
@@ -4141,7 +4159,9 @@ function GuidedCarryoverLoanCard({
             />
             <NumberField
               label="Stock charge"
-              value={Number(feeBreakdown.productMeta?.stockCharge ?? feeBreakdown.processingFeeAmount ?? 0)}
+              value={Number(
+                feeBreakdown.productMeta?.stockCharge ?? feeBreakdown.processingFeeAmount ?? 0,
+              )}
               onChange={(value) =>
                 onChange({
                   ...loan,
@@ -4164,9 +4184,7 @@ function GuidedCarryoverLoanCard({
           onChange={(value) => onChange({ ...loan, principal: value })}
         />
         <Field label="Term days">
-          {loan.loanKind === "fuel" ? (
-            <input value="1" readOnly className="input" />
-          ) : loan.loanKind === "stock" ? (
+          {loan.loanKind !== "financial" ? (
             <input
               type="number"
               min={1}

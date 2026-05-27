@@ -27,6 +27,13 @@ set value = jsonb_set(
 where key = 'percentages'
   and coalesce(nullif(value ->> 'roundOffStep', '')::numeric, 0) < 5;
 
+alter table public.member_carryover_loans
+  drop constraint if exists member_carryover_loans_term_days_check;
+
+alter table public.member_carryover_loans
+  add constraint member_carryover_loans_term_days_check
+  check (term_days >= 1);
+
 create or replace function public.tg_enforce_member_financial_invariants()
 returns trigger
 language plpgsql
@@ -130,46 +137,14 @@ create or replace function public.tg_reject_duplicate_open_carryover_loan()
 returns trigger
 language plpgsql
 as $$
-declare
-  normalized_kind text := coalesce(nullif(new.loan_kind, ''), 'financial');
 begin
-  if new.status not in ('active', 'defaulted') or coalesce(new.finished, false) = true then
-    return new;
-  end if;
-
-  if exists (
-    select 1
-    from public.member_carryover_loans cl
-    where cl.member_id = new.member_id
-      and coalesce(nullif(cl.loan_kind, ''), 'financial') = normalized_kind
-      and cl.status in ('active', 'defaulted')
-      and coalesce(cl.finished, false) = false
-      and cl.id <> new.id
-  ) then
-    raise exception 'Member % already has an open % carryover loan.', new.member_id, normalized_kind;
-  end if;
-
-  if exists (
-    select 1
-    from public.loans l
-    where l.member_id = new.member_id
-      and coalesce(nullif(l.loan_kind, ''), 'financial') = normalized_kind
-      and l.status in ('pending', 'active', 'defaulted')
-  ) then
-    raise exception 'Member % already has an open % live loan.', new.member_id, normalized_kind;
-  end if;
-
+  -- Carryover rows are legacy/import records. They may coexist with current loans.
   return new;
 end;
 $$;
 
 drop trigger if exists trg_member_carryover_loans_reject_duplicate_open
 on public.member_carryover_loans;
-create trigger trg_member_carryover_loans_reject_duplicate_open
-before insert or update of member_id, status, finished, loan_kind
-on public.member_carryover_loans
-for each row
-execute function public.tg_reject_duplicate_open_carryover_loan();
 
 create or replace view public.financial_invariant_violations as
 with settings as (
@@ -235,15 +210,6 @@ open_loans as (
     'live'::text as source
   from public.loans
   where status in ('pending', 'active', 'defaulted')
-  union all
-  select
-    id,
-    member_id,
-    coalesce(nullif(loan_kind, ''), 'financial') as loan_kind,
-    'carryover'::text as source
-  from public.member_carryover_loans
-  where status in ('active', 'defaulted')
-    and coalesce(finished, false) = false
 ),
 duplicate_open_loans as (
   select

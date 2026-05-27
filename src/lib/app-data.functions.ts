@@ -57,6 +57,17 @@ function splitLegacyLastName(lastName: string | null | undefined) {
   };
 }
 
+function canonicalMemberCategory(category: MemberCategory, memberTags: MemberCategory[]) {
+  if (
+    (category === "member" || category === "investor" || category === "both") &&
+    memberTags.includes("member") &&
+    memberTags.includes("investor")
+  ) {
+    return "both";
+  }
+  return category;
+}
+
 async function requireSupabaseAdmin() {
   const { getSupabaseAdminEnvStatus, getSupabaseAdminOrNull } =
     await import("@/integrations/supabase/client.server");
@@ -361,8 +372,7 @@ function mandatorySharesThresholdForSettings(settings: typeof DEFAULT_POLICY_SET
 
 function shareBasketValue(shares: unknown, reserve: unknown = 0) {
   return roundMoney(
-    Math.max(0, Math.floor(Number(shares ?? 0))) * SHARE_PRICE +
-      Math.max(0, Number(reserve ?? 0)),
+    Math.max(0, Math.floor(Number(shares ?? 0))) * SHARE_PRICE + Math.max(0, Number(reserve ?? 0)),
   );
 }
 
@@ -615,8 +625,7 @@ function sortOpenLoansByDispatchDate<
       loanKindPriority(left.loan_kind ?? left.loanKind) -
       loanKindPriority(right.loan_kind ?? right.loanKind);
     if (byKind !== 0) return byKind;
-    const byStatus =
-      (left.status === "defaulted" ? 0 : 1) - (right.status === "defaulted" ? 0 : 1);
+    const byStatus = (left.status === "defaulted" ? 0 : 1) - (right.status === "defaulted" ? 0 : 1);
     if (byStatus !== 0) return byStatus;
     const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
     if (byDate !== 0) return byDate;
@@ -794,6 +803,7 @@ async function ensureInvestorForMember(member: {
 }) {
   const category = resolveMemberCategory(member.member_category, member.is_investor);
   if (!isInvestorCategory(category)) return null;
+  const investorMemberCategory = category === "investor" ? "investor" : "both";
 
   const supabaseAdmin = await requireSupabaseAdmin();
   let investorId = member.investor_id ?? null;
@@ -821,7 +831,7 @@ async function ensureInvestorForMember(member: {
         .update({
           investor_id: linkedInvestor.id,
           is_investor: true,
-          member_category: category,
+          member_category: investorMemberCategory,
         })
         .eq("id", member.id);
       if (memberError) throw new Error(memberError.message);
@@ -848,7 +858,7 @@ async function ensureInvestorForMember(member: {
     .update({
       investor_id: investorId,
       is_investor: true,
-      member_category: category,
+      member_category: investorMemberCategory,
     })
     .eq("id", member.id);
   if (memberError) throw new Error(memberError.message);
@@ -1237,7 +1247,7 @@ async function refreshCarryoverMemberSummary(runtimeDb: any, memberId: string) {
       {
         principal: Number(loan.principal ?? 0),
         interestRatePct: Number(loan.interest_rate_pct ?? 0),
-        termDays: Number(loan.term_days ?? 30) as 7 | 14 | 30 | 60 | 90,
+        termDays: Number(loan.term_days ?? 30),
         dailySavingsAmount: Number(loan.daily_savings_amount ?? 0),
         startDate: String(loan.start_date ?? ""),
         dueDate: loan.due_date ? String(loan.due_date) : undefined,
@@ -1478,18 +1488,40 @@ export async function validateMpesaDepositRequest(args: { account: string; amoun
     };
   }
 
-  const { data: defaultedLoans, error: defaultedError } = await runtimeDb
+  const { data: openLoans, error: openLoanError } = await runtimeDb
     .from("loans")
-    .select("id")
+    .select("id, status")
     .eq("member_id", member.id)
-    .eq("status", "defaulted")
+    .in("status", ["active", "defaulted"])
     .limit(1);
-  if (defaultedError) throw new Error(defaultedError.message);
+  if (openLoanError) throw new Error(openLoanError.message);
 
-  if ((defaultedLoans ?? []).length > 0 && accountContext.docket) {
+  const { data: openCarryoverLoans, error: openCarryoverLoanError } = await runtimeDb
+    .from("member_carryover_loans")
+    .select("id, status")
+    .eq("member_id", member.id)
+    .in("status", ["active", "defaulted"])
+    .eq("finished", false)
+    .limit(1);
+  if (openCarryoverLoanError) throw new Error(openCarryoverLoanError.message);
+
+  const hasOpenLoan = (openLoans ?? []).length > 0 || (openCarryoverLoans ?? []).length > 0;
+  const hasDefaultedLoan = [...(openLoans ?? []), ...(openCarryoverLoans ?? [])].some(
+    (loan) => loan.status === "defaulted",
+  );
+
+  if (hasDefaultedLoan && accountContext.docket) {
     return {
       accepted: false,
       reason: "This member has a defaulted loan; payments must route to the defaulted loan.",
+    };
+  }
+
+  if (hasOpenLoan && accountContext.docket && accountContext.docket !== "penalty_payment") {
+    return {
+      accepted: false,
+      reason:
+        "This member has an open loan; payments must route to the loan before protected dockets.",
     };
   }
 
@@ -2009,6 +2041,12 @@ export async function applyMpesaPaymentToDatabase(args: {
     return currentShareValue() + currentShareReserveBalance();
   }
 
+  function currentComplianceGap() {
+    const savingsGap = Math.max(0, mandatorySavingsThreshold - currentSavingsBalance());
+    const shareGap = Math.max(0, mandatorySharesThreshold - currentShareBasketValue());
+    return roundMoney(savingsGap + shareGap);
+  }
+
   function queueTransaction(
     row: {
       date?: string;
@@ -2516,7 +2554,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       return;
     }
 
-    if (!hasOpenLoan || memberCategory === "both") {
+    if (!hasOpenLoan) {
       allocateComplianceBasket(remaining, "Non-loan flow:");
       remaining = 0;
       return;
@@ -2529,7 +2567,11 @@ export async function applyMpesaPaymentToDatabase(args: {
       remaining = allocatePremiumUpfrontRequirement(remaining);
     }
 
-    const complianceContribution = Math.min(remaining, approvedAmount <= 5000 ? 50 : 100);
+    const complianceContribution = Math.min(
+      remaining,
+      approvedAmount <= 5000 ? 50 : 100,
+      currentComplianceGap(),
+    );
     if (complianceContribution > 0) {
       allocateComplianceBasket(complianceContribution, "Loan compliance contribution:");
       remaining = roundMoney(remaining - complianceContribution);
@@ -2548,6 +2590,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     targetedDocket &&
     targetedDocket !== "penalty_payment" &&
     !hasDefaultedLoan &&
+    !hasOpenLoan &&
     (outstandingPenalties ?? []).length === 0
   ) {
     await adjustMemberDocketBalance({
@@ -3306,8 +3349,11 @@ function mapMemberRow(row: any) {
   const legacyNames = splitLegacyLastName(row.last_name);
   const businessPermanence =
     (row.business_permanence as "permanent" | "semi" | null | undefined) ?? undefined;
-  const category = resolveMemberCategory(row.member_category, row.is_investor);
   const memberTags = normalizeMemberTags(row.member_tags, row.member_category, row.is_investor);
+  const category = canonicalMemberCategory(
+    resolveMemberCategory(row.member_category, row.is_investor),
+    memberTags,
+  );
 
   return {
     id: row.id,
@@ -4846,7 +4892,6 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId?: string;
       category?: MemberCategory;
       memberTags?: MemberCategory[];
-      memberTags?: MemberCategory[];
       investorContribution?: number;
       investorNotes?: string;
     }) => ({
@@ -4896,8 +4941,9 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const supabaseAdmin = await requireSupabaseAdmin();
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
-    const memberCategory = resolveMemberCategory(data.category);
-    const memberTags = normalizeMemberTags(data.memberTags, memberCategory);
+    const rawMemberCategory = resolveMemberCategory(data.category);
+    const memberTags = normalizeMemberTags(data.memberTags, rawMemberCategory);
+    const memberCategory = canonicalMemberCategory(rawMemberCategory, memberTags);
     const requestedMemberId = data.memberId ? normalizeMembershipNumber(data.memberId) : undefined;
     if (data.memberId && !requestedMemberId) {
       throw new Error("Membership number must follow the SBC0001K format.");
@@ -5104,8 +5150,9 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     const supabaseAdmin = await requireSupabaseAdmin();
     const phone = toLocalKenyanPhone(data.phone);
     const normalizedPhone = toComparableKenyanPhone(phone);
-    const memberCategory = resolveMemberCategory(data.category);
-    const memberTags = normalizeMemberTags(data.memberTags, memberCategory);
+    const rawMemberCategory = resolveMemberCategory(data.category);
+    const memberTags = normalizeMemberTags(data.memberTags, rawMemberCategory);
+    const memberCategory = canonicalMemberCategory(rawMemberCategory, memberTags);
     const lastName = [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || null;
     const currentMemberId = String(data.memberId).trim();
     const requestedNextMemberId = data.nextMemberId
@@ -5224,7 +5271,12 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     };
 
     const syncMemberBackedInvestor = async (memberId: string) => {
-      if (!memberTags.includes("investor") && !isInvestorCategory(memberCategory) && !currentMember.investor_id) return;
+      if (
+        !memberTags.includes("investor") &&
+        !isInvestorCategory(memberCategory) &&
+        !currentMember.investor_id
+      )
+        return;
 
       let investorId = currentMember.investor_id ?? null;
       if ((memberTags.includes("investor") || isInvestorCategory(memberCategory)) && !investorId) {
@@ -6508,8 +6560,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
       memberBeforeTransaction = member;
       if (memberBeforeTransaction) {
         if (data.type === "deposit") {
-          const nextSavings =
-            Number(memberBeforeTransaction.savings_balance ?? 0) + data.amount;
+          const nextSavings = Number(memberBeforeTransaction.savings_balance ?? 0) + data.amount;
           assertMandatorySavingsWithinThreshold({
             amount: nextSavings,
             settings: policySettings,
@@ -9671,8 +9722,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       loanCycleNumber: Math.max(1, Math.floor(Number(data?.loanCycleNumber ?? 1))),
       principal: Math.max(0, Number(data?.principal ?? 0)),
       interestRatePct: Math.max(0, Number(data?.interestRatePct ?? 0)),
-      termDays:
-        data?.loanKind === "fuel" ? 1 : Math.max(1, Math.floor(Number(data?.termDays ?? 30))),
+      termDays: Math.max(1, Math.floor(Number(data?.termDays ?? 30))),
       dailySavingsAmount: Math.max(0, Number(data?.dailySavingsAmount ?? 0)),
       startDate: String(data?.startDate ?? "").trim() || new Date().toISOString().slice(0, 10),
       dueDate: data?.dueDate?.trim() || undefined,
@@ -9693,7 +9743,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
     if (!data.memberId) throw new Error("Member id is required.");
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
     if (data.loanKind === "financial" && ![7, 14, 30, 60, 90].includes(data.termDays)) {
-      throw new Error("Carryover loans must use 7, 14, 30, 60, or 90 days.");
+      throw new Error("Financial carryover loans must use 7, 14, 30, 60, or 90 days.");
     }
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
@@ -9726,13 +9776,6 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
             ? "defaulted"
             : "active"
           : data.status;
-    if (status !== "closed") {
-      await assertNoDuplicateOpenLoanKind(runtimeDb, {
-        memberId: data.memberId,
-        loanKind: data.loanKind,
-        excludeLoanId: id,
-      });
-    }
     const { error } = await runtimeDb.from("member_carryover_loans").upsert({
       id,
       member_id: data.memberId,
@@ -9911,7 +9954,10 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
       if (!loan) throw new Error("Carryover loan not found.");
 
       const policySettings = await loadRuntimePolicySettings(runtimeDb);
-      const summary = summarizeLegacyCarryoverLoan(mapCarryoverLoanForSummary(loan), policySettings);
+      const summary = summarizeLegacyCarryoverLoan(
+        mapCarryoverLoanForSummary(loan),
+        policySettings,
+      );
       const waiveAmount = Math.min(
         summary.estimatedPenaltyNow,
         data.amount && data.amount > 0 ? data.amount : summary.estimatedPenaltyNow,
@@ -9923,7 +9969,10 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
         .from("member_carryover_loans")
         .update({
           penalty_waived_amount: nextWaived,
-          notes: [loan.notes, `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`]
+          notes: [
+            loan.notes,
+            `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`,
+          ]
             .filter(Boolean)
             .join("\n"),
           updated_by: actor.id,
@@ -9949,7 +9998,10 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
       .from("loans")
       .update({
         penalty_waived_amount: currentWaived + waiveAmount,
-        review_note: [loan.review_note, `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`]
+        review_note: [
+          loan.review_note,
+          `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`,
+        ]
           .filter(Boolean)
           .join("\n"),
       })
@@ -9959,13 +10011,11 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
   });
 
 export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })
-  .inputValidator(
-    (data: { loanId: string; loanKind?: "live" | "carryover"; note?: string }) => ({
-      loanId: String(data?.loanId ?? "").trim(),
-      loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
-      note: data?.note?.trim() || undefined,
-    }),
-  )
+  .inputValidator((data: { loanId: string; loanKind?: "live" | "carryover"; note?: string }) => ({
+    loanId: String(data?.loanId ?? "").trim(),
+    loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
+    note: data?.note?.trim() || undefined,
+  }))
   .handler(async ({ data }) => {
     const actor = await requireDirectorActor();
     if (!data.loanId) throw new Error("Loan id is required.");
@@ -9997,7 +10047,10 @@ export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })
               frozenNote: data.note ?? null,
             },
           },
-          notes: [loan.notes, `Loan frozen by ${actor.name} on ${frozenAt}${data.note ? ` - ${data.note}` : ""}`]
+          notes: [
+            loan.notes,
+            `Loan frozen by ${actor.name} on ${frozenAt}${data.note ? ` - ${data.note}` : ""}`,
+          ]
             .filter(Boolean)
             .join("\n"),
           updated_by: actor.id,
@@ -10295,7 +10348,7 @@ function mapCarryoverLoanForSummary(row: any) {
   return {
     principal: toNumber(row.principal),
     interestRatePct: toNumber(row.interest_rate_pct),
-    termDays: Number(row.term_days ?? 30) as 7 | 14 | 30 | 60 | 90,
+    termDays: Number(row.term_days ?? 30),
     dailySavingsAmount: toNumber(row.daily_savings_amount),
     loanKind: normalizeLoanKindValue(String(row.loan_kind ?? "financial")),
     startDate: String(row.start_date ?? new Date().toISOString().slice(0, 10)),

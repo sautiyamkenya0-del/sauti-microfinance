@@ -227,12 +227,9 @@ export function summarizeLegacyCarryoverLoan(
       : "financial";
   const supplierBacked = loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
   const requestedTermDays = Math.max(1, Math.floor(Number(loan.termDays ?? 0)));
-  const termDays =
-    loanKind === "fuel"
-      ? 1
-      : supplierBacked
-        ? requestedTermDays || 14
-        : normalizeTermDays(loan.termDays);
+  const termDays = supplierBacked
+    ? requestedTermDays || (loanKind === "fuel" ? 1 : 14)
+    : normalizeTermDays(loan.termDays);
   const ratePct = effectiveLegacyInterestRate(loan, settings);
   const principal = Number(loan.principal ?? 0);
   const paidToDate = Number(loan.paidToDate ?? 0);
@@ -250,9 +247,13 @@ export function summarizeLegacyCarryoverLoan(
     loanKind === "fuel"
       ? moneyValue(productMeta.fuelCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
       : loanKind === "stock"
-        ? moneyValue(productMeta.stockCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
+        ? moneyValue(
+            productMeta.stockCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount,
+          )
         : supplierBacked
-          ? moneyValue(productMeta.serviceCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
+          ? moneyValue(
+              productMeta.serviceCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount,
+            )
           : 0;
   const loanServiceFees = supplierBacked
     ? 0
@@ -303,8 +304,7 @@ export function summarizeLegacyCarryoverLoan(
     dailyInclusive * dailyPenaltyDays * (settings.percentages.penaltyDailyPct / 100);
   const arrearsPenalty = dailyPenaltyAmount > 0 ? dailyPenaltyAmount : calculatedArrearsPenalty;
   const automaticDaysPastDue = Math.max(0, diffDays(dueDate, effectiveAsOfDate));
-  const daysPastDue =
-    balance <= 0 ? 0 : Math.max(automaticDaysPastDue, dueDatePenaltyDays);
+  const daysPastDue = balance <= 0 ? 0 : Math.max(automaticDaysPastDue, dueDatePenaltyDays);
   const dueDatePenaltyBase = Math.max(0, totalExpectedCollected + arrearsPenalty - paidToDate);
   const overduePenalty = supplierBacked
     ? dueDatePenaltyBase * (settings.percentages.penaltyDailyPct / 100) * daysPastDue

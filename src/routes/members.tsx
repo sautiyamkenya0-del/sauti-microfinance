@@ -51,6 +51,15 @@ type MemberForm = {
 
 type RegistryView = "all" | "normal" | "locomotive" | "stock" | "service";
 
+function defaultTagsForCategory(category: MemberCategory): MemberCategory[] {
+  if (category === "both") return ["member", "investor"];
+  if (category === "investor") return ["investor"];
+  if (category === "locomotive" || category === "stock" || category === "service") {
+    return ["member", category];
+  }
+  return ["member"];
+}
+
 export const Route = createFileRoute("/members")({
   head: () => ({ meta: [{ title: "Members — Sauti Microfinance" }] }),
   component: MembersPage,
@@ -136,7 +145,9 @@ function MembersPage() {
   const memberRegistry = useMemo(
     () =>
       members.filter(
-        (member) => !isInvestorOnlyCategory(member.category) && isMemberCategory(member.category),
+        (member) =>
+          isMemberCategory(member.category) ||
+          hasMemberTag(member.memberTags, "member", member.category),
       ),
     [members],
   );
@@ -154,8 +165,11 @@ function MembersPage() {
     }
     return hasMemberTag(m.memberTags, registryView, m.category);
   });
-  const showMemberFields = !isInvestorOnlyCategory(form.category);
-  const showInvestorFields = isInvestorCategory(form.category) || form.memberTags.includes("investor");
+  const formInvestorOnly =
+    isInvestorOnlyCategory(form.category) && !form.memberTags.includes("member");
+  const showMemberFields = !formInvestorOnly;
+  const showInvestorFields =
+    isInvestorCategory(form.category) || form.memberTags.includes("investor");
 
   return (
     <>
@@ -384,7 +398,13 @@ function MembersPage() {
                         <button
                           key={option.value}
                           type="button"
-                          onClick={() => setForm({ ...form, category: option.value })}
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              category: option.value,
+                              memberTags: defaultTagsForCategory(option.value),
+                            })
+                          }
                           className={`rounded-md border px-3 py-2 text-sm font-medium ${
                             form.category === option.value
                               ? "border-primary bg-primary text-primary-foreground"
@@ -621,9 +641,7 @@ function MembersPage() {
               {showInvestorFields && (
                 <section className="border-t border-border pt-4">
                   <p className="text-sm font-medium">
-                    {isInvestorOnlyCategory(form.category)
-                      ? "Investor account"
-                      : "Member-investor details"}
+                    {formInvestorOnly ? "Investor account" : "Member-investor details"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Investor-only accounts route Paybill payments to investments. For Both, normal
@@ -755,7 +773,7 @@ function MembersPage() {
                         investorNotes: showInvestorFields ? form.investorNotes : undefined,
                       });
                       toast.success(
-                        isInvestorOnlyCategory(form.category)
+                        formInvestorOnly
                           ? "Investor registered"
                           : isInvestorCategory(form.category)
                             ? "Member-investor registered"

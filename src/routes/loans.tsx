@@ -37,11 +37,19 @@ const LOAN_KIND_OPTIONS: { value: LoanKind; label: string; memberHint: string }[
   { value: "service", label: "Service loan", memberHint: "Service members only" },
 ];
 
-function memberMatchesLoanKind(member: { category?: string; memberTags?: string[] }, loanKind: LoanKind) {
+function memberMatchesLoanKind(
+  member: { category?: string; memberTags?: string[] },
+  loanKind: LoanKind,
+) {
   if (loanKind === "financial") return true;
-  if (loanKind === "fuel") return hasMemberTag(member.memberTags, "locomotive", member.category as never) || !member.category;
-  if (loanKind === "stock") return hasMemberTag(member.memberTags, "stock", member.category as never) || !member.category;
-  if (loanKind === "service") return hasMemberTag(member.memberTags, "service", member.category as never) || !member.category;
+  if (loanKind === "fuel")
+    return (
+      hasMemberTag(member.memberTags, "locomotive", member.category as never) || !member.category
+    );
+  if (loanKind === "stock")
+    return hasMemberTag(member.memberTags, "stock", member.category as never) || !member.category;
+  if (loanKind === "service")
+    return hasMemberTag(member.memberTags, "service", member.category as never) || !member.category;
   return true;
 }
 
@@ -103,8 +111,9 @@ function LoansHub() {
       LOAN_KIND_OPTIONS.reduce<Record<LoanKind, number>>(
         (counts, option) => ({
           ...counts,
-          [option.value]: loans.filter((loan) => (loan.loanKind ?? "financial") === option.value)
-            .length + carryoverLoans.filter((loan) => (loan.loanKind ?? "financial") === option.value).length,
+          [option.value]:
+            loans.filter((loan) => (loan.loanKind ?? "financial") === option.value).length +
+            carryoverLoans.filter((loan) => (loan.loanKind ?? "financial") === option.value).length,
         }),
         { financial: 0, fuel: 0, stock: 0, service: 0 },
       ),
@@ -306,7 +315,10 @@ function LoansHub() {
           />
         )}
         {tab === "appraisal" && (
-          <AppraisalForm memberId={selectedMemberId || undefined} loanId={appraisalLoanId || undefined} />
+          <AppraisalForm
+            memberId={selectedMemberId || undefined}
+            loanId={appraisalLoanId || undefined}
+          />
         )}
         {tab === "review" && <PendingReview />}
         {tab === "followups" && <FollowUps carryoverLoans={carryoverLoans} />}
@@ -368,7 +380,6 @@ function CarryoverEntry({
   }, [eligibleMembers, memberId]);
 
   useEffect(() => {
-    if (loanKind === "fuel") setTermDays(1);
     if (loanKind === "stock" && termDays < 1) setTermDays(14);
   }, [loanKind, termDays]);
 
@@ -406,7 +417,7 @@ function CarryoverEntry({
           loanCycleNumber: 1,
           principal: amount,
           interestRatePct: ratePct,
-          termDays: loanKind === "fuel" ? 1 : Math.max(1, Math.floor(termDays)),
+          termDays: Math.max(1, Math.floor(termDays)),
           dailySavingsAmount: 0,
           startDate: date,
           paidToDate,
@@ -467,9 +478,7 @@ function CarryoverEntry({
             </div>
           </label>
           <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Date
-            </span>
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Date</span>
             <input
               type="date"
               value={date}
@@ -502,35 +511,29 @@ function CarryoverEntry({
             </label>
           ) : null}
           <NumberInput
-            label={loanKind === "fuel" ? "Fuel Amount" : loanKind === "stock" ? "Stock Amount" : "Amount"}
+            label={
+              loanKind === "fuel" ? "Fuel Amount" : loanKind === "stock" ? "Stock Amount" : "Amount"
+            }
             value={amount}
             onChange={setAmount}
           />
           <NumberInput
-            label={loanKind === "fuel" ? "Fuel Charge" : loanKind === "stock" ? "Stock Charge" : "Charge"}
+            label={
+              loanKind === "fuel" ? "Fuel Charge" : loanKind === "stock" ? "Stock Charge" : "Charge"
+            }
             value={charge}
             onChange={setCharge}
           />
           <NumberInput label="Override %" value={ratePct} onChange={setRatePct} />
           <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Term
-            </span>
-            {loanKind === "fuel" ? (
-              <input
-                value="24 hours"
-                readOnly
-                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              />
-            ) : (
-              <input
-                type="number"
-                min={1}
-                value={termDays}
-                onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
-                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              />
-            )}
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Term</span>
+            <input
+              type="number"
+              min={1}
+              value={termDays}
+              onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+            />
           </label>
           <NumberInput label="Paid To Date" value={paidToDate} onChange={setPaidToDate} />
         </div>
