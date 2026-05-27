@@ -129,7 +129,7 @@ function SavingsPage() {
       );
       entry.withdrawable_savings = Math.max(
         entry.withdrawable_savings,
-        Number(profile.pending_balance ?? breakdown.withdrawableSavingsBalance ?? 0),
+        Number(breakdown.withdrawableSavingsBalance ?? breakdown.withdrawable_savings ?? 0),
       );
     }
     for (const row of movements) {
@@ -139,7 +139,9 @@ function SavingsPage() {
       const amount = Number(row.amount ?? 0);
       const fromDocket = String(row.from_docket ?? "");
       const toDocket = String(row.to_docket ?? "");
-      if (fromDocket && fromDocket in entry) entry[fromDocket] = Number(entry[fromDocket] ?? 0) - amount;
+      if (fromDocket && fromDocket in entry) {
+        entry[fromDocket] = Number(entry[fromDocket] ?? 0) - amount;
+      }
       if (toDocket && toDocket in entry) entry[toDocket] = Number(entry[toDocket] ?? 0) + amount;
     }
     for (const row of docketBalances) {

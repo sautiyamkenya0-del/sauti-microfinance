@@ -9,6 +9,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, DirectorOnly, Section, StatCard } from "@/components/ui-bits";
 import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
+import { membershipIdCandidates } from "@/lib/membership";
 import { fmtKES, useStore } from "@/lib/store";
 
 export const Route = createFileRoute("/transactions")({
@@ -58,12 +59,13 @@ function isInternalSyntheticTransaction(transaction: { by?: string; note?: strin
 }
 
 function TxPage() {
-  const { transactions, members, staff, reloadAppData } = useStore();
+  const { transactions, members, staff, reloadAppData, resolveMpesaAccount } = useStore();
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [memberFilter, setMemberFilter] = useState("");
+  const [query, setQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
@@ -95,28 +97,29 @@ function TxPage() {
             !hiddenTransactionIds.has(transaction.id) &&
             !isInternalSyntheticTransaction(transaction),
         )
-        .map((transaction) => ({
-          id: transaction.id,
-          date: transaction.date,
-          createdAt: transaction.createdAt,
-          type: transaction.type,
-          amount: transaction.amount,
-          memberId: transaction.memberId,
-          loanId: transaction.loanId,
-          ref: transaction.ref,
-          by: transaction.by,
-          note: transaction.note,
-          account: transaction.account ?? transaction.memberId ?? "-",
-          displayName:
-            transaction.payerName ??
-            members.find((member) => member.id === transaction.memberId)?.name ??
-            transaction.note ??
-            "-",
-          direction: OUTFLOWS.includes(transaction.type) ? "out" : "in",
-          status: undefined as string | undefined,
-          isMpesaAudit: false,
-        })),
-    [hiddenTransactionIds, members, transactions],
+        .map((transaction) => {
+          const resolvedMember =
+            resolveMpesaAccount(transaction.memberId ?? "") ??
+            resolveMpesaAccount(transaction.account ?? "");
+          return {
+            id: transaction.id,
+            date: transaction.date,
+            createdAt: transaction.createdAt,
+            type: transaction.type,
+            amount: transaction.amount,
+            memberId: resolvedMember?.id ?? transaction.memberId,
+            loanId: transaction.loanId,
+            ref: transaction.ref,
+            by: transaction.by,
+            note: transaction.note,
+            account: transaction.account ?? transaction.memberId ?? "-",
+            displayName: transaction.payerName ?? resolvedMember?.name ?? transaction.note ?? "-",
+            direction: OUTFLOWS.includes(transaction.type) ? "out" : "in",
+            status: undefined as string | undefined,
+            isMpesaAudit: false,
+          };
+        }),
+    [hiddenTransactionIds, resolveMpesaAccount, transactions],
   );
 
   const mpesaRows = useMemo(
@@ -159,10 +162,32 @@ function TxPage() {
         }
         if (from && transaction.date < from) return false;
         if (to && transaction.date > to) return false;
-        if (memberFilter && transaction.memberId !== memberFilter) return false;
+        if (
+          memberFilter &&
+          transaction.memberId !== memberFilter &&
+          !membershipIdCandidates(transaction.account).includes(memberFilter)
+        ) {
+          return false;
+        }
+        const q = query.trim().toLowerCase();
+        if (q) {
+          const haystack = [
+            transaction.displayName,
+            transaction.memberId,
+            transaction.account,
+            transaction.ref,
+            transaction.type,
+            transaction.note,
+            transaction.by,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
         return true;
       }),
-    [rows, filter, from, to, memberFilter],
+    [rows, filter, from, to, memberFilter, query],
   );
 
   const totals = useMemo(() => {
@@ -259,7 +284,18 @@ function TxPage() {
           </div>
         </DirectorOnly>
 
-        <div className="grid items-end gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-4">
+        <div className="grid items-end gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-5">
+          <label className="block md:col-span-2">
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Search
+            </span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Name, member no, M-Pesa ref..."
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+            />
+          </label>
           <label className="block">
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">From</span>
             <input
@@ -295,7 +331,6 @@ function TxPage() {
               ))}
             </select>
           </label>
-          <div />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

@@ -21,8 +21,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
     currentUser,
     policySettings,
     reloadAppData,
-  } =
-    useStore();
+  } = useStore();
   const sendNotice = useServerFn(createStaffMemoRecord);
   const waiveLoanPenalty = useServerFn(waiveLoanFollowupPenaltyRecord);
   const freezeLoan = useServerFn(freezeLoanFollowupRecord);
@@ -54,7 +53,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           penalties,
           daysMissed,
           frozen: Boolean(l.frozenAt),
-          include: !isComplete && (l.status === "defaulted" || isOverdue || defaulted > 0 || penalties > 0),
+          include:
+            !isComplete &&
+            (l.status === "defaulted" || isOverdue || defaulted > 0 || penalties > 0),
         };
       })
       .filter((x) => x.member && x.include);
@@ -79,7 +80,10 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           frozen: Boolean(summary.frozenAsOf),
           include:
             !isComplete &&
-            (loan.status === "defaulted" || isOverdue || defaulted > 0 || summary.totalOwedNow > 0),
+            (loan.status === "defaulted" ||
+              isOverdue ||
+              defaulted > 0 ||
+              summary.estimatedPenaltyNow > 0),
         };
       })
       .filter((x) => x.member && x.include);

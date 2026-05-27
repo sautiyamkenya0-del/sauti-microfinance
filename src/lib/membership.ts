@@ -53,7 +53,9 @@ export function isMembershipAccountReference(value: string | number | null | und
   const raw = String(value ?? "")
     .trim()
     .toUpperCase();
-  return /^SBC\d{3,}K?$/.test(raw) || /^M\d+$/.test(raw) || /^\d+$/.test(raw);
+  const comparable = raw.replace(/\s+/g, "");
+  const normalized = comparable.startsWith("SBC") ? comparable.replace(/O/g, "0") : comparable;
+  return /^SBC\d+K?$/.test(normalized) || /^M\d+$/.test(normalized) || /^\d+$/.test(normalized);
 }
 
 export function legacyMemberIdFromSequence(value: string | number | null | undefined) {
@@ -62,15 +64,32 @@ export function legacyMemberIdFromSequence(value: string | number | null | undef
   return `M${String(sequence).padStart(3, "0")}`;
 }
 
+export function legacyShortMembershipNumber(value: string | number | null | undefined) {
+  const digits = extractMembershipDigits(value);
+  if (!digits) return undefined;
+  return `SBC${digits.padStart(3, "0")}K`;
+}
+
+export function compactMembershipNumber(value: string | number | null | undefined) {
+  const digits = extractMembershipDigits(value);
+  if (!digits) return undefined;
+  return `SBC${digits}K`;
+}
+
 export function membershipIdCandidates(value: string | number | null | undefined) {
   const raw = String(value ?? "")
     .trim()
     .toUpperCase();
+  if (!isMembershipAccountReference(raw)) return raw ? [raw] : [];
   const normalized = normalizeMembershipNumber(raw);
+  const legacyShort = legacyShortMembershipNumber(raw);
+  const compact = compactMembershipNumber(raw);
   const legacy = legacyMemberIdFromSequence(raw);
   const candidates = new Set<string>();
   if (raw) candidates.add(raw);
   if (normalized) candidates.add(normalized);
+  if (legacyShort) candidates.add(legacyShort);
+  if (compact) candidates.add(compact);
   if (legacy) candidates.add(legacy);
   return Array.from(candidates);
 }

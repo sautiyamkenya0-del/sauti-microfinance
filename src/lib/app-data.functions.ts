@@ -588,13 +588,7 @@ function uniqueTextValues(values: Array<string | null | undefined>) {
 }
 
 function membershipAccountAliases(value: string) {
-  return uniqueTextValues([
-    String(value ?? "")
-      .trim()
-      .toUpperCase(),
-    normalizeMembershipNumber(value),
-    formatMembershipNumber(value),
-  ]);
+  return uniqueTextValues(membershipIdCandidates(value));
 }
 
 function feeNoteValue(note?: string | null) {
@@ -4267,6 +4261,15 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
     const memberNames = new Map(
       members.map((row: any) => [String(row.id ?? "").trim(), String(row.name ?? "").trim()]),
     );
+    const accountFilterAliases = data.account
+      ? new Set(membershipAccountAliases(data.account))
+      : null;
+    const matchesAccountFilter = (account?: string | null, memberId?: string | null) => {
+      if (!accountFilterAliases) return true;
+      const aliases = membershipAccountAliases(String(account ?? ""));
+      const memberAliases = memberId ? membershipAccountAliases(memberId) : [];
+      return [...aliases, ...memberAliases].some((alias) => accountFilterAliases.has(alias));
+    };
     const transactionsById = new Map(
       linkedTransactions.map((row: any) => [String(row.id ?? "").trim(), row]),
     );
@@ -4400,7 +4403,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       };
 
       if (scopedMemberId && receiptRow.memberId !== scopedMemberId) continue;
-      if (data.account && receiptRow.account !== data.account) continue;
+      if (!matchesAccountFilter(receiptRow.account, receiptRow.memberId)) continue;
       if (data.query) {
         const haystack = [
           receiptRow.memberName,
@@ -4472,7 +4475,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       };
 
       if (scopedMemberId && receiptRow.memberId !== scopedMemberId) continue;
-      if (data.account && receiptRow.account !== data.account) continue;
+      if (!matchesAccountFilter(receiptRow.account, receiptRow.memberId)) continue;
       if (data.query) {
         const haystack = [
           receiptRow.memberName,
@@ -4540,7 +4543,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       };
 
       if (scopedMemberId && payoutRow.memberId !== scopedMemberId) continue;
-      if (data.account && payoutRow.account !== data.account) continue;
+      if (!matchesAccountFilter(payoutRow.account, payoutRow.memberId)) continue;
       if (data.query) {
         const haystack = [
           payoutRow.memberName,
@@ -9487,12 +9490,14 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
 
   const [members, transactions, liveLoans, carryoverLoans] = await Promise.all([
     fetchAllRows<Record<string, unknown>>(() =>
-      runtimeDb.from("members").select("id, savings_balance, shares, share_reserve_balance"),
+      runtimeDb
+        .from("members")
+        .select("id, old_system_id, savings_balance, shares, share_reserve_balance"),
     ),
     fetchAllRows<Record<string, unknown>>(() =>
       runtimeDb
         .from("transactions")
-        .select("id, member_id, loan_id, date, created_at, type, amount")
+        .select("id, member_id, loan_id, account, date, created_at, type, amount")
         .order("date", { ascending: true }),
     ),
     fetchAllRows<Record<string, unknown>>(() => runtimeDb.from("loans").select("*")),
@@ -9501,15 +9506,48 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     ),
   ]);
 
+  const memberIdByAlias = new Map<string, string>();
+  for (const member of members) {
+    const memberId = String(member.id ?? "").trim();
+    if (!memberId) continue;
+    for (const alias of membershipAccountAliases(memberId)) {
+      memberIdByAlias.set(alias, memberId);
+    }
+    const oldSystemId = String(member.old_system_id ?? "").trim();
+    if (oldSystemId) {
+      for (const alias of membershipAccountAliases(oldSystemId)) {
+        memberIdByAlias.set(alias, memberId);
+      }
+    }
+  }
+
+  const resolveSnapshotMemberId = (value: unknown) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+    for (const alias of membershipAccountAliases(raw)) {
+      const memberId = memberIdByAlias.get(alias);
+      if (memberId) return memberId;
+    }
+    return "";
+  };
+
   const transactionsByMember = new Map<string, Record<string, unknown>[]>();
   const repaymentByLiveLoan = new Map<string, number>();
+  const transactionMemberPatches: Array<{ id: string; memberId: string }> = [];
 
   for (const transaction of transactions) {
-    const memberId = String(transaction.member_id ?? "").trim();
+    const explicitMemberId = resolveSnapshotMemberId(transaction.member_id);
+    const accountMemberId = resolveSnapshotMemberId(transaction.account);
+    const memberId = explicitMemberId || accountMemberId;
     if (memberId) {
       const group = transactionsByMember.get(memberId) ?? [];
       group.push(transaction);
       transactionsByMember.set(memberId, group);
+
+      const transactionId = String(transaction.id ?? "").trim();
+      if (transactionId && String(transaction.member_id ?? "").trim() !== memberId) {
+        transactionMemberPatches.push({ id: transactionId, memberId });
+      }
     }
 
     if (String(transaction.type ?? "") === "loan_repayment") {
@@ -9521,6 +9559,16 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
         );
       }
     }
+  }
+
+  let transactionsLinked = 0;
+  for (const patch of transactionMemberPatches) {
+    const { error } = await runtimeDb
+      .from("transactions")
+      .update({ member_id: patch.memberId })
+      .eq("id", patch.id);
+    if (error) throw new Error(error.message);
+    transactionsLinked += 1;
   }
 
   let membersUpdated = 0;
@@ -9646,6 +9694,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       membersUpdated,
       liveLoansUpdated,
       carryoverLoansUpdated,
+      transactionsLinked,
       sharePrice: SHARE_PRICE,
     },
   });
@@ -9654,6 +9703,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     membersUpdated,
     liveLoansUpdated,
     carryoverLoansUpdated,
+    transactionsLinked,
     sharePrice: SHARE_PRICE,
   };
 });

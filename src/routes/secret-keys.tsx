@@ -283,7 +283,7 @@ function SecretKeysPage() {
       const result = await updateSnapshot();
       await reloadAppData();
       toast.success(
-        `Snapshot updated: ${result.membersUpdated} member(s), ${result.liveLoansUpdated} live loan(s), ${result.carryoverLoansUpdated} carryover loan(s).`,
+        `Snapshot updated: ${result.membersUpdated} member(s), ${result.liveLoansUpdated} live loan(s), ${result.carryoverLoansUpdated} carryover loan(s), ${result.transactionsLinked ?? 0} transaction link(s).`,
       );
     } catch (e: any) {
       toast.error(e?.message ?? "Snapshot update failed");
@@ -676,8 +676,8 @@ function ClientRecordsTab({
           <div>
             <div className="text-sm font-semibold">Current snapshot</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Recalculates member shares and savings from the ledger, refreshes live-loan paid
-              totals, and reapplies carryover lifetime net oldest-first.
+              Links old and new member refs, recalculates shares and savings from the ledger,
+              refreshes live-loan paid totals, and reapplies carryover lifetime net oldest-first.
             </div>
           </div>
           <button
