@@ -345,6 +345,78 @@ function roundMoney(amount: number) {
   return Math.round((Number(amount) + Number.EPSILON) * 100) / 100;
 }
 
+function mandatorySavingsThresholdForSettings(settings: typeof DEFAULT_POLICY_SETTINGS) {
+  return Math.max(
+    0,
+    Number(settings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD),
+  );
+}
+
+function mandatorySharesThresholdForSettings(settings: typeof DEFAULT_POLICY_SETTINGS) {
+  return Math.max(
+    0,
+    Number(settings.percentages.mandatorySharesThreshold || MANDATORY_SHARES_THRESHOLD),
+  );
+}
+
+function shareBasketValue(shares: unknown, reserve: unknown = 0) {
+  return roundMoney(
+    Math.max(0, Math.floor(Number(shares ?? 0))) * SHARE_PRICE +
+      Math.max(0, Number(reserve ?? 0)),
+  );
+}
+
+function normalizeShareBasketForThreshold(args: {
+  shares: unknown;
+  shareReserveBalance?: unknown;
+  settings: typeof DEFAULT_POLICY_SETTINGS;
+}) {
+  const threshold = mandatorySharesThresholdForSettings(args.settings);
+  const originalValue = shareBasketValue(args.shares, args.shareReserveBalance);
+  const cappedValue = Math.min(originalValue, threshold);
+  const shares = Math.floor(cappedValue / SHARE_PRICE);
+  const shareReserveBalance = roundMoney(cappedValue - shares * SHARE_PRICE);
+  const overflow = roundMoney(Math.max(0, originalValue - cappedValue));
+
+  return {
+    shares,
+    shareReserveBalance,
+    originalValue,
+    cappedValue,
+    overflow,
+    threshold,
+    changed:
+      shares !== Math.max(0, Math.floor(Number(args.shares ?? 0))) ||
+      shareReserveBalance !== roundMoney(Math.max(0, Number(args.shareReserveBalance ?? 0))),
+  };
+}
+
+function assertMandatorySavingsWithinThreshold(args: {
+  amount: unknown;
+  settings: typeof DEFAULT_POLICY_SETTINGS;
+}) {
+  const amount = roundMoney(Math.max(0, Number(args.amount ?? 0)));
+  const threshold = mandatorySavingsThresholdForSettings(args.settings);
+  if (amount > threshold) {
+    throw new Error(
+      `Daily compliance contribution cannot exceed the mandatory threshold of ${threshold}/=. Route extra money to loan savings or purpose pool.`,
+    );
+  }
+}
+
+function assertShareBasketWithinThreshold(args: {
+  shares: unknown;
+  shareReserveBalance?: unknown;
+  settings: typeof DEFAULT_POLICY_SETTINGS;
+}) {
+  const normalized = normalizeShareBasketForThreshold(args);
+  if (normalized.overflow > 0) {
+    throw new Error(
+      `Shares cannot exceed the mandatory threshold of ${normalized.threshold}/=. Route extra money to purpose pool or loan savings.`,
+    );
+  }
+}
+
 function premiumUpfrontRequirementForAmount(amount: number) {
   const normalized = Math.max(0, Number(amount ?? 0));
   if (normalized <= 5000) return { minShares: 0, minSavings: 0, total: 0 };
@@ -1876,11 +1948,21 @@ export async function applyMpesaPaymentToDatabase(args: {
   }
 
   function queueShareContribution(applied: number, notePrefix: string, note?: string) {
-    if (applied <= 0) return;
+    let amount = roundMoney(applied);
+    if (amount <= 0) return;
+
+    const basketGap = Math.max(0, mandatorySharesThreshold - currentShareBasketValue());
+    if (basketGap <= 0) {
+      allocatePostComplianceSplit(amount, "mandatory shares threshold is already full");
+      return;
+    }
+
+    const overflow = roundMoney(Math.max(0, amount - basketGap));
+    amount = Math.min(amount, basketGap);
 
     setPrimaryIfMissing(
       "share_purchase",
-      applied,
+      amount,
       `M-Pesa ${args.mpesaRef ?? ""} from ${args.payerName ?? "-"}`,
     );
     queueTransaction(
@@ -1888,7 +1970,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         date: paymentDate,
         created_at: paymentCreatedAt ?? null,
         type: "share_purchase",
-        amount: applied,
+        amount,
         member_id: memberId,
         by_staff: MPESA_SYSTEM_STAFF_ID,
         ref: args.mpesaRef,
@@ -1900,7 +1982,7 @@ export async function applyMpesaPaymentToDatabase(args: {
     );
 
     const shareGapAmount = Math.max(0, mandatorySharesThreshold - currentShareValue());
-    let nextReserve = roundMoney(currentShareReserveBalance() + applied);
+    let nextReserve = roundMoney(currentShareReserveBalance() + amount);
     const convertibleAmount =
       Math.floor(Math.min(nextReserve, shareGapAmount) / SHARE_PRICE) * SHARE_PRICE;
     const convertedUnits = Math.floor(convertibleAmount / SHARE_PRICE);
@@ -1912,10 +1994,14 @@ export async function applyMpesaPaymentToDatabase(args: {
 
     if (convertedUnits > 0) {
       notes.push(
-        `${notePrefix} Added ${applied}/= to mandatory shares and converted ${convertedUnits} share unit(s).`,
+        `${notePrefix} Added ${amount}/= to mandatory shares and converted ${convertedUnits} share unit(s).`,
       );
     } else {
-      notes.push(`${notePrefix} Added ${applied}/= to mandatory share reserve.`);
+      notes.push(`${notePrefix} Added ${amount}/= to mandatory share reserve.`);
+    }
+
+    if (overflow > 0) {
+      allocatePostComplianceSplit(overflow, "share threshold overflow");
     }
   }
 
@@ -2582,6 +2668,13 @@ export async function applyMpesaPaymentToDatabase(args: {
       .eq("id", memberId);
     if (memberUpdateError) throw new Error(memberUpdateError.message);
   }
+
+  await repairMemberFinancialInvariants({
+    runtimeDb: supabaseAdmin,
+    memberId,
+    actorId: MPESA_SYSTEM_STAFF_ID,
+    reason: "M-Pesa allocation",
+  });
 
   await markMpesaEventProcessed(args.eventId, primaryTransactionId ?? null);
   return {
@@ -3863,6 +3956,13 @@ async function redistributePurposePoolBalances(runtimeDb: any, actor: AuditActor
       penaltiesSettled += penaltiesToSettle.length;
     }
 
+    await repairMemberFinancialInvariants({
+      runtimeDb,
+      memberId,
+      actorId: actor.id,
+      reason: "Purpose-pool redistribution",
+    });
+
     redistributedMembers += 1;
   }
 
@@ -4704,6 +4804,11 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
     const shares = investorOnly ? 0 : data.shares;
     const savingsBalance = investorOnly ? 0 : data.savingsBalance;
+    const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+    if (!investorOnly) {
+      assertMandatorySavingsWithinThreshold({ amount: savingsBalance, settings: policySettings });
+      assertShareBasketWithinThreshold({ shares, settings: policySettings });
+    }
 
     const { error: memberError } = await supabaseAdmin.from("members").insert({
       id: memberId,
@@ -4883,6 +4988,9 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         : currentMemberId;
     const targetMembershipNumber = formatMembershipNumber(targetMemberId);
     const hasShop = data.businessPermanence === "permanent";
+    const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
+    const nextShares = investorOnly ? 0 : data.shares;
+    const nextSavingsBalance = investorOnly ? 0 : data.savingsBalance;
 
     const { data: currentMember, error: currentMemberError } = await supabaseAdmin
       .from("members")
@@ -4913,12 +5021,26 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       throw new Error(`Member already exists in the database as ${duplicate.id}.`);
     }
 
+    const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+    if (!investorOnly) {
+      assertMandatorySavingsWithinThreshold({
+        amount: nextSavingsBalance,
+        settings: policySettings,
+      });
+      assertShareBasketWithinThreshold({
+        shares: nextShares,
+        shareReserveBalance: currentMember.share_reserve_balance,
+        settings: policySettings,
+      });
+    }
+
     const memberPayload = {
       name: data.name,
       phone,
       status: data.status,
-      shares: data.shares,
-      savings_balance: data.savingsBalance,
+      shares: nextShares,
+      savings_balance: nextSavingsBalance,
+      share_reserve_balance: investorOnly ? 0 : currentMember.share_reserve_balance,
       fee_has_shop: hasShop,
       first_name: data.firstName ?? null,
       second_name: data.secondName ?? null,
@@ -5165,8 +5287,8 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         fieldOfficerId: data.fieldOfficerId ?? null,
         status: data.status,
         phone,
-        shares: data.shares,
-        savingsBalance: data.savingsBalance,
+        shares: nextShares,
+        savingsBalance: nextSavingsBalance,
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
       },
@@ -6234,22 +6356,29 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
     }
 
     const memberPatch: Record<string, unknown> = {};
+    const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
     let memberBeforeTransaction: {
       savings_balance?: number | string | null;
       shares?: number | string | null;
+      share_reserve_balance?: number | string | null;
     } | null = null;
     if (resolvedMemberId) {
       const { data: member, error: memberError } = await supabaseAdmin
         .from("members")
-        .select("savings_balance, shares")
+        .select("savings_balance, shares, share_reserve_balance")
         .eq("id", resolvedMemberId)
         .maybeSingle();
       if (memberError) throw new Error(memberError.message);
       memberBeforeTransaction = member;
       if (memberBeforeTransaction) {
         if (data.type === "deposit") {
-          memberPatch.savings_balance =
+          const nextSavings =
             Number(memberBeforeTransaction.savings_balance ?? 0) + data.amount;
+          assertMandatorySavingsWithinThreshold({
+            amount: nextSavings,
+            settings: policySettings,
+          });
+          memberPatch.savings_balance = nextSavings;
         } else if (data.type === "withdrawal") {
           const currentBalance = Number(memberBeforeTransaction.savings_balance ?? 0);
           if (!data.allowOverdraw && currentBalance < data.amount) {
@@ -6259,8 +6388,14 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
           }
           memberPatch.savings_balance = currentBalance - data.amount;
         } else if (data.type === "share_purchase") {
-          memberPatch.shares =
+          const nextShares =
             Number(memberBeforeTransaction.shares ?? 0) + Math.floor(data.amount / SHARE_PRICE);
+          assertShareBasketWithinThreshold({
+            shares: nextShares,
+            shareReserveBalance: memberBeforeTransaction.share_reserve_balance,
+            settings: policySettings,
+          });
+          memberPatch.shares = nextShares;
         }
       }
     }
@@ -7501,8 +7636,10 @@ async function adjustMemberDocketBalance(args: {
   if (next < 0) {
     throw new Error(`Insufficient ${docket.replace(/_/g, " ")} balance.`);
   }
+  const policySettings = await loadRuntimePolicySettings(runtimeDb);
 
   if (docket === "mandatory_savings") {
+    assertMandatorySavingsWithinThreshold({ amount: next, settings: policySettings });
     const { error } = await runtimeDb
       .from("members")
       .update({ savings_balance: next })
@@ -7517,6 +7654,11 @@ async function adjustMemberDocketBalance(args: {
       throw new Error(`Share transfers must be in increments of ${SHARE_PRICE}/=.`);
     }
     const nextUnits = Math.floor(next / SHARE_PRICE);
+    assertShareBasketWithinThreshold({
+      shares: nextUnits,
+      shareReserveBalance: member.share_reserve_balance,
+      settings: policySettings,
+    });
     const { error } = await runtimeDb
       .from("members")
       .update({ shares: nextUnits })
@@ -7527,6 +7669,11 @@ async function adjustMemberDocketBalance(args: {
   }
 
   if (docket === "share_reserve") {
+    assertShareBasketWithinThreshold({
+      shares: member.shares,
+      shareReserveBalance: next,
+      settings: policySettings,
+    });
     const { error } = await runtimeDb
       .from("members")
       .update({ share_reserve_balance: next })
@@ -7546,6 +7693,220 @@ async function adjustMemberDocketBalance(args: {
 
   const { error } = await runtimeDb.from("member_docket_balances").upsert(balancePayload);
   if (error) throw new Error(error.message);
+}
+
+async function adjustStoredMemberDocketBalance(args: {
+  runtimeDb: any;
+  memberId: string;
+  docket: MemberDocket;
+  delta: number;
+  protected?: boolean;
+}) {
+  const delta = roundMoney(args.delta);
+  if (delta === 0) return 0;
+
+  const { data, error } = await args.runtimeDb
+    .from("member_docket_balances")
+    .select("amount, protected")
+    .eq("member_id", args.memberId)
+    .eq("docket", args.docket)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+
+  const next = roundMoney(Math.max(0, toNumber(data?.amount) + delta));
+  const { error: upsertError } = await args.runtimeDb.from("member_docket_balances").upsert({
+    member_id: args.memberId,
+    docket: args.docket,
+    amount: next,
+    protected: args.protected === true || data?.protected === true,
+    updated_at: new Date().toISOString(),
+  });
+  if (upsertError) throw new Error(upsertError.message);
+  return next;
+}
+
+async function recordInvariantDocketMovement(args: {
+  runtimeDb: any;
+  memberId: string;
+  fromDocket?: MemberDocket | null;
+  toDocket?: MemberDocket | null;
+  amount: number;
+  actorId?: string | null;
+  reason: string;
+}) {
+  const amount = roundMoney(args.amount);
+  if (amount <= 0) return;
+  if (args.actorId === MPESA_SYSTEM_STAFF_ID) {
+    await ensureSystemStaffActor(args.runtimeDb, MPESA_SYSTEM_STAFF_ID);
+  }
+  const { error } = await args.runtimeDb.from("member_docket_movements").insert({
+    id: makeId("MDM"),
+    member_id: args.memberId,
+    from_docket: args.fromDocket ?? null,
+    to_docket: args.toDocket ?? null,
+    amount,
+    reason: args.reason,
+    by_staff: args.actorId ?? null,
+    protected: true,
+  });
+  if (error) throw new Error(error.message);
+}
+
+async function computeMemberLifetimeNet(runtimeDb: any, memberId: string) {
+  const [transactions, profileResult] = await Promise.all([
+    fetchAllRows<Record<string, unknown>>(() =>
+      runtimeDb.from("transactions").select("type, amount").eq("member_id", memberId),
+    ),
+    runtimeDb
+      .from("member_carryover_profiles")
+      .select("total_collected, collection_breakdown")
+      .eq("member_id", memberId)
+      .maybeSingle(),
+  ]);
+  if (profileResult.error && !isMissingRelationError(profileResult.error)) {
+    throw new Error(profileResult.error.message);
+  }
+
+  const inflowTypes = new Set([
+    "deposit",
+    "loan_repayment",
+    "share_purchase",
+    "fee_payment",
+    "investor_contribution",
+  ]);
+  const outflowTypes = new Set(["withdrawal", "loan_disbursement"]);
+  const ledgerNet = transactions.reduce((sum, transaction) => {
+    const type = String(transaction.type ?? "");
+    const amount = toNumber(transaction.amount as any);
+    if (inflowTypes.has(type)) return sum + amount;
+    if (outflowTypes.has(type)) return sum - amount;
+    return sum;
+  }, 0);
+
+  const breakdown = asJsonObject(profileResult.data?.collection_breakdown);
+  const carryoverCollected = Math.max(
+    toNumber(profileResult.data?.total_collected),
+    toNumber(breakdown.totalDepositsRecorded),
+  );
+  return Math.max(0, roundMoney(Math.max(ledgerNet, carryoverCollected)));
+}
+
+async function repairMemberFinancialInvariants(args: {
+  runtimeDb: any;
+  memberId: string;
+  actorId?: string | null;
+  reason: string;
+  capPurposePoolToLifetimeNet?: boolean;
+}) {
+  const policySettings = await loadRuntimePolicySettings(args.runtimeDb);
+  const { data: member, error } = await args.runtimeDb
+    .from("members")
+    .select("id, savings_balance, shares, share_reserve_balance")
+    .eq("id", args.memberId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!member) return { changed: false, overflowToPurposePool: 0, purposePoolTrimmed: 0 };
+
+  const memberPatch: Record<string, unknown> = {};
+  let overflowToPurposePool = 0;
+  const savingsThreshold = mandatorySavingsThresholdForSettings(policySettings);
+  const currentSavings = toNumber(member.savings_balance);
+  if (currentSavings > savingsThreshold) {
+    memberPatch.savings_balance = savingsThreshold;
+    overflowToPurposePool = roundMoney(overflowToPurposePool + currentSavings - savingsThreshold);
+  }
+
+  const normalizedShares = normalizeShareBasketForThreshold({
+    shares: member.shares,
+    shareReserveBalance: member.share_reserve_balance,
+    settings: policySettings,
+  });
+  if (normalizedShares.changed) {
+    memberPatch.shares = normalizedShares.shares;
+    memberPatch.share_reserve_balance = normalizedShares.shareReserveBalance;
+    overflowToPurposePool = roundMoney(overflowToPurposePool + normalizedShares.overflow);
+  }
+
+  if (Object.keys(memberPatch).length > 0) {
+    const { error: updateError } = await args.runtimeDb
+      .from("members")
+      .update(memberPatch as any)
+      .eq("id", args.memberId);
+    if (updateError) throw new Error(updateError.message);
+  }
+
+  if (overflowToPurposePool > 0) {
+    await adjustStoredMemberDocketBalance({
+      runtimeDb: args.runtimeDb,
+      memberId: args.memberId,
+      docket: "purpose_pool",
+      delta: overflowToPurposePool,
+      protected: true,
+    });
+    await recordInvariantDocketMovement({
+      runtimeDb: args.runtimeDb,
+      memberId: args.memberId,
+      fromDocket: null,
+      toDocket: "purpose_pool",
+      amount: overflowToPurposePool,
+      actorId: args.actorId,
+      reason: `${args.reason}: moved mandatory-threshold overflow into purpose pool`,
+    });
+  }
+
+  let purposePoolTrimmed = 0;
+  if (args.capPurposePoolToLifetimeNet) {
+    const lifetimeNet = await computeMemberLifetimeNet(args.runtimeDb, args.memberId);
+    const { data: docketRows, error: docketError } = await args.runtimeDb
+      .from("member_docket_balances")
+      .select("docket, amount")
+      .eq("member_id", args.memberId);
+    if (docketError) throw new Error(docketError.message);
+
+    const savedMember = {
+      savings_balance: memberPatch.savings_balance ?? member.savings_balance,
+      shares: memberPatch.shares ?? member.shares,
+      share_reserve_balance: memberPatch.share_reserve_balance ?? member.share_reserve_balance,
+    };
+    const mandatoryHeld =
+      toNumber(savedMember.savings_balance) +
+      shareBasketValue(savedMember.shares, savedMember.share_reserve_balance);
+    const rows = (docketRows ?? []) as Array<{ docket?: string | null; amount?: unknown }>;
+    const purposePool = rows
+      .filter((row) => row.docket === "purpose_pool")
+      .reduce((sum, row) => sum + toNumber(row.amount), 0);
+    const otherDockets = rows
+      .filter((row) => row.docket && row.docket !== "purpose_pool")
+      .reduce((sum, row) => sum + toNumber(row.amount), 0);
+    const maxPurposePool = Math.max(0, roundMoney(lifetimeNet - mandatoryHeld - otherDockets));
+    if (purposePool > maxPurposePool) {
+      purposePoolTrimmed = roundMoney(purposePool - maxPurposePool);
+      const { error: purposeError } = await args.runtimeDb.from("member_docket_balances").upsert({
+        member_id: args.memberId,
+        docket: "purpose_pool",
+        amount: maxPurposePool,
+        protected: true,
+        updated_at: new Date().toISOString(),
+      });
+      if (purposeError) throw new Error(purposeError.message);
+      await recordInvariantDocketMovement({
+        runtimeDb: args.runtimeDb,
+        memberId: args.memberId,
+        fromDocket: "purpose_pool",
+        toDocket: null,
+        amount: purposePoolTrimmed,
+        actorId: args.actorId,
+        reason: `${args.reason}: removed unbacked purpose-pool balance above lifetime net`,
+      });
+    }
+  }
+
+  return {
+    changed:
+      Object.keys(memberPatch).length > 0 || overflowToPurposePool > 0 || purposePoolTrimmed > 0,
+    overflowToPurposePool,
+    purposePoolTrimmed,
+  };
 }
 
 async function loadMemberForDocket(runtimeDb: any, memberId: string) {
@@ -8966,11 +9327,38 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
           data.totalCollected,
       ) || 0,
     );
+    const policySettings = await loadRuntimePolicySettings(runtimeDb);
+    const savingsThreshold = mandatorySavingsThresholdForSettings(policySettings);
+    const savingsBalance = Math.min(data.savingsBalance, savingsThreshold);
+    const savingsOverflow = Math.max(0, data.savingsBalance - savingsThreshold);
+    const normalizedShares = normalizeShareBasketForThreshold({
+      shares: data.shareUnits,
+      settings: policySettings,
+    });
+    const thresholdOverflow = roundMoney(savingsOverflow + normalizedShares.overflow);
+    if (thresholdOverflow > 0) {
+      collectionBreakdown.purposePoolBalance = roundMoney(
+        toNumber((collectionBreakdown as { purposePoolBalance?: unknown }).purposePoolBalance) +
+          thresholdOverflow,
+      );
+    }
+    const nonPurposeAllocated =
+      savingsBalance +
+      normalizedShares.cappedValue +
+      data.feesPaidTotal +
+      data.loanRepaymentsTotal +
+      data.investmentBalance +
+      data.otherCollectedTotal;
+    const maxPurposePoolBalance = Math.max(0, roundMoney(totalCollected - nonPurposeAllocated));
+    collectionBreakdown.purposePoolBalance = Math.min(
+      toNumber((collectionBreakdown as { purposePoolBalance?: unknown }).purposePoolBalance),
+      maxPurposePoolBalance,
+    );
 
     const { error } = await runtimeDb.from("member_carryover_profiles").upsert({
       member_id: data.memberId,
-      savings_balance: data.savingsBalance,
-      share_units: data.shareUnits,
+      savings_balance: savingsBalance,
+      share_units: normalizedShares.shares,
       fees_paid_total: data.feesPaidTotal,
       loan_repayments_total: data.loanRepaymentsTotal,
       investment_balance: data.investmentBalance,
@@ -8996,8 +9384,9 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
     const { error: memberError } = await runtimeDb
       .from("members")
       .update({
-        savings_balance: data.savingsBalance,
-        shares: data.shareUnits,
+        savings_balance: savingsBalance,
+        shares: normalizedShares.shares,
+        share_reserve_balance: normalizedShares.shareReserveBalance,
         fee_membership: data.membershipFeePaid,
         fee_card: data.cardFeePaid,
         fee_sticker: data.stickerFeePaid,
@@ -9015,8 +9404,9 @@ export const upsertMemberCarryoverProfileRecord = createServerFn({ method: "POST
       targetId: data.memberId,
       summary: `${actor.name} updated carryover balances for ${data.memberId}`,
       details: {
-        savingsBalance: data.savingsBalance,
-        shareUnits: data.shareUnits,
+        savingsBalance,
+        shareUnits: normalizedShares.shares,
+        overflowToPurposePool: thresholdOverflow,
         totalCollected,
         penaltiesOutstanding: data.penaltiesOutstanding,
         completedLoanCycles: data.completedLoanCycles,
@@ -9584,24 +9974,70 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     );
 
     const patch: Record<string, unknown> = {};
+    let snapshotOverflowToPurposePool = 0;
     if (shareAmount > 0) {
       const shareUnits = Math.floor(shareAmount / SHARE_PRICE);
-      patch.shares = shareUnits;
-      patch.share_reserve_balance = roundMoney(shareAmount - shareUnits * SHARE_PRICE);
+      const shareReserveBalance = roundMoney(shareAmount - shareUnits * SHARE_PRICE);
+      const normalizedShares = normalizeShareBasketForThreshold({
+        shares: shareUnits,
+        shareReserveBalance,
+        settings: policySettings,
+      });
+      patch.shares = normalizedShares.shares;
+      patch.share_reserve_balance = normalizedShares.shareReserveBalance;
+      snapshotOverflowToPurposePool = roundMoney(
+        snapshotOverflowToPurposePool + normalizedShares.overflow,
+      );
     }
     if (savingsTransactions.length > 0) {
-      patch.savings_balance = roundMoney(
+      const savingsBalance = roundMoney(
         savingsTransactions.reduce((sum, transaction) => {
           const amount = toNumber(transaction.amount as any);
           return String(transaction.type ?? "") === "withdrawal" ? sum - amount : sum + amount;
         }, 0),
       );
+      const savingsThreshold = mandatorySavingsThresholdForSettings(policySettings);
+      patch.savings_balance = Math.min(savingsBalance, savingsThreshold);
+      snapshotOverflowToPurposePool = roundMoney(
+        snapshotOverflowToPurposePool + Math.max(0, savingsBalance - savingsThreshold),
+      );
     }
-    if (Object.keys(patch).length === 0) continue;
 
-    const { error } = await runtimeDb.from("members").update(patch).eq("id", memberId);
-    if (error) throw new Error(error.message);
-    membersUpdated += 1;
+    if (Object.keys(patch).length > 0) {
+      const { error } = await runtimeDb.from("members").update(patch).eq("id", memberId);
+      if (error) throw new Error(error.message);
+      membersUpdated += 1;
+    }
+
+    if (snapshotOverflowToPurposePool > 0) {
+      await adjustStoredMemberDocketBalance({
+        runtimeDb,
+        memberId,
+        docket: "purpose_pool",
+        delta: snapshotOverflowToPurposePool,
+        protected: true,
+      });
+      await recordInvariantDocketMovement({
+        runtimeDb,
+        memberId,
+        fromDocket: null,
+        toDocket: "purpose_pool",
+        amount: snapshotOverflowToPurposePool,
+        actorId: actor.id,
+        reason: "Current snapshot repair: moved threshold overflow into purpose pool",
+      });
+    }
+
+    const repair = await repairMemberFinancialInvariants({
+      runtimeDb,
+      memberId,
+      actorId: actor.id,
+      reason: "Current snapshot repair",
+      capPurposePoolToLifetimeNet: true,
+    });
+    if (repair.changed && Object.keys(patch).length === 0) {
+      membersUpdated += 1;
+    }
   }
 
   let liveLoansUpdated = 0;

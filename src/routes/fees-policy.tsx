@@ -84,7 +84,6 @@ import {
 } from "@/lib/store";
 
 type PolicyCenterTab = "fees" | "percentages" | "interest" | "waterfall" | "clients" | "targets";
-type VisiblePolicyCenterTab = Exclude<PolicyCenterTab, "clients">;
 
 type TargetDraft = {
   id?: string;
@@ -114,11 +113,12 @@ type CarryoverCollectionBreakdown = {
 type CarryoverMemberMode = "loan" | "none";
 
 const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
-const SUBPAGES: { key: VisiblePolicyCenterTab; label: string }[] = [
+const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
   { key: "percentages", label: "Percentages" },
   { key: "interest", label: "Interest" },
   { key: "waterfall", label: "Waterfall Flow" },
+  { key: "clients", label: "Client Records" },
   { key: "targets", label: "Targets" },
 ];
 
@@ -152,7 +152,9 @@ function PolicyCenterPage() {
   const waivePenalty = useServerFn(waivePenaltyRecord);
   const { rows: targetRows, upsertTarget, removeTarget } = usePerformanceTargetActions();
 
-  const [tab, setTab] = useState<PolicyCenterTab>("fees");
+  const [tab, setTab] = useState<PolicyCenterTab>(() =>
+    typeof window !== "undefined" && window.location.hash === "#clients" ? "clients" : "fees",
+  );
   const [editingFee, setEditingFee] = useState<FeePolicy | null>(null);
   const [creatingFee, setCreatingFee] = useState(false);
   const [percentagesDraft, setPercentagesDraft] = useState(policySettings.percentages);

@@ -643,6 +643,7 @@ function ClientRecordsTab({
   updating: boolean;
   onUpdateSnapshot: () => void;
 }) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const memberRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -680,15 +681,25 @@ function ClientRecordsTab({
               refreshes live-loan paid totals, and reapplies carryover lifetime net oldest-first.
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onUpdateSnapshot}
-            disabled={updating}
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${updating ? "animate-spin" : ""}`} />
-            {updating ? "Updating..." : "Update current snapshot"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/fees-policy", hash: "clients" })}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-semibold hover:bg-muted"
+            >
+              <Users className="h-3.5 w-3.5" />
+              Open full client records
+            </button>
+            <button
+              type="button"
+              onClick={onUpdateSnapshot}
+              disabled={updating}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${updating ? "animate-spin" : ""}`} />
+              {updating ? "Updating..." : "Update current snapshot"}
+            </button>
+          </div>
         </div>
       </div>
 
