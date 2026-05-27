@@ -69,7 +69,11 @@ function TxPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
-  const { data: mpesaAuditRows = [], refetch: refetchMpesaAudit } = useQuery({
+  const {
+    data: mpesaAuditRows = [],
+    refetch: refetchMpesaAudit,
+    isLoading: mpesaAuditLoading,
+  } = useQuery({
     queryKey: ["mpesa-receipt-audit"],
     queryFn: () => fetchMpesaAudit({ data: {} }),
     staleTime: 30000,
@@ -94,6 +98,7 @@ function TxPage() {
       transactions
         .filter(
           (transaction) =>
+            transaction.by !== "MPESA" &&
             !hiddenTransactionIds.has(transaction.id) &&
             !isInternalSyntheticTransaction(transaction),
         )
@@ -145,11 +150,13 @@ function TxPage() {
   );
 
   const rows = useMemo(
-    () =>
-      [...ledgerRows, ...mpesaRows].sort((a, b) =>
+    () => {
+      if (mpesaAuditLoading) return [];
+      return [...ledgerRows, ...mpesaRows].sort((a, b) =>
         String(b.createdAt ?? b.date).localeCompare(String(a.createdAt ?? a.date)),
-      ),
-    [ledgerRows, mpesaRows],
+      );
+    },
+    [ledgerRows, mpesaAuditLoading, mpesaRows],
   );
 
   const list = useMemo(
@@ -257,7 +264,7 @@ function TxPage() {
             <StatCard
               label="Filtered Records"
               value={list.length}
-              hint={`Of ${rows.length} visible total`}
+              hint={mpesaAuditLoading ? "Loading original M-Pesa receipts" : `Of ${rows.length} visible total`}
               icon={<ListOrdered className="h-5 w-5" />}
             />
             <StatCard
@@ -374,7 +381,9 @@ function TxPage() {
                 {list.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
-                      No transactions found for the selected filters.
+                      {mpesaAuditLoading
+                        ? "Loading original M-Pesa receipts..."
+                        : "No transactions found for the selected filters."}
                     </td>
                   </tr>
                 ) : null}

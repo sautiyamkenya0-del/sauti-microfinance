@@ -55,6 +55,13 @@ function isLoanMemberAccount(member: { category?: string; memberTags?: string[] 
   );
 }
 
+function loanKindLabel(kind?: LoanKind) {
+  if (kind === "fuel") return "Fuel";
+  if (kind === "stock") return "Stock";
+  if (kind === "service") return "Service";
+  return "Financial";
+}
+
 export const Route = createFileRoute("/loans")({
   head: () => ({ meta: [{ title: "Loans - Sauti Microfinance" }] }),
   component: LoansHub,
@@ -67,6 +74,7 @@ function LoansHub() {
   const [tab, setTab] = useState<Tab>("book");
   const [selectedLoanKind, setSelectedLoanKind] = useState<LoanKind>("financial");
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [appraisalLoanId, setAppraisalLoanId] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
   const [historyMemberId, setHistoryMemberId] = useState<string | null>(null);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
@@ -269,13 +277,21 @@ function LoansHub() {
               <FirstTimeApplication
                 memberId={selectedMemberId || undefined}
                 initialLoanKind={selectedLoanKind}
-                onSubmitted={() => setTab("appraisal")}
+                onSubmitted={(loanId, nextMemberId) => {
+                  setAppraisalLoanId(loanId);
+                  setSelectedMemberId(nextMemberId);
+                  setTab("appraisal");
+                }}
               />
             ) : (
               <RepeatApplication
                 memberId={selectedMemberId}
                 initialLoanKind={selectedLoanKind}
-                onSubmitted={() => setTab("review")}
+                onSubmitted={(loanId, nextMemberId) => {
+                  setAppraisalLoanId(loanId);
+                  setSelectedMemberId(nextMemberId);
+                  setTab("appraisal");
+                }}
               />
             )}
           </div>
@@ -289,7 +305,9 @@ function LoansHub() {
             onSaved={refreshCarryoverLoans}
           />
         )}
-        {tab === "appraisal" && <AppraisalForm memberId={selectedMemberId || undefined} />}
+        {tab === "appraisal" && (
+          <AppraisalForm memberId={selectedMemberId || undefined} loanId={appraisalLoanId || undefined} />
+        )}
         {tab === "review" && <PendingReview />}
         {tab === "followups" && <FollowUps carryoverLoans={carryoverLoans} />}
         {tab === "visits" && <FieldVisits />}
@@ -337,7 +355,7 @@ function CarryoverEntry({
   const [amount, setAmount] = useState(0);
   const [charge, setCharge] = useState(0);
   const [ratePct, setRatePct] = useState(0);
-  const [termDays, setTermDays] = useState<7 | 14 | 30 | 60 | 90>(30);
+  const [termDays, setTermDays] = useState(loanKind === "fuel" ? 1 : 30);
   const [paidToDate, setPaidToDate] = useState(0);
   const [vehiclePlate, setVehiclePlate] = useState("");
   const [stockItem, setStockItem] = useState("");
@@ -348,6 +366,11 @@ function CarryoverEntry({
       setMemberId(eligibleMembers[0]?.id ?? "");
     }
   }, [eligibleMembers, memberId]);
+
+  useEffect(() => {
+    if (loanKind === "fuel") setTermDays(1);
+    if (loanKind === "stock" && termDays < 1) setTermDays(14);
+  }, [loanKind, termDays]);
 
   const selectedMember = members.find((member) => member.id === memberId);
   const totalOpeningBalance = amount + charge;
@@ -383,7 +406,7 @@ function CarryoverEntry({
           loanCycleNumber: 1,
           principal: amount,
           interestRatePct: ratePct,
-          termDays,
+          termDays: loanKind === "fuel" ? 1 : Math.max(1, Math.floor(termDays)),
           dailySavingsAmount: 0,
           startDate: date,
           paidToDate,
@@ -493,17 +516,21 @@ function CarryoverEntry({
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Term
             </span>
-            <select
-              value={termDays}
-              onChange={(event) => setTermDays(Number(event.target.value) as 7 | 14 | 30 | 60 | 90)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            >
-              {[7, 14, 30, 60, 90].map((days) => (
-                <option key={days} value={days}>
-                  {days} days
-                </option>
-              ))}
-            </select>
+            {loanKind === "fuel" ? (
+              <input
+                value="24 hours"
+                readOnly
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            ) : (
+              <input
+                type="number"
+                min={1}
+                value={termDays}
+                onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            )}
           </label>
           <NumberInput label="Paid To Date" value={paidToDate} onChange={setPaidToDate} />
         </div>

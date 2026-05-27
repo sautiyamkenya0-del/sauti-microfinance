@@ -17,6 +17,16 @@ as $$
   );
 $$;
 
+update public.policy_settings
+set value = jsonb_set(
+  coalesce(value, '{}'::jsonb),
+  '{roundOffStep}',
+  '5'::jsonb,
+  true
+)
+where key = 'percentages'
+  and coalesce(nullif(value ->> 'roundOffStep', '')::numeric, 0) < 5;
+
 create or replace function public.tg_enforce_member_financial_invariants()
 returns trigger
 language plpgsql
@@ -55,6 +65,15 @@ begin
   return new;
 end;
 $$;
+
+update public.members
+set
+  savings_balance = greatest(coalesce(savings_balance, 0), 0),
+  shares = greatest(coalesce(shares, 0), 0),
+  share_reserve_balance = greatest(coalesce(share_reserve_balance, 0), 0)
+where coalesce(savings_balance, 0) < 0
+   or coalesce(shares, 0) < 0
+   or coalesce(share_reserve_balance, 0) < 0;
 
 drop trigger if exists trg_members_financial_invariants on public.members;
 create trigger trg_members_financial_invariants
@@ -235,6 +254,17 @@ duplicate_open_loans as (
   group by member_id, loan_kind
   having count(*) > 1
 )
+select
+  'negative_member_balance'::text as violation,
+  mp.member_id,
+  jsonb_build_object(
+    'savingsBalance', mp.savings_balance,
+    'shareBasket', mp.share_basket
+  ) as details
+from member_positions mp
+where mp.savings_balance < 0
+   or mp.share_basket < 0
+union all
 select
   'mandatory_savings_above_threshold'::text as violation,
   mp.member_id,

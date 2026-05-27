@@ -529,10 +529,23 @@ export async function handleMpesaConfirmationRequest(request: Request) {
       normalized.businessShortCode &&
       !expectedShortcodes.includes(String(normalized.businessShortCode).trim())
     ) {
-      return Response.json(
-        { ResultCode: 1, ResultDesc: "Wrong shortcode" },
-        { status: 200, headers: NO_STORE_HEADERS },
-      );
+      console.error("mpesa confirmation shortcode mismatch (recording anyway)", {
+        received: normalized.businessShortCode,
+        expected: expectedShortcodes,
+        mpesaRef: normalized.eventRef,
+        account: normalized.account,
+      });
+      await logErrorToServer({
+        level: "warning",
+        category: "mpesa.confirmation.shortcode_mismatch",
+        message: "M-Pesa confirmation shortcode did not match configured shortcode; receipt was recorded anyway.",
+        context: {
+          received: normalized.businessShortCode,
+          expected: expectedShortcodes,
+          mpesaRef: normalized.eventRef,
+          account: normalized.account,
+        },
+      }).catch(() => {});
     }
 
     const event = await recordMpesaConfirmationEvent({
@@ -552,13 +565,44 @@ export async function handleMpesaConfirmationRequest(request: Request) {
       normalized.amount >= 1 &&
       (!event.processed || !event.transaction_id)
     ) {
-      processedResult = await applyMpesaPaymentToDatabase({
-        eventId: event.id,
-        account: normalized.account,
-        amount: normalized.amount,
-        payerName: normalized.payerName,
-        mpesaRef: normalized.paymentRef ?? normalized.eventRef,
-      });
+      try {
+        processedResult = await applyMpesaPaymentToDatabase({
+          eventId: event.id,
+          account: normalized.account,
+          amount: normalized.amount,
+          payerName: normalized.payerName,
+          mpesaRef: normalized.paymentRef ?? normalized.eventRef,
+        });
+      } catch (allocationError) {
+        console.error("mpesa confirmation allocation failed; recording as unallocated", {
+          error: String(allocationError ?? ""),
+          account: normalized.account,
+          amount: normalized.amount,
+          mpesaRef: normalized.paymentRef ?? normalized.eventRef,
+        });
+        await logErrorToServer({
+          level: "error",
+          category: "mpesa.confirmation.allocation_fallback",
+          message: "M-Pesa payment allocation failed; receipt was stored as unallocated.",
+          context: {
+            error: String(allocationError ?? ""),
+            account: normalized.account,
+            amount: normalized.amount,
+            mpesaRef: normalized.paymentRef ?? normalized.eventRef,
+          },
+        }).catch(() => {});
+        processedResult = await applyMpesaPaymentToDatabase({
+          eventId: event.id,
+          account: normalized.account,
+          amount: normalized.amount,
+          payerName: normalized.payerName,
+          mpesaRef: normalized.paymentRef ?? normalized.eventRef,
+          forceUnallocated: true,
+          fallbackNote: `Automatic allocation failed for account ${normalized.account || "-"}: ${
+            allocationError instanceof Error ? allocationError.message : String(allocationError ?? "")
+          }`,
+        });
+      }
     }
 
     if (processedResult?.matched) {

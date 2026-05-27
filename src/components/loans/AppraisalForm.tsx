@@ -1,7 +1,7 @@
 import { Section, Badge } from "@/components/ui-bits";
 import { useStore, fmtKES, scoreLoan } from "@/lib/store";
 import { Input, Select, Snap, inputCss } from "./atoms";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 export function AppraisalForm({
@@ -11,7 +11,7 @@ export function AppraisalForm({
   memberId?: string;
   loanId?: string;
 }) {
-  const { members, loans, currentUser, addAppraisal } = useStore();
+  const { members, loans, currentUser, addAppraisal, appraisals } = useStore();
   const [memberId, setMemberId] = useState(presetMember ?? "");
   const [loanId, setLoanId] = useState(presetLoan ?? "");
   const [amountApplied, setAmountApplied] = useState(20000);
@@ -85,6 +85,35 @@ export function AppraisalForm({
 
   const member = members.find((m) => m.id === memberId);
   const memberLoans = member ? loans.filter((l) => l.memberId === member.id) : [];
+  const pendingAppraisalLoans = useMemo(
+    () =>
+      loans.filter(
+        (loan) =>
+          loan.status === "pending" &&
+          !appraisals.some((appraisal) => appraisal.loanId === loan.id),
+      ),
+    [appraisals, loans],
+  );
+
+  function loadLoanForAppraisal(nextLoanId: string) {
+    const loan = loans.find((row) => row.id === nextLoanId);
+    if (!loan) return;
+    const termDays = loan.termDays ?? loan.termMonths * 30;
+    setLoanId(loan.id);
+    setMemberId(loan.memberId);
+    setAmountApplied(loan.principal);
+    setApprovedAmount(loan.principal);
+    setLoanTermDays(termDays);
+    setApprovedTerm(`${termDays} days`);
+  }
+
+  useEffect(() => {
+    if (presetMember) setMemberId(presetMember);
+  }, [presetMember]);
+
+  useEffect(() => {
+    if (presetLoan) loadLoanForAppraisal(presetLoan);
+  }, [presetLoan, loans]);
 
   const decisionTone =
     scoring.decision === "Approve"
@@ -95,9 +124,9 @@ export function AppraisalForm({
           ? "warning"
           : "destructive";
 
-  const submit = () => {
+  const submit = async () => {
     if (!member) return toast.error("Select a member.");
-    addAppraisal({
+    await addAppraisal({
       memberId: member.id,
       loanId: loanId || undefined,
       officerId: currentUser.id,
@@ -135,6 +164,43 @@ export function AppraisalForm({
 
   return (
     <div className="space-y-6">
+      <Section title={`Completed Applications Pending Appraisal (${pendingAppraisalLoans.length})`}>
+        <div className="divide-y divide-border">
+          {pendingAppraisalLoans.length === 0 ? (
+            <div className="px-5 py-6 text-sm text-muted-foreground">
+              No completed applications are waiting for appraisal.
+            </div>
+          ) : null}
+          {pendingAppraisalLoans.map((loan) => {
+            const applicant = members.find((row) => row.id === loan.memberId);
+            const termDays = loan.termDays ?? loan.termMonths * 30;
+            return (
+              <div
+                key={loan.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm"
+              >
+                <div>
+                  <div className="font-medium">
+                    {applicant?.name ?? loan.memberId}{" "}
+                    <span className="font-mono text-xs text-muted-foreground">{loan.id}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {loan.loanKind ?? "financial"} - {fmtKES(loan.principal)} - {termDays} days
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => loadLoanForAppraisal(loan.id)}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Do appraisal
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
       <Section title="1. Client & Loan">
         <div className="p-5 grid md:grid-cols-3 gap-3">
           <label className="block">
@@ -359,7 +425,7 @@ export function AppraisalForm({
 
       <div className="flex justify-end">
         <button
-          onClick={submit}
+          onClick={() => void submit()}
           className="bg-primary text-primary-foreground px-5 py-2.5 rounded-md text-sm font-medium hover:bg-primary/90"
         >
           Save Appraisal → Send for Review

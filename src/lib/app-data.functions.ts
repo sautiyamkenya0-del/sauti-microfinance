@@ -454,6 +454,24 @@ function transactionFeeAmountForLoanWithSettings(
   return amount * (settings.percentages.transactionCostPct / 100);
 }
 
+function supplierPayloadChargeAmount(
+  loanKind?: string | null,
+  supplierPayload?: Record<string, unknown> | null,
+) {
+  const payload = supplierPayload && typeof supplierPayload === "object" ? supplierPayload : {};
+  const keys =
+    loanKind === "fuel"
+      ? ["fuelCharge", "charge", "productChargeAmount"]
+      : loanKind === "stock"
+        ? ["stockCharge", "charge", "productChargeAmount"]
+        : ["serviceCharge", "charge", "productChargeAmount"];
+  for (const key of keys) {
+    const value = toNumber(payload[key] as number | string | null | undefined);
+    if (value > 0) return value;
+  }
+  return 0;
+}
+
 function computeLoanPricing(args: {
   netAmount: number;
   ratePct: number;
@@ -462,15 +480,24 @@ function computeLoanPricing(args: {
   processingFeeMode?: string | null;
   insuranceFeeMode?: string | null;
   loanKind?: string | null;
+  supplierPayload?: Record<string, unknown> | null;
   settings?: typeof DEFAULT_POLICY_SETTINGS;
 }) {
   const settings = args.settings ?? DEFAULT_POLICY_SETTINGS;
   const netAmount = Math.max(0, Number(args.netAmount ?? 0));
-  const termDays = normalizeLoanTermDays(args.termDays ?? Number(args.termMonths ?? 1) * 30);
-  const termMonths =
-    Number(args.termMonths ?? 0) > 0 ? Number(args.termMonths ?? 0) : termPeriodsFromDays(termDays);
   const supplierBacked =
     args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service";
+  const termDays =
+    args.loanKind === "fuel"
+      ? 1
+      : supplierBacked
+        ? Math.max(1, Math.floor(Number(args.termDays ?? 14) || 14))
+        : normalizeLoanTermDays(args.termDays ?? Number(args.termMonths ?? 1) * 30);
+  const termMonths =
+    Number(args.termMonths ?? 0) > 0 ? Number(args.termMonths ?? 0) : termPeriodsFromDays(termDays);
+  const productChargeAmount = supplierBacked
+    ? supplierPayloadChargeAmount(args.loanKind, args.supplierPayload)
+    : 0;
   const processing = supplierBacked ? 0 : netAmount * (settings.percentages.processingPct / 100);
   const insurance = supplierBacked ? 0 : netAmount * (settings.percentages.insurancePct / 100);
   const transactionFee = supplierBacked
@@ -481,12 +508,19 @@ function computeLoanPricing(args: {
   const processingUpfront = processingMode === "upfront" ? processing : 0;
   const insuranceUpfront = insuranceMode === "upfront" ? insurance : 0;
   const financedPrincipal =
-    netAmount + (processing - processingUpfront) + (insurance - insuranceUpfront) + transactionFee;
+    netAmount +
+    productChargeAmount +
+    (processing - processingUpfront) +
+    (insurance - insuranceUpfront) +
+    transactionFee;
   const ratePct = supplierBacked ? 0 : Number(args.ratePct ?? 0);
-  const schedule = loanScheduleTotal(financedPrincipal, ratePct, termMonths);
+  const schedule = supplierBacked
+    ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
+    : loanScheduleTotal(financedPrincipal, ratePct, termMonths);
   return {
     termDays,
     termMonths,
+    productChargeAmount,
     processing,
     insurance,
     transactionFee,
@@ -509,19 +543,37 @@ function loanBalanceSummary(loan: {
   term_days?: number | null;
   term_months?: number | null;
   paid?: number | string | null;
+  loan_kind?: string | null;
+  supplier_payload?: Record<string, unknown> | null;
+  processing_fee_amount?: number | string | null;
 }) {
   const approved = Number(loan.approved_amount ?? loan.principal ?? 0);
-  const financedPrincipal = Number(loan.financed_principal_amount ?? approved);
-  const termDays = normalizeLoanTermDays(loan.term_days ?? Number(loan.term_months ?? 1) * 30);
+  const loanKind = normalizeLoanKindValue(loan.loan_kind);
+  const supplierBacked = loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
+  const productChargeAmount =
+    supplierPayloadChargeAmount(loanKind, loan.supplier_payload) ||
+    (supplierBacked ? toNumber(loan.processing_fee_amount) : 0);
+  const financedPrincipal = Number(
+    loan.financed_principal_amount ?? (supplierBacked ? approved + productChargeAmount : approved),
+  );
+  const termDays =
+    loanKind === "fuel"
+      ? 1
+      : supplierBacked
+        ? Math.max(1, Math.floor(Number(loan.term_days ?? 14) || 14))
+        : normalizeLoanTermDays(loan.term_days ?? Number(loan.term_months ?? 1) * 30);
   const periods =
     Number(loan.term_months ?? 0) > 0
       ? Number(loan.term_months ?? 0)
       : termPeriodsFromDays(termDays);
-  const total = loanScheduleTotal(financedPrincipal, Number(loan.rate ?? 0), periods).total;
+  const total = supplierBacked
+    ? financedPrincipal
+    : loanScheduleTotal(financedPrincipal, Number(loan.rate ?? 0), periods).total;
   const paid = Number(loan.paid ?? 0);
   return {
     approved,
     financedPrincipal,
+    productChargeAmount,
     termDays,
     total,
     paid,
@@ -541,10 +593,31 @@ function openLoanDateValue(loan: {
   return String(loan.start_date ?? loan.created_at ?? loan.id ?? "");
 }
 
+function loanKindPriority(value?: string | null) {
+  const kind = normalizeLoanKindValue(value);
+  if (kind === "fuel" || kind === "stock") return 0;
+  if (kind === "service") return 1;
+  return 2;
+}
+
 function sortOpenLoansByDispatchDate<
-  T extends { start_date?: string | null; created_at?: string | null; id?: string | null },
+  T extends {
+    start_date?: string | null;
+    created_at?: string | null;
+    id?: string | null;
+    loan_kind?: string | null;
+    loanKind?: string | null;
+    status?: string | null;
+  },
 >(loans: T[]) {
   return [...loans].sort((left, right) => {
+    const byKind =
+      loanKindPriority(left.loan_kind ?? left.loanKind) -
+      loanKindPriority(right.loan_kind ?? right.loanKind);
+    if (byKind !== 0) return byKind;
+    const byStatus =
+      (left.status === "defaulted" ? 0 : 1) - (right.status === "defaulted" ? 0 : 1);
+    if (byStatus !== 0) return byStatus;
     const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
     if (byDate !== 0) return byDate;
     return String(left.id ?? "").localeCompare(String(right.id ?? ""));
@@ -559,8 +632,9 @@ function carryoverLoanBalanceSummary(
     {
       principal: toNumber(loan.principal as number | string | null | undefined),
       interestRatePct: toNumber(loan.interest_rate_pct as number | string | null | undefined),
-      termDays: normalizeLoanTermDays(Number(loan.term_days ?? 30)),
+      termDays: Math.max(1, Math.floor(Number(loan.term_days ?? 30) || 30)),
       dailySavingsAmount: toNumber(loan.daily_savings_amount as number | string | null | undefined),
+      loanKind: normalizeLoanKindValue(String(loan.loan_kind ?? "financial")),
       startDate: String(loan.start_date ?? new Date().toISOString().slice(0, 10)),
       dueDate: loan.due_date ? String(loan.due_date) : undefined,
       paidToDate: toNumber(loan.paid_to_date as number | string | null | undefined),
@@ -1438,6 +1512,8 @@ export async function applyMpesaPaymentToDatabase(args: {
   payerName?: string;
   mpesaRef?: string;
   eventId?: string;
+  forceUnallocated?: boolean;
+  fallbackNote?: string;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const accountContext = parseMpesaAccountDocket(args.account);
@@ -1559,6 +1635,60 @@ export async function applyMpesaPaymentToDatabase(args: {
       matched: false,
       account: norm,
       notes: [note],
+    };
+  }
+
+  if (args.forceUnallocated) {
+    const existingForcedReceipt = await findExistingMpesaTransaction({
+      account: norm,
+      mpesaRef: args.mpesaRef,
+    });
+    if (existingForcedReceipt?.id) {
+      await markMpesaEventProcessed(args.eventId, String(existingForcedReceipt.id));
+      const matched = existingForcedReceipt.type !== "mpesa_unallocated";
+      return {
+        matched,
+        memberId: existingForcedReceipt.member_id ?? undefined,
+        account: norm,
+        transactionId: String(existingForcedReceipt.id),
+        primary: {
+          type: String(existingForcedReceipt.type),
+          amount: Number(existingForcedReceipt.amount ?? amount),
+          note: matched
+            ? "M-Pesa fallback linked to the existing allocated receipt."
+            : "M-Pesa fallback linked to the existing unallocated receipt.",
+        },
+        notes: [
+          matched
+            ? "M-Pesa fallback linked to the existing allocated receipt."
+            : "M-Pesa fallback linked to the existing unallocated receipt.",
+        ],
+      };
+    }
+    const note =
+      args.fallbackNote ??
+      `Payment for account "${args.account}" could not be allocated automatically. Recorded as an unallocated M-Pesa payment.`;
+    notes.push(note);
+    const unallocatedTransactionId = await createUnallocatedMpesaTransaction({
+      account: norm || args.account?.trim() || "",
+      amount,
+      payerName: args.payerName,
+      mpesaRef: args.mpesaRef,
+      note,
+      date: paymentDate,
+      createdAt: paymentCreatedAt,
+    });
+    await markMpesaEventProcessed(args.eventId, unallocatedTransactionId);
+    return {
+      matched: false,
+      account: norm,
+      notes,
+      transactionId: unallocatedTransactionId,
+      primary: {
+        type: "mpesa_unallocated",
+        amount,
+        note,
+      },
     };
   }
 
@@ -1720,7 +1850,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   const feePolicies = await loadRuntimeFeePolicies(supabaseAdmin);
   const normalizedFeePolicies = normalizeFeePolicies(feePolicies);
   const memberPatch: Record<string, unknown> = {};
-  const roundOffStep = policySettings.percentages.roundOffStep || ROUNDING_BASE;
+  const roundOffStep = Math.max(5, policySettings.percentages.roundOffStep || ROUNDING_BASE);
   const mandatorySavingsThreshold =
     policySettings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD;
   const mandatorySharesThreshold =
@@ -1765,6 +1895,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         memberId,
         start_date: loan.start_date ?? null,
         created_at: loan.created_at ?? null,
+        loan_kind: loan.loan_kind ?? "financial",
         loan,
         status: String(loan.status ?? "active"),
         paid: summary.paid,
@@ -1780,6 +1911,7 @@ export async function applyMpesaPaymentToDatabase(args: {
         memberId: String(loan.member_id ?? memberId),
         start_date: loan.start_date ?? null,
         created_at: loan.created_at ?? null,
+        loan_kind: loan.loan_kind ?? "financial",
         loan,
         status: String(loan.status ?? "active"),
         paid: summary.paid,
@@ -4329,7 +4461,7 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
       const member = await requireMemberActor();
       scopedMemberId = member.id;
     } else {
-      await requireDirectorActor();
+      await requireStaffActor();
     }
     const supabaseAdmin = await requireSupabaseAdmin();
 
@@ -5783,6 +5915,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       processingFeeMode: data.processingFeeMode,
       insuranceFeeMode: data.insuranceFeeMode,
       loanKind: data.loanKind,
+      supplierPayload: data.supplierPayload,
       settings: policySettings,
     });
     const supplierBacked = data.loanKind !== "financial";
@@ -5793,7 +5926,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       principal: data.principal,
       approved_amount: netAmount ?? null,
       financed_principal_amount: supplierBacked
-        ? (netAmount ?? data.principal)
+        ? (pricing.financedPrincipal ?? netAmount ?? data.principal)
         : (data.financedPrincipalAmount ?? pricing.financedPrincipal ?? data.principal),
       net_disbursed_amount: supplierBacked
         ? 0
@@ -5846,6 +5979,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         principal: data.principal,
         approvedAmount: netAmount ?? null,
         financedPrincipalAmount: data.financedPrincipalAmount ?? pricing.financedPrincipal,
+        productChargeAmount: pricing.productChargeAmount,
         processingFeeMode: data.processingFeeMode,
         insuranceFeeMode: data.insuranceFeeMode,
         status: data.status,
@@ -6046,6 +6180,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
       loanKind: String(loan.loan_kind ?? "financial"),
+      supplierPayload: asJsonObject(loan.supplier_payload),
       settings: policySettings,
     });
     const loanKind = String(loan.loan_kind ?? "financial");
@@ -6054,7 +6189,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         .from("loans")
         .update({
           approved_amount: approvedAmount,
-          financed_principal_amount: approvedAmount,
+          financed_principal_amount: pricing.financedPrincipal,
           net_disbursed_amount: 0,
           processing_fee_amount: 0,
           insurance_fee_amount: 0,
@@ -6082,6 +6217,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
           financedPrincipalAmount: approvedAmount,
           loanKind,
           note: clipAuditText(data.note, 160),
+          productChargeAmount: pricing.productChargeAmount,
         },
       });
       return { ok: true, supplierPending: true };
@@ -7811,14 +7947,23 @@ async function repairMemberFinancialInvariants(args: {
   let overflowToPurposePool = 0;
   const savingsThreshold = mandatorySavingsThresholdForSettings(policySettings);
   const currentSavings = toNumber(member.savings_balance);
-  if (currentSavings > savingsThreshold) {
+  if (currentSavings < 0) {
+    memberPatch.savings_balance = 0;
+  } else if (currentSavings > savingsThreshold) {
     memberPatch.savings_balance = savingsThreshold;
     overflowToPurposePool = roundMoney(overflowToPurposePool + currentSavings - savingsThreshold);
   }
 
+  const currentShares = Math.max(0, toNumber(member.shares));
+  const currentShareReserve = Math.max(0, toNumber(member.share_reserve_balance));
+  if (currentShares !== toNumber(member.shares)) memberPatch.shares = currentShares;
+  if (currentShareReserve !== toNumber(member.share_reserve_balance)) {
+    memberPatch.share_reserve_balance = currentShareReserve;
+  }
+
   const normalizedShares = normalizeShareBasketForThreshold({
-    shares: member.shares,
-    shareReserveBalance: member.share_reserve_balance,
+    shares: currentShares,
+    shareReserveBalance: currentShareReserve,
     settings: policySettings,
   });
   if (normalizedShares.changed) {
@@ -9526,7 +9671,8 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       loanCycleNumber: Math.max(1, Math.floor(Number(data?.loanCycleNumber ?? 1))),
       principal: Math.max(0, Number(data?.principal ?? 0)),
       interestRatePct: Math.max(0, Number(data?.interestRatePct ?? 0)),
-      termDays: Number(data?.termDays ?? 30),
+      termDays:
+        data?.loanKind === "fuel" ? 1 : Math.max(1, Math.floor(Number(data?.termDays ?? 30))),
       dailySavingsAmount: Math.max(0, Number(data?.dailySavingsAmount ?? 0)),
       startDate: String(data?.startDate ?? "").trim() || new Date().toISOString().slice(0, 10),
       dueDate: data?.dueDate?.trim() || undefined,
@@ -9546,7 +9692,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
     const actor = await requireDirectorActor();
     if (!data.memberId) throw new Error("Member id is required.");
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
-    if (![7, 14, 30, 60, 90].includes(data.termDays)) {
+    if (data.loanKind === "financial" && ![7, 14, 30, 60, 90].includes(data.termDays)) {
       throw new Error("Carryover loans must use 7, 14, 30, 60, or 90 days.");
     }
 
@@ -9558,8 +9704,9 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       {
         principal: data.principal,
         interestRatePct: data.interestRatePct,
-        termDays: data.termDays as 7 | 14 | 30 | 60 | 90,
+        termDays: data.termDays,
         dailySavingsAmount: data.dailySavingsAmount,
+        loanKind: data.loanKind,
         startDate: data.startDate,
         dueDate,
         paidToDate: data.paidToDate,
@@ -10150,6 +10297,7 @@ function mapCarryoverLoanForSummary(row: any) {
     interestRatePct: toNumber(row.interest_rate_pct),
     termDays: Number(row.term_days ?? 30) as 7 | 14 | 30 | 60 | 90,
     dailySavingsAmount: toNumber(row.daily_savings_amount),
+    loanKind: normalizeLoanKindValue(String(row.loan_kind ?? "financial")),
     startDate: String(row.start_date ?? new Date().toISOString().slice(0, 10)),
     dueDate: row.due_date ?? undefined,
     paidToDate: toNumber(row.paid_to_date),

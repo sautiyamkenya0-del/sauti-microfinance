@@ -11,6 +11,13 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Bell, Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
 
+function daysBetweenDates(from: string, to: string) {
+  const start = new Date(`${from.slice(0, 10)}T00:00:00`).getTime();
+  const end = new Date(`${to.slice(0, 10)}T00:00:00`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.floor((end - start) / (24 * 60 * 60 * 1000));
+}
+
 export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarryoverLoan[] }) {
   const {
     loans,
@@ -28,12 +35,14 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
   const [query, setQuery] = useState("");
 
   const items = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
     const liveItems = loans
       .filter((l) => l.status !== "pending" && l.status !== "rejected")
       .map((l) => {
         const summary = loanPenaltySummary(l, transactions);
         const isComplete = summary.totalOwedNow <= 0;
-        const isOverdue = summary.dueDate < new Date().toISOString().slice(0, 10);
+        const daysAfterFinalDueDate = Math.max(0, daysBetweenDates(summary.dueDate, today));
+        const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyExpected;
         const defaulted = summary.dailyUnpaidBalance;
         const outstanding = summary.totalOwedNow - summary.totalPenalty;
@@ -41,6 +50,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           summary.skippedPaymentDays,
           dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0,
         );
+        const daysPastDue = summary.daysPastDue;
         const penalties = summary.totalPenalty;
         return {
           loan: l,
@@ -52,6 +62,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           totalDue: summary.totalOwedNow,
           penalties,
           daysMissed,
+          daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
+          dueDate: summary.dueDate,
           frozen: Boolean(l.frozenAt),
           include:
             !isComplete &&
@@ -63,10 +75,12 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
       .map((loan) => {
         const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
         const isComplete = summary.totalOwedNow <= 0;
-        const isOverdue = summary.dueDate < new Date().toISOString().slice(0, 10);
+        const daysAfterFinalDueDate = Math.max(0, daysBetweenDates(summary.dueDate, today));
+        const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyInclusive;
         const defaulted = summary.arrears;
         const daysMissed = dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0;
+        const daysPastDue = summary.daysPastDue;
         return {
           loan: { ...loan, purpose: "carryover" },
           loanKind: "carryover" as const,
@@ -77,6 +91,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           totalDue: summary.totalOwedNow,
           penalties: summary.estimatedPenaltyNow,
           daysMissed,
+          daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
+          dueDate: summary.dueDate,
           frozen: Boolean(summary.frozenAsOf),
           include:
             !isComplete &&
@@ -101,7 +117,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     });
-    return list.sort((a, b) => b.daysMissed - a.daysMissed);
+    return list.sort((a, b) => b.daysPastDue + b.daysMissed - (a.daysPastDue + a.daysMissed));
   }, [carryoverLoans, loans, members, policySettings, query, transactions]);
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);
@@ -113,11 +129,17 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
     loanId: string;
     amountDue: number;
     daysMissed: number;
+    daysPastDue?: number;
+    dueDate?: string;
   }) {
     await sendNotice({
       data: {
         title: "Payment reminder",
-        body: `${args.memberName}, please pay ${fmtKES(args.amountDue)} for loan ${args.loanId}. You are ${args.daysMissed} day(s) behind. Contact your loan officer if you need help.`,
+        body: `${args.memberName}, please pay ${fmtKES(args.amountDue)} for loan ${args.loanId}. ${
+          args.daysPastDue && args.daysPastDue > 0
+            ? `You are ${args.daysPastDue} day(s) after the final due date (${args.dueDate}).`
+            : `You are ${args.daysMissed} day(s) behind.`
+        } Contact your loan officer if you need help.`,
         by: currentUser.name,
         byStaffId: currentUser.id,
         date: new Date().toISOString().slice(0, 10),
@@ -162,6 +184,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
               totalDue,
               penalties,
               daysMissed,
+              daysPastDue,
+              dueDate,
               frozen,
             }) => {
               const memberFups = followups.filter((f) => f.loanId === loan.id);
@@ -171,12 +195,19 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="font-semibold uppercase">{member?.name}</h4>
-                        <Badge tone="destructive">{daysMissed} day(s) missed</Badge>
+                        <Badge tone="destructive">
+                          {(daysPastDue ?? 0) > 0
+                            ? `${daysPastDue} day(s) after final due date`
+                            : `${daysMissed} day(s) missed`}
+                        </Badge>
                         {frozen ? <Badge tone="warning">Frozen</Badge> : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Member: {member?.id} · Loan {loan.id} · {loan.purpose ?? "—"}
                         {loanKind === "carryover" ? " · carryover" : ""}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Final due date {dueDate}
                       </div>
                       <div className="text-xs">
                         <span className="font-medium">Phone:</span> {member?.phone}
@@ -212,6 +243,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                           loanId: loan.id,
                           amountDue: totalDue,
                           daysMissed,
+                          daysPastDue,
+                          dueDate,
                         })
                       }
                       className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 hover:bg-muted"

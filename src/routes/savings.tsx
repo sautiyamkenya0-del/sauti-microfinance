@@ -100,7 +100,7 @@ function SavingsPage() {
     const map = new Map<string, Record<string, number>>();
     for (const member of members) {
       map.set(String(member.id ?? ""), {
-        mandatory_savings: Number(member.savings_balance ?? 0),
+        mandatory_savings: Math.max(0, Number(member.savings_balance ?? 0)),
         withdrawable_savings: 0,
         loan_savings: 0,
         shares: Number(member.shares ?? 0) * 100,
@@ -163,7 +163,7 @@ function SavingsPage() {
   }, [carryoverProfiles, docketBalances, members, movements]);
 
   const complianceTotal = members.reduce(
-    (sum: number, member: any) => sum + Number(member.savings_balance ?? 0),
+    (sum: number, member: any) => sum + Math.max(0, Number(member.savings_balance ?? 0)),
     0,
   );
   const withdrawableTotal = Array.from(balancesByMember.values()).reduce(
@@ -189,7 +189,8 @@ function SavingsPage() {
 
   const memberRows = members.map((member: any) => {
     const balances = balancesByMember.get(member.id) ?? {};
-    const compliance = Number(member.savings_balance ?? 0);
+    const rawCompliance = Number(member.savings_balance ?? 0);
+    const compliance = Math.max(0, rawCompliance);
     const withdrawable = Number(balances.withdrawable_savings ?? 0);
     const loanSavings = Number(balances.loan_savings ?? 0);
     const purposePool = Number(balances.purpose_pool ?? 0);
@@ -200,6 +201,7 @@ function SavingsPage() {
     return {
       member,
       compliance,
+      rawCompliance,
       thresholdGap: Math.max(0, policyThreshold - compliance),
       withdrawable,
       loanSavings,
@@ -429,7 +431,14 @@ function SavingsPage() {
                         {row.member.id} - {memberCategoryLabel(row.member.member_category)}
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.compliance)}</td>
+                    <td className="px-5 py-3 text-right font-semibold">
+                      <div>{fmtKES(row.compliance)}</div>
+                      {row.rawCompliance < 0 ? (
+                        <div className="text-[11px] font-normal text-destructive">
+                          Negative source corrected to zero
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="px-5 py-3 text-right text-xs">
                       {row.thresholdGap > 0 ? fmtKES(row.thresholdGap) : "Met"}
                     </td>

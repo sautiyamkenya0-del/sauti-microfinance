@@ -102,7 +102,7 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
     firstUpfrontAmount: 500,
     mandatorySavingsThreshold: 5000,
     mandatorySharesThreshold: 3000,
-    roundOffStep: 1,
+    roundOffStep: 5,
   },
   interestRates: {
     standard: {

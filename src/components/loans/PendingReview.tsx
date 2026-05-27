@@ -1,5 +1,11 @@
 import { Section, Badge } from "@/components/ui-bits";
-import { useStore, fmtKES, loanPricingPreview, loanTermDaysOf } from "@/lib/store";
+import {
+  useStore,
+  fmtKES,
+  loanPricingPreview,
+  loanTermDaysOf,
+  loanProductChargeAmount,
+} from "@/lib/store";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -8,6 +14,7 @@ export function PendingReview() {
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [adjAmount, setAdjAmount] = useState(0);
   const [note, setNote] = useState("");
+  const [showAll, setShowAll] = useState(false);
 
   if (currentUser.role !== "director") {
     return (
@@ -19,7 +26,7 @@ export function PendingReview() {
   }
 
   const pending = loans.filter(
-    (l) => l.status === "pending" && l.supplierRequestStatus !== "approved",
+    (loan) => loan.status === "pending" && loan.supplierRequestStatus !== "approved",
   );
 
   return (
@@ -39,53 +46,56 @@ export function PendingReview() {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {pending.length === 0 && (
+            {pending.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground text-sm">
                   No pending applications.
                 </td>
               </tr>
-            )}
-            {pending.map((l) => {
-              const m = members.find((x) => x.id === l.memberId);
-              const o = staff.find((s) => s.id === l.officerId);
-              const ap = appraisals.find((a) => a.loanId === l.id || a.memberId === l.memberId);
-              const termDays = loanTermDaysOf(l);
+            ) : null}
+            {pending.map((loan) => {
+              const member = members.find((row) => row.id === loan.memberId);
+              const officer = staff.find((row) => row.id === loan.officerId);
+              const appraisal = appraisals.find((row) => row.loanId === loan.id);
+              const termDays = loanTermDaysOf(loan);
               return (
-                <tr key={l.id} className="hover:bg-muted/30">
-                  <td className="px-5 py-3 font-mono text-xs">{l.id}</td>
+                <tr key={loan.id} className="hover:bg-muted/30">
+                  <td className="px-5 py-3 font-mono text-xs">{loan.id}</td>
                   <td className="px-5 py-3">
-                    <Badge tone={l.loanKind && l.loanKind !== "financial" ? "warning" : "muted"}>
-                      {l.loanKind ?? "financial"}
+                    <Badge
+                      tone={loan.loanKind && loan.loanKind !== "financial" ? "warning" : "muted"}
+                    >
+                      {loan.loanKind ?? "financial"}
                     </Badge>
                   </td>
-                  <td className="px-5 py-3 font-medium">{m?.name}</td>
-                  <td className="px-5 py-3 text-right">{fmtKES(l.principal)}</td>
+                  <td className="px-5 py-3 font-medium">{member?.name}</td>
+                  <td className="px-5 py-3 text-right">{fmtKES(loan.principal)}</td>
                   <td className="px-5 py-3 text-right">{termDays} days</td>
-                  <td className="px-5 py-3 text-xs text-muted-foreground">{o?.name}</td>
+                  <td className="px-5 py-3 text-xs text-muted-foreground">{officer?.name}</td>
                   <td className="px-5 py-3">
-                    {ap ? (
+                    {appraisal ? (
                       <Badge
                         tone={
-                          ap.decision === "Approve"
+                          appraisal.decision === "Approve"
                             ? "success"
-                            : ap.decision === "Reject"
+                            : appraisal.decision === "Reject"
                               ? "destructive"
                               : "warning"
                         }
                       >
-                        {ap.totalScore}/100 · {ap.decision}
+                        Appraisal done - {appraisal.totalScore}/100 - {appraisal.decision}
                       </Badge>
                     ) : (
-                      <span className="text-xs text-muted-foreground">No appraisal</span>
+                      <span className="text-xs text-muted-foreground">Pending appraisal</span>
                     )}
                   </td>
                   <td className="px-5 py-3 text-right">
                     <button
                       onClick={() => {
-                        setReviewing(l.id);
-                        setAdjAmount(ap?.approvedAmount || l.principal);
+                        setReviewing(loan.id);
+                        setAdjAmount(appraisal?.approvedAmount || loan.principal);
                         setNote("");
+                        setShowAll(false);
                       }}
                       className="text-xs text-primary hover:underline"
                     >
@@ -101,66 +111,128 @@ export function PendingReview() {
 
       {reviewing &&
         (() => {
-          const l = loans.find((x) => x.id === reviewing)!;
-          const m = members.find((x) => x.id === l.memberId);
-          const termDays = loanTermDaysOf(l);
-          const supplierBacked = l.loanKind != null && l.loanKind !== "financial";
+          const loan = loans.find((row) => row.id === reviewing)!;
+          const member = members.find((row) => row.id === loan.memberId);
+          const officer = staff.find((row) => row.id === loan.officerId);
+          const appraisal = appraisals.find((row) => row.loanId === loan.id);
+          const termDays = loanTermDaysOf(loan);
+          const supplierBacked = loan.loanKind != null && loan.loanKind !== "financial";
+          const productChargeAmount = loanProductChargeAmount({
+            loanKind: loan.loanKind,
+            supplierPayload: loan.supplierPayload,
+            processingFeeAmount: loan.processingFeeAmount,
+          });
           const pricing = loanPricingPreview({
             netAmount: adjAmount,
             termDays,
-            ratePct: l.rate,
-            loanKind: l.loanKind,
-            processingFeeMode: l.processingFeeMode,
-            insuranceFeeMode: l.insuranceFeeMode,
+            ratePct: loan.rate,
+            loanKind: loan.loanKind,
+            productChargeAmount,
+            processingFeeMode: loan.processingFeeMode,
+            insuranceFeeMode: loan.insuranceFeeMode,
           });
+          const application = extractApplicationPayload(loan.supplierPayload);
           return (
             <div
               className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4"
               onClick={() => setReviewing(null)}
             >
               <div
-                className="bg-card rounded-xl border border-border w-full max-w-md p-6"
-                onClick={(e) => e.stopPropagation()}
+                className="bg-card rounded-xl border border-border w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6"
+                onClick={(event) => event.stopPropagation()}
               >
-                <h3 className="font-display text-lg font-semibold mb-1">Review · {l.id}</h3>
-                <p className="text-xs text-muted-foreground mb-4">
-                  {m?.name} · applied {fmtKES(l.principal)}
-                </p>
-                <label className="block mb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-display text-lg font-semibold mb-1">
+                      Review {loan.id}
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {member?.name} - {loan.loanKind ?? "financial"} application
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAll((current) => !current)}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                  >
+                    {showAll ? "Show summary" : "View all"}
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 text-sm">
+                  <ReviewCell label="Member" value={member?.name ?? loan.memberId} />
+                  <ReviewCell label="Officer" value={officer?.name ?? loan.officerId} />
+                  <ReviewCell label="Amount applied" value={fmtKES(loan.principal)} />
+                  <ReviewCell label="Product charge" value={fmtKES(productChargeAmount)} />
+                  <ReviewCell label="Term" value={`${termDays} days`} />
+                  <ReviewCell
+                    label="Daily repayment (daily installment)"
+                    value={fmtKES(pricing.dailyInclusive)}
+                  />
+                  <ReviewCell label="Total repayable" value={fmtKES(pricing.totalRepayment)} />
+                  <ReviewCell
+                    label="Grand total collected"
+                    value={fmtKES(pricing.grandTotalCollected)}
+                  />
+                  <ReviewCell
+                    label="Round-off basket"
+                    value={fmtKES(pricing.roundOff * pricing.termDays)}
+                  />
+                  <ReviewCell
+                    label="Appraisal"
+                    value={
+                      appraisal
+                        ? `Done - ${appraisal.totalScore}/100 - ${appraisal.decision}`
+                        : "Pending appraisal"
+                    }
+                  />
+                </div>
+
+                {showAll ? (
+                  <div className="mt-4 space-y-4">
+                    <DetailBlock title="Application details" data={application ?? loan.supplierPayload} />
+                    <DetailBlock title="Appraisal details" data={appraisal ?? { status: "Pending appraisal" }} />
+                    <DetailBlock
+                      title="Review computation"
+                      data={{
+                        approvedAmount: adjAmount,
+                        dailyRepayment: pricing.dailyInclusive,
+                        dailyInstallment: pricing.dailyInclusive,
+                        totalRepayable: pricing.totalRepayment,
+                        grandTotalCollected: pricing.grandTotalCollected,
+                        roundOffBasket: pricing.roundOff * pricing.termDays,
+                      }}
+                    />
+                  </div>
+                ) : null}
+
+                <label className="mt-4 block">
                   <span className="text-xs text-muted-foreground">
                     Approved amount (you may revise downward)
                   </span>
                   <input
                     type="number"
-                    max={l.principal}
+                    max={loan.principal}
                     value={adjAmount}
-                    onChange={(e) => setAdjAmount(Math.min(l.principal, Number(e.target.value)))}
+                    onChange={(event) =>
+                      setAdjAmount(Math.min(loan.principal, Number(event.target.value)))
+                    }
                     className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                   />
                 </label>
-                <div className="text-xs text-muted-foreground mb-3">Term: {termDays} days.</div>
-                <div className="bg-muted/50 rounded-md px-3 py-2 text-sm flex justify-between mb-3">
-                  <span className="text-muted-foreground">New total repayable</span>
-                  <span className="font-semibold">{fmtKES(pricing.totalRepayment)}</span>
-                </div>
-                <div className="mb-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                  Net to member {fmtKES(pricing.netDisbursedAmount)} · financed principal{" "}
-                  {fmtKES(pricing.financedPrincipal)} · fixed transaction fee{" "}
-                  {fmtKES(pricing.deductions.transactionCost)}
-                </div>
-                <label className="block mb-4">
+                <label className="mt-3 block">
                   <span className="text-xs text-muted-foreground">Review note (optional)</span>
                   <textarea
                     value={note}
-                    onChange={(e) => setNote(e.target.value)}
+                    onChange={(event) => setNote(event.target.value)}
                     rows={2}
                     className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                   />
                 </label>
-                <div className="flex justify-between gap-2">
+                <div className="mt-4 flex justify-between gap-2">
                   <button
                     onClick={async () => {
-                      await rejectLoan(l.id, currentUser.id, note);
+                      await rejectLoan(loan.id, currentUser.id, note);
                       toast.error("Loan rejected");
                       setReviewing(null);
                     }}
@@ -177,19 +249,25 @@ export function PendingReview() {
                     </button>
                     <button
                       onClick={async () => {
-                        if (adjAmount <= 0)
-                          return toast.error("Approved amount must be above zero.");
-                        await approveLoan(l.id, adjAmount, currentUser.id, note);
+                        if (!appraisal) {
+                          toast.error("Complete the appraisal before director review.");
+                          return;
+                        }
+                        if (adjAmount <= 0) {
+                          toast.error("Approved amount must be above zero.");
+                          return;
+                        }
+                        await approveLoan(loan.id, adjAmount, currentUser.id, note);
                         toast.success(
                           supplierBacked
                             ? "Loan approved for supplier fulfillment"
-                            : "Loan approved & disbursed",
+                            : "Loan approved and disbursed",
                         );
                         setReviewing(null);
                       }}
                       className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                     >
-                      {supplierBacked ? "Approve for Supplier" : "Approve & Disburse"}
+                      {supplierBacked ? "Approve for supplier" : "Approve and disburse"}
                     </button>
                   </div>
                 </div>
@@ -198,5 +276,32 @@ export function PendingReview() {
           );
         })()}
     </Section>
+  );
+}
+
+function extractApplicationPayload(payload?: Record<string, unknown>) {
+  const application = payload?.application;
+  return application && typeof application === "object" ? application : undefined;
+}
+
+function ReviewCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-0.5 font-medium">{value}</div>
+    </div>
+  );
+}
+
+function DetailBlock({ title, data }: { title: string; data: unknown }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/20 p-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </div>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
+        {JSON.stringify(data ?? {}, null, 2)}
+      </pre>
+    </div>
   );
 }

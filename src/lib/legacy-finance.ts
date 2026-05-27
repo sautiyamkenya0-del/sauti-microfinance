@@ -59,7 +59,7 @@ export type LegacyCarryoverLoan = {
   loanCycleNumber: number;
   principal: number;
   interestRatePct: number;
-  termDays: 7 | 14 | 30 | 60 | 90;
+  termDays: number;
   dailySavingsAmount: number;
   startDate: string;
   dueDate?: string;
@@ -202,6 +202,7 @@ export function summarizeLegacyCarryoverLoan(
     | "interestRatePct"
     | "termDays"
     | "dailySavingsAmount"
+    | "loanKind"
     | "startDate"
     | "dueDate"
     | "paidToDate"
@@ -220,7 +221,18 @@ export function summarizeLegacyCarryoverLoan(
     (sourceFeeBreakdown.productMeta as Record<string, unknown> | undefined)?.frozenAsOf,
   );
   const effectiveAsOfDate = frozenAsOf ?? asOfDate;
-  const termDays = normalizeTermDays(loan.termDays);
+  const loanKind =
+    loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service"
+      ? loan.loanKind
+      : "financial";
+  const supplierBacked = loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
+  const requestedTermDays = Math.max(1, Math.floor(Number(loan.termDays ?? 0)));
+  const termDays =
+    loanKind === "fuel"
+      ? 1
+      : supplierBacked
+        ? requestedTermDays || 14
+        : normalizeTermDays(loan.termDays);
   const ratePct = effectiveLegacyInterestRate(loan, settings);
   const principal = Number(loan.principal ?? 0);
   const paidToDate = Number(loan.paidToDate ?? 0);
@@ -233,10 +245,20 @@ export function summarizeLegacyCarryoverLoan(
     (feeBreakdown.membershipFeeAmount ?? 0) +
     (feeBreakdown.cardFeeAmount ?? 0) +
     (feeBreakdown.stickerFeeAmount ?? 0);
-  const loanServiceFees =
-    (feeBreakdown.processingFeeAmount ?? 0) +
-    (feeBreakdown.insuranceFeeAmount ?? 0) +
-    (feeBreakdown.transactionFeeAmount ?? 0);
+  const productMeta = feeBreakdown.productMeta ?? {};
+  const productCharge =
+    loanKind === "fuel"
+      ? moneyValue(productMeta.fuelCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
+      : loanKind === "stock"
+        ? moneyValue(productMeta.stockCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
+        : supplierBacked
+          ? moneyValue(productMeta.serviceCharge ?? productMeta.charge ?? feeBreakdown.processingFeeAmount)
+          : 0;
+  const loanServiceFees = supplierBacked
+    ? 0
+    : (feeBreakdown.processingFeeAmount ?? 0) +
+      (feeBreakdown.insuranceFeeAmount ?? 0) +
+      (feeBreakdown.transactionFeeAmount ?? 0);
   const defaultServiceFees = defaultLoanServiceFees(principal, settings);
   const financedLoanServiceFees =
     loanServiceFees > 0
@@ -250,15 +272,21 @@ export function summarizeLegacyCarryoverLoan(
   const subscriptionWaivedAmount = feeBreakdown.subscriptionWaived
     ? subscriptionTotalBeforeWaiver
     : 0;
-  const feeChargesTotal = oneTimeFees + financedLoanServiceFees + subscriptionDeducted;
+  const feeChargesTotal = supplierBacked
+    ? productCharge
+    : oneTimeFees + financedLoanServiceFees + subscriptionDeducted;
   const financedPrincipal = principal + feeChargesTotal;
   const periods = termPeriodsFromDays(termDays);
-  const interest = financedPrincipal * (ratePct / 100) * periods;
+  const interest = supplierBacked ? 0 : financedPrincipal * (ratePct / 100) * periods;
   const totalRepayment = financedPrincipal + interest;
   const dailyLoanInstallment = termDays > 0 ? totalRepayment / termDays : totalRepayment;
-  const rawDailyInclusive = dailyLoanInstallment + dailySavingsAmount;
-  const dailyInclusive = roundUpKES(rawDailyInclusive, settings.percentages.roundOffStep);
-  const totalSavingsAccrued = dailySavingsAmount * termDays;
+  const effectiveDailySavingsAmount = supplierBacked ? 0 : dailySavingsAmount;
+  const rawDailyInclusive = dailyLoanInstallment + effectiveDailySavingsAmount;
+  const dailyInclusive = roundUpKES(
+    rawDailyInclusive,
+    Math.max(5, settings.percentages.roundOffStep || 5),
+  );
+  const totalSavingsAccrued = effectiveDailySavingsAmount * termDays;
   const totalExpectedCollected = dailyInclusive * termDays;
   const dueDate = toDateOnly(loan.dueDate) || addDays(loan.startDate, termDays);
   const elapsedDays = Math.max(
@@ -278,11 +306,13 @@ export function summarizeLegacyCarryoverLoan(
   const daysPastDue =
     balance <= 0 ? 0 : Math.max(automaticDaysPastDue, dueDatePenaltyDays);
   const dueDatePenaltyBase = Math.max(0, totalExpectedCollected + arrearsPenalty - paidToDate);
-  const overduePenalty = compoundedDailyPenalty(
-    dueDatePenaltyBase,
-    settings.percentages.defaultPenaltyPct,
-    daysPastDue,
-  );
+  const overduePenalty = supplierBacked
+    ? dueDatePenaltyBase * (settings.percentages.penaltyDailyPct / 100) * daysPastDue
+    : compoundedDailyPenalty(
+        dueDatePenaltyBase,
+        settings.percentages.defaultPenaltyPct,
+        daysPastDue,
+      );
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const estimatedPenaltyNow = Math.max(0, arrearsPenalty + overduePenalty - penaltyWaivedAmount);
   const totalOwedNow = balance + estimatedPenaltyNow;
@@ -299,6 +329,7 @@ export function summarizeLegacyCarryoverLoan(
     defaultServiceFees,
     oneTimeFees,
     loanServiceFees: financedLoanServiceFees,
+    productCharge,
     subscriptionDeducted,
     subscriptionWaivedAmount,
     feeChargesTotal,

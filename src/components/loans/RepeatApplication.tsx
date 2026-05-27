@@ -4,7 +4,6 @@ import {
   fmtKES,
   loanPricingPreview,
   loanProductTypeForAmount,
-  normalizeLoanTermDaysForType,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
@@ -13,6 +12,11 @@ import {
   type LoanKind,
 } from "@/lib/store";
 import { Input, Select, Snap, Row, inputCss } from "./atoms";
+import {
+  FuelJobCardFields,
+  blankFuelJobCardRows,
+  summarizeFuelJobCardRows,
+} from "./FuelJobCardFields";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -25,7 +29,7 @@ export function RepeatApplication({
 }: {
   memberId: string;
   initialLoanKind?: LoanKind;
-  onSubmitted?: (loanId: string) => void;
+  onSubmitted?: (loanId: string, memberId: string) => void;
 }) {
   const { members, loans, currentUser, addLoan } = useStore();
   const member = members.find((m) => m.id === memberId);
@@ -48,9 +52,12 @@ export function RepeatApplication({
   const [fuelType, setFuelType] = useState("Petrol");
   const [fuelLitres, setFuelLitres] = useState(0);
   const [fuelUnitPrice, setFuelUnitPrice] = useState(0);
+  const [fuelCharge, setFuelCharge] = useState(0);
+  const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows());
   const [stockItem, setStockItem] = useState("");
   const [stockQuantity, setStockQuantity] = useState(0);
   const [stockUnitPrice, setStockUnitPrice] = useState(0);
+  const [stockCharge, setStockCharge] = useState(0);
   const [serviceType, setServiceType] = useState("");
   const [supplierNotes, setSupplierNotes] = useState("");
   const [repaymentPlan, setRepaymentPlan] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
@@ -63,6 +70,18 @@ export function RepeatApplication({
   const [confirmGuar, setConfirmGuar] = useState(false);
   const [confirmBiz, setConfirmBiz] = useState(false);
   const [changesSinceLast, setChangesSinceLast] = useState("");
+  const fuelJobCardSummary = useMemo(
+    () => summarizeFuelJobCardRows(fuelJobCardRows),
+    [fuelJobCardRows],
+  );
+  const fuelFallbackTotal = fuelLitres * fuelUnitPrice;
+  const stockComputedTotal = stockQuantity * stockUnitPrice;
+  const requestedLoanAmount =
+    loanKind === "fuel"
+      ? fuelJobCardSummary.totalCost || fuelFallbackTotal || loanAmount
+      : loanKind === "stock"
+        ? stockComputedTotal || loanAmount
+        : loanAmount;
   const loanType = loanCategory === "Premium" ? "premium" : "standard";
   const repaymentOptions = loanType === "premium" ? PREMIUM_LOAN_TERMS : STANDARD_LOAN_TERMS;
   const loanKindOptions = useMemo<LoanKind[]>(() => ["financial", "fuel", "stock", "service"], []);
@@ -76,13 +95,15 @@ export function RepeatApplication({
   }, [initialLoanKind, loanKind, loanKindOptions]);
 
   const calc = useMemo(() => {
-    const termDays = normalizeLoanTermDaysForType(repaymentDays, loanType);
+    const productChargeAmount =
+      loanKind === "fuel" ? fuelCharge : loanKind === "stock" ? stockCharge : 0;
     const pricing = loanPricingPreview({
       loanType,
       loanKind,
-      netAmount: loanAmount,
-      termDays: repaymentDays,
+      netAmount: requestedLoanAmount,
+      termDays: loanKind === "fuel" ? 1 : repaymentDays,
       ratePct: overrideRatePct > 0 ? overrideRatePct : undefined,
+      productChargeAmount,
       processingFeeMode,
       insuranceFeeMode,
       dailySavingsAmount: Number(compliancePlan),
@@ -90,18 +111,25 @@ export function RepeatApplication({
     const ded = pricing.deductions;
     return {
       ratePct: pricing.ratePct,
-      termDays,
+      termDays: pricing.termDays,
       interest: pricing.interest,
       total: pricing.totalRepayment,
       ded,
       net: pricing.netDisbursedAmount,
       financedPrincipal: pricing.financedPrincipal,
-      daily: pricing.dailyLoanInstallment,
+      daily: pricing.dailyInclusive,
+      grandTotalCollected: pricing.grandTotalCollected,
+      roundOffBasket: pricing.roundOff * pricing.termDays,
     };
   }, [
     insuranceFeeMode,
-    loanAmount,
     loanKind,
+    fuelCharge,
+    fuelFallbackTotal,
+    fuelJobCardSummary.totalCost,
+    requestedLoanAmount,
+    stockCharge,
+    stockComputedTotal,
     loanType,
     overrideRatePct,
     processingFeeMode,
@@ -114,6 +142,19 @@ export function RepeatApplication({
   const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
+    const applicationPayload = {
+      reconfirmed: { confirmKYC, confirmKin, confirmGuar, confirmBiz, changesSinceLast },
+      loan: {
+        loanKind,
+        purpose,
+        amountApplied: requestedLoanAmount,
+        termDays: calc.termDays,
+        dailyRepayment: calc.daily,
+        dailyInstallment: calc.daily,
+        grandTotalCollected: calc.grandTotalCollected,
+        roundOffBasket: calc.roundOffBasket,
+      },
+    };
     const supplierPayload =
       loanKind === "fuel"
         ? {
@@ -121,23 +162,33 @@ export function RepeatApplication({
             fuelType,
             litres: fuelLitres,
             unitPrice: fuelUnitPrice,
-            estimatedTotal: fuelLitres * fuelUnitPrice || loanAmount,
+            fuelCharge,
+            productChargeAmount: fuelCharge,
+            jobCard: {
+              rows: fuelJobCardRows,
+              totals: fuelJobCardSummary,
+            },
+            estimatedTotal: requestedLoanAmount,
             notes: supplierNotes,
+            application: applicationPayload,
           }
         : loanKind === "stock"
           ? {
               item: stockItem || purpose,
               quantity: stockQuantity,
               unitPrice: stockUnitPrice,
-              estimatedTotal: stockQuantity * stockUnitPrice || loanAmount,
+              stockCharge,
+              productChargeAmount: stockCharge,
+              estimatedTotal: requestedLoanAmount,
               notes: supplierNotes,
+              application: applicationPayload,
             }
           : loanKind === "service"
-            ? { serviceType: serviceType || purpose, notes: supplierNotes }
-            : undefined;
+            ? { serviceType: serviceType || purpose, notes: supplierNotes, application: applicationPayload }
+            : { application: applicationPayload };
     const loanId = await addLoan({
       memberId: member.id,
-      principal: loanAmount,
+      principal: requestedLoanAmount,
       rate: calc.ratePct,
       termDays: calc.termDays,
       termMonths: termPeriodsFromDays(calc.termDays, loanType),
@@ -157,7 +208,7 @@ export function RepeatApplication({
       supplierPayload,
     });
     toast.success("Repeat application submitted for review.");
-    onSubmitted?.(loanId);
+    onSubmitted?.(loanId, member.id);
   };
 
   return (
@@ -229,7 +280,10 @@ export function RepeatApplication({
             onChange={(v) => {
               const next = v as LoanKind;
               setLoanKind(next);
-              if (next === "fuel") setPurpose("Fuel Credit");
+              if (next === "fuel") {
+                setPurpose("Fuel Credit");
+                setRepaymentDays(1);
+              }
               if (next === "stock") setPurpose("Stock/Goods");
               if (next === "service") setPurpose("Other");
             }}
@@ -237,7 +291,7 @@ export function RepeatApplication({
           />
           <Input
             type="number"
-            label="Amount Requested (KSh)"
+            label={loanKind === "fuel" ? "Fallback Fuel Amount (KSh)" : "Amount Requested (KSh)"}
             value={String(loanAmount)}
             onChange={(v) => {
               const nextAmount = Number(v);
@@ -262,24 +316,13 @@ export function RepeatApplication({
           {loanKind === "fuel" && (
             <>
               <Input label="Vehicle / Plate" value={vehiclePlate} onChange={setVehiclePlate} />
-              <Select
-                label="Fuel Type"
-                value={fuelType}
-                onChange={setFuelType}
-                options={["Petrol", "Diesel", "Kerosene", "Other"]}
-              />
               <Input
                 type="number"
-                label="Litres"
-                value={String(fuelLitres)}
-                onChange={(v) => setFuelLitres(Number(v))}
+                label="Fuel Charge"
+                value={String(fuelCharge)}
+                onChange={(v) => setFuelCharge(Number(v))}
               />
-              <Input
-                type="number"
-                label="Unit Price"
-                value={String(fuelUnitPrice)}
-                onChange={(v) => setFuelUnitPrice(Number(v))}
-              />
+              <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
             </>
           )}
           {loanKind === "stock" && (
@@ -296,6 +339,12 @@ export function RepeatApplication({
                 label="Unit Price"
                 value={String(stockUnitPrice)}
                 onChange={(v) => setStockUnitPrice(Number(v))}
+              />
+              <Input
+                type="number"
+                label="Stock Charge"
+                value={String(stockCharge)}
+                onChange={(v) => setStockCharge(Number(v))}
               />
             </>
           )}
@@ -323,16 +372,20 @@ export function RepeatApplication({
           />
           <Input
             type="number"
-            label="Repayment Days"
+            label={loanKind === "fuel" ? "Repayment Hours / Days" : "Repayment Days"}
             value={String(repaymentDays)}
-            onChange={(v) => setRepaymentDays(Math.max(1, Number(v) || 0))}
+            onChange={(v) => setRepaymentDays(loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))}
           />
-          <Select
-            label="Repayment Term Band"
-            value={String(calc.termDays)}
-            onChange={(v) => setRepaymentDays(Number(v))}
-            options={repaymentOptions.map((d) => String(d))}
-          />
+          {loanKind === "fuel" ? (
+            <Input label="Repayment Term" value="24 hours" onChange={() => {}} />
+          ) : (
+            <Select
+              label="Repayment Term Band"
+              value={String(calc.termDays)}
+              onChange={(v) => setRepaymentDays(Number(v))}
+              options={repaymentOptions.map((d) => String(d))}
+            />
+          )}
           <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
             Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
             at {calc.ratePct}%. Enter an override above to use a custom percentage for this loan.
@@ -361,7 +414,7 @@ export function RepeatApplication({
       <Section title="Disbursement Computation">
         <div className="p-5 grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
-            <Row label="Loan Amount" value={fmtKES(loanAmount)} />
+            <Row label="Loan Amount" value={fmtKES(requestedLoanAmount)} />
             <Row label="Interest" value={fmtKES(calc.interest)} />
             <Row
               label={`Processing (${SBC_FEES.processingPct}%)`}
@@ -378,7 +431,9 @@ export function RepeatApplication({
             <Row label="Net Disbursable" value={fmtKES(calc.net)} bold />
             <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
             <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
-            <Row label="Daily Repayment" value={fmtKES(calc.daily)} />
+            <Row label="Daily repayment (daily installment)" value={fmtKES(calc.daily)} />
+            <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
+            <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
             <Row label="Period" value={`${calc.termDays} days`} />
           </div>
         </div>

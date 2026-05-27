@@ -5,9 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore, fmtKES, hasMemberTag, isMemberCategory, loanPenaltySummary } from "@/lib/store";
 import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
+import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
+import {
+  TARGET_METRIC_META,
+  usePerformanceTargets,
+  type PerformanceTarget,
+  type TargetPeriod,
+} from "@/lib/performance-targets";
 import { AppHeader } from "@/components/AppHeader";
 import { StatCard, Section, Badge, DirectorOnly, RestrictedNotice } from "@/components/ui-bits";
-import { Banknote, Users, PiggyBank, TrendingUp, Wallet, PieChart } from "lucide-react";
+import { Banknote, Users, PiggyBank, TrendingUp, Wallet, PieChart, Target } from "lucide-react";
 import {
   AreaChart,
   Area,
@@ -29,7 +36,10 @@ function Dashboard() {
   const { members, loans, transactions, investors, sharePrice, pettyCash, policySettings } =
     useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
+  const loadMpesaReceipts = useServerFn(listMpesaReceiptAudit);
+  const { rows: performanceTargets } = usePerformanceTargets();
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [mpesaReceiptRows, setMpesaReceiptRows] = useState<any[]>([]);
   const memberAccounts = members.filter(
     (member) =>
       isMemberCategory(member.category) ||
@@ -41,6 +51,12 @@ function Dashboard() {
       .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
       .catch(() => setCarryoverLoans([]));
   }, [loadCarryoverLoans]);
+
+  useEffect(() => {
+    loadMpesaReceipts({ data: {} })
+      .then((rows) => setMpesaReceiptRows(rows as any[]))
+      .catch(() => setMpesaReceiptRows([]));
+  }, [loadMpesaReceipts]);
 
   const liveLoanHealth = useMemo(
     () =>
@@ -88,6 +104,67 @@ function Dashboard() {
   const totalShares = memberAccounts.reduce((s, m) => s + m.shares, 0) * sharePrice;
   const investorCapital = investors.reduce((s, i) => s + i.contributed, 0);
   const pettyTotal = pettyCash.reduce((s, p) => s + p.amount, 0);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const mpesaLinkedTransactionIds = useMemo(
+    () => new Set(mpesaReceiptRows.flatMap((row) => row.transactionIds ?? [])),
+    [mpesaReceiptRows],
+  );
+  const collectionRows = useMemo(
+    () =>
+      transactions.filter(
+        (transaction) =>
+          !mpesaLinkedTransactionIds.has(transaction.id) &&
+          transaction.by !== "MPESA" &&
+          ["deposit", "loan_repayment", "share_purchase", "fee_payment", "investor_contribution"].includes(
+            transaction.type,
+          ) &&
+          !isInternalSyntheticTransaction(transaction),
+      ),
+    [mpesaLinkedTransactionIds, transactions],
+  );
+  const collectionsToday =
+    collectionRows
+      .filter((transaction) => transaction.date === todayIso)
+      .reduce((sum, transaction) => sum + transaction.amount, 0) +
+    mpesaReceiptRows
+      .filter(
+        (row) =>
+          row.direction !== "out" &&
+          String(row.exactReceivedAt ?? row.createdAt ?? row.date ?? "").slice(0, 10) === todayIso,
+      )
+      .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  const scheduledTargetToday = useMemo(
+    () =>
+      scheduledRepaymentsForWindow(
+        todayIso,
+        todayIso,
+        loans
+          .filter((loan) => loan.status === "active" || loan.status === "defaulted")
+          .map((loan) => ({ loan, summary: loanPenaltySummary(loan, transactions) })),
+        carryoverLoans
+          .filter((loan) => loan.status === "active" || loan.status === "defaulted")
+          .map((loan) => ({ loan, summary: summarizeLegacyCarryoverLoan(loan, policySettings) })),
+      ),
+    [carryoverLoans, loans, policySettings, todayIso, transactions],
+  );
+  const currentTargetRows = useMemo(
+    () =>
+      performanceTargets
+        .map((target) => {
+          const window = targetWindow(target.period, target.startOn);
+          const actual = calculateTargetActual(target, {
+            members,
+            loans,
+            transactions: collectionRows,
+            mpesaReceiptRows,
+          });
+          const progress = target.expectedValue > 0 ? Math.min(100, (actual / target.expectedValue) * 100) : 0;
+          return { target, window, actual, progress, gap: actual - target.expectedValue };
+        })
+        .filter((row) => todayIso >= row.window.start && todayIso <= row.window.end)
+        .slice(0, 4),
+    [collectionRows, loans, members, mpesaReceiptRows, performanceTargets, todayIso],
+  );
 
   const months = ["Dec", "Jan", "Feb", "Mar", "Apr", "May"];
   const series = months.map((m, i) => ({
@@ -189,6 +266,30 @@ function Dashboard() {
             ))}
           </div>
         </Section>
+
+        <DirectorOnly>
+          <Section title="Targets">
+            <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Today's target"
+                value={fmtKES(collectionsToday)}
+                hint={`Expected ${fmtKES(scheduledTargetToday)} · ${targetPercent(collectionsToday, scheduledTargetToday)}%`}
+                icon={<Target className="h-5 w-5" />}
+                tone={collectionsToday >= scheduledTargetToday ? "success" : "warning"}
+              />
+              {currentTargetRows.map(({ target, actual, progress, gap }) => (
+                <StatCard
+                  key={target.id}
+                  label={TARGET_METRIC_META[target.metric].label}
+                  value={formatTargetValue(target, actual)}
+                  hint={`${progress.toFixed(0)}% · ${gap >= 0 ? "+" : ""}${formatTargetValue(target, gap)}`}
+                  icon={<Target className="h-5 w-5" />}
+                  tone={gap >= 0 ? "success" : "warning"}
+                />
+              ))}
+            </div>
+          </Section>
+        </DirectorOnly>
 
         <DirectorOnly>
           <div className="grid lg:grid-cols-3 gap-6">
@@ -353,4 +454,190 @@ function Dashboard() {
       </main>
     </>
   );
+}
+
+function isInternalSyntheticTransaction(transaction: { note?: string; by?: string }) {
+  const note = String(transaction.note ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    note.startsWith("policy redistribution:") ||
+    note.startsWith("purpose pool reallocation ->") ||
+    note.startsWith("round-off captured from m-pesa receipt")
+  );
+}
+
+function targetPercent(actual: number, expected: number) {
+  if (expected <= 0) return actual > 0 ? "100" : "0";
+  return Math.min(100, Math.round((actual / expected) * 100)).toFixed(0);
+}
+
+function targetWindow(period: TargetPeriod, startOn: string) {
+  const start = new Date(`${startOn}T00:00:00`);
+  const end = new Date(start);
+  if (period === "daily") {
+    end.setDate(start.getDate());
+  } else if (period === "weekly") {
+    end.setDate(start.getDate() + 6);
+  } else if (period === "monthly") {
+    end.setMonth(start.getMonth() + 1);
+    end.setDate(end.getDate() - 1);
+  } else {
+    end.setFullYear(start.getFullYear() + 1);
+    end.setDate(end.getDate() - 1);
+  }
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+  };
+}
+
+function formatTargetValue(target: PerformanceTarget, value: number): string;
+function formatTargetValue(metric: PerformanceTarget["metric"], value: number): string;
+function formatTargetValue(metricOrTarget: PerformanceTarget | PerformanceTarget["metric"], value: number) {
+  const metric = typeof metricOrTarget === "string" ? metricOrTarget : metricOrTarget.metric;
+  return TARGET_METRIC_META[metric].unit === "amount" ? fmtKES(value) : value.toFixed(0);
+}
+
+function calculateTargetActual(
+  target: PerformanceTarget,
+  data: {
+    members: ReturnType<typeof useStore>["members"];
+    loans: ReturnType<typeof useStore>["loans"];
+    transactions: ReturnType<typeof useStore>["transactions"];
+    mpesaReceiptRows: any[];
+  },
+) {
+  const window = targetWindow(target.period, target.startOn);
+  const inWindow = (date: string) => {
+    const value = date.slice(0, 10);
+    return value >= window.start && value <= window.end;
+  };
+  const receiptDate = (row: any) =>
+    String(row.exactReceivedAt ?? row.createdAt ?? row.date ?? "").slice(0, 10);
+  const mpesaRowsInWindow = data.mpesaReceiptRows.filter((row) => inWindow(receiptDate(row)));
+  const mpesaCollections = mpesaRowsInWindow
+    .filter((row) => row.direction !== "out")
+    .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  const mpesaAllocationAmount = (types: string[]) =>
+    mpesaRowsInWindow
+      .filter((row) => row.direction !== "out")
+      .flatMap((row) => (Array.isArray(row.allocations) ? row.allocations : []))
+      .filter((allocation) => types.includes(String(allocation.type ?? "")))
+      .reduce((sum, allocation) => sum + Number(allocation.amount ?? 0), 0);
+  const mpesaAllocationCount = (predicate: (allocation: any) => boolean) =>
+    mpesaRowsInWindow
+      .filter((row) => row.direction !== "out")
+      .flatMap((row) => (Array.isArray(row.allocations) ? row.allocations : []))
+      .filter(predicate).length;
+  const mpesaPayoutAmount = mpesaRowsInWindow
+    .filter((row) => row.direction === "out" && row.type === "loan_disbursement")
+    .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  const feeNotes = (note?: string) => (note ?? "").trim().toLowerCase();
+
+  switch (target.metric) {
+    case "collections_total":
+      return (
+        mpesaCollections +
+        data.transactions
+          .filter((transaction) => inWindow(transaction.date))
+          .reduce((sum, transaction) => sum + transaction.amount, 0)
+      );
+    case "loan_repayments":
+      return (
+        mpesaAllocationAmount(["loan_repayment", "carryover_loan_repayment"]) +
+        data.transactions
+          .filter((transaction) => transaction.type === "loan_repayment" && inWindow(transaction.date))
+          .reduce((sum, transaction) => sum + transaction.amount, 0)
+      );
+    case "loan_disbursements":
+      return (
+        mpesaPayoutAmount +
+        data.transactions
+          .filter(
+            (transaction) => transaction.type === "loan_disbursement" && inWindow(transaction.date),
+          )
+          .reduce((sum, transaction) => sum + transaction.amount, 0)
+      );
+    case "new_loans_count":
+      return data.loans.filter(
+        (loan) =>
+          loan.status !== "pending" && loan.status !== "rejected" && inWindow(loan.startDate),
+      ).length;
+    case "registrations":
+      return data.members.filter((member) => inWindow(member.joinedAt)).length;
+    case "cards_paid":
+      return (
+        mpesaAllocationCount(
+          (allocation) =>
+            String(allocation.type ?? "") === "fee_payment" &&
+            feeNotes(allocation.note).includes("card"),
+        ) +
+        data.transactions.filter(
+          (transaction) =>
+            transaction.type === "fee_payment" &&
+            feeNotes(transaction.note).includes("card") &&
+            inWindow(transaction.date),
+        ).length
+      );
+    case "stickers_paid":
+    case "stickers_issued":
+      return (
+        mpesaAllocationCount(
+          (allocation) =>
+            String(allocation.type ?? "") === "fee_payment" &&
+            feeNotes(allocation.note).includes("sticker"),
+        ) +
+        data.transactions.filter(
+          (transaction) =>
+            transaction.type === "fee_payment" &&
+            feeNotes(transaction.note).includes("sticker") &&
+            inWindow(transaction.date),
+        ).length
+      );
+  }
+}
+
+function overlapDaysInclusive(startDate: string, endDate: string, windowStart: string, windowEnd: string) {
+  const start = startDate.slice(0, 10);
+  const end = endDate.slice(0, 10);
+  const overlapStart = start > windowStart ? start : windowStart;
+  const overlapEnd = end < windowEnd ? end : windowEnd;
+  if (overlapStart > overlapEnd) return 0;
+  const startMs = new Date(`${overlapStart}T00:00:00`).getTime();
+  const endMs = new Date(`${overlapEnd}T00:00:00`).getTime();
+  return Math.floor((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function scheduledRepaymentsForWindow(
+  windowStart: string,
+  windowEnd: string,
+  liveLoans: Array<{
+    loan: ReturnType<typeof useStore>["loans"][number];
+    summary: ReturnType<typeof loanPenaltySummary>;
+  }>,
+  carryoverLoans: Array<{
+    loan: LegacyCarryoverLoan;
+    summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+  }>,
+) {
+  const liveDue = liveLoans.reduce((sum, row) => {
+    const activeDays = overlapDaysInclusive(
+      row.loan.startDate,
+      row.summary.dueDate,
+      windowStart,
+      windowEnd,
+    );
+    return sum + activeDays * row.summary.dailyCollectionAmount;
+  }, 0);
+  const carryoverDue = carryoverLoans.reduce((sum, row) => {
+    const activeDays = overlapDaysInclusive(
+      row.loan.startDate,
+      row.summary.dueDate,
+      windowStart,
+      windowEnd,
+    );
+    return sum + activeDays * row.summary.dailyInclusive;
+  }, 0);
+  return liveDue + carryoverDue;
 }

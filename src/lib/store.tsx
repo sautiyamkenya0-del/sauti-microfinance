@@ -108,8 +108,8 @@ export type Member = {
   fieldOfficerId?: string;
 };
 
-/** SBC policy: loan terms are fixed-day buckets, not months. */
-export type LoanTermDays = 7 | 14 | 30 | 60 | 90;
+/** SBC policy: financial loans use fixed-day buckets; supplier-backed loans may use 24-hour/custom spans. */
+export type LoanTermDays = 1 | 7 | 14 | 30 | 60 | 90;
 export type LoanChargeMode = "upfront" | "financed";
 export type LoanProductType = PolicyLoanType;
 export type LoanKind = "financial" | "fuel" | "stock" | "service";
@@ -131,7 +131,7 @@ export type Loan = {
   financedPrincipalAmount?: number; // financed balance used for pricing and repayment
   rate: number; // % per month (legacy field — kept for old seed loans)
   termMonths: number; // legacy field, kept for back-compat
-  termDays?: LoanTermDays; // new: SBC fixed term (7/14/30/60/90)
+  termDays?: number; // financial loans use SBC buckets; supplier loans can use 24h/custom spans
   startDate: string;
   status: "pending" | "active" | "closed" | "defaulted" | "rejected";
   officerId: string;
@@ -154,6 +154,35 @@ export type Loan = {
   frozenNote?: string;
   penaltyWaivedAmount?: number;
 };
+
+function payloadNumber(payload: Record<string, unknown> | undefined, keys: string[]) {
+  if (!payload) return 0;
+  for (const key of keys) {
+    const value = Number(payload[key] ?? 0);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+export function loanProductChargeAmount(loan: {
+  loanKind?: LoanKind;
+  supplierPayload?: Record<string, unknown>;
+  processingFeeAmount?: number;
+}) {
+  if (loan.loanKind === "fuel") {
+    return (
+      payloadNumber(loan.supplierPayload, ["fuelCharge", "charge", "productChargeAmount"]) ||
+      Number(loan.processingFeeAmount ?? 0)
+    );
+  }
+  if (loan.loanKind === "stock") {
+    return (
+      payloadNumber(loan.supplierPayload, ["stockCharge", "charge", "productChargeAmount"]) ||
+      Number(loan.processingFeeAmount ?? 0)
+    );
+  }
+  return 0;
+}
 
 export type Transaction = {
   id: string;
@@ -846,9 +875,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       addLoan: async (l) => {
         const status = l.status ?? "pending";
-        const termDays = normalizeLoanTermDays(l.termDays ?? (l.termMonths || 1) * 30);
+        const loanKind = l.loanKind ?? "financial";
+        const supplierBacked =
+          loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
+        const termDays =
+          loanKind === "fuel"
+            ? 1
+            : supplierBacked
+              ? Math.max(1, Math.floor(Number(l.termDays ?? 14) || 14))
+              : normalizeLoanTermDays(l.termDays ?? (l.termMonths || 1) * 30);
         const termMonths = termPeriodsFromDays(termDays);
-        const rate = l.rate > 0 ? l.rate : loanRateForTerm(termDays);
+        const rate = supplierBacked ? 0 : l.rate > 0 ? l.rate : loanRateForTerm(termDays);
         const result = await createLoan({
           data: {
             memberId: l.memberId,
@@ -869,7 +906,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             status,
             officerId: l.officerId,
             purpose: l.purpose,
-            loanKind: l.loanKind,
+            loanKind,
             supplierPayload: l.supplierPayload,
           },
         });
@@ -1269,7 +1306,11 @@ export function loanRateForTerm(termDays?: number, loanType?: LoanProductType, a
   return policyInterestRateForTerm(termDays, resolvedLoanType, getActivePolicySettings());
 }
 
-export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths">) {
+export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths" | "loanKind">) {
+  if (loan.loanKind === "fuel") return 1;
+  if (loan.loanKind === "stock" || loan.loanKind === "service") {
+    return Math.max(1, Math.floor(Number(loan.termDays ?? 14) || 14));
+  }
   if (loan.termDays) return normalizeLoanTermDays(loan.termDays);
   return normalizeLoanTermDays((loan.termMonths || 1) * 30);
 }
@@ -1340,6 +1381,7 @@ export function loanPricingPreview(args: {
   ratePct?: number;
   loanType?: LoanProductType;
   loanKind?: LoanKind;
+  productChargeAmount?: number;
   processingFeeMode?: LoanChargeMode;
   insuranceFeeMode?: LoanChargeMode;
   dailySavingsAmount?: number;
@@ -1349,10 +1391,18 @@ export function loanPricingPreview(args: {
   const supplierBacked =
     args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service";
   const resolvedLoanType = args.loanType ?? loanProductTypeForAmount(netAmount);
-  const termDays = normalizeLoanTermDaysForType(args.termDays, resolvedLoanType);
+  const termDays =
+    args.loanKind === "fuel"
+      ? 1
+      : supplierBacked
+        ? Math.max(1, Math.floor(Number(args.termDays ?? 14) || 14))
+        : normalizeLoanTermDaysForType(args.termDays, resolvedLoanType);
   const ratePct = supplierBacked
     ? 0
     : Number(args.ratePct ?? loanRateForTerm(termDays, resolvedLoanType, netAmount));
+  const productChargeAmount = supplierBacked
+    ? Math.max(0, Number(args.productChargeAmount ?? 0))
+    : 0;
   const deductions = supplierBacked
     ? {
         processing: 0,
@@ -1373,12 +1423,14 @@ export function loanPricingPreview(args: {
         insuranceMode: args.insuranceFeeMode,
       });
   const fixedFees = summarizeLoanFixedFees(supplierBacked ? undefined : args.fixedFees);
-  const financedPrincipal = deductions.financedPrincipal + fixedFees.totalFinanced;
+  const financedPrincipal = deductions.financedPrincipal + fixedFees.totalFinanced + productChargeAmount;
   const periods = termPeriodsFromDays(termDays, resolvedLoanType);
-  const schedule = loanScheduleTotal(financedPrincipal, ratePct, periods);
+  const schedule = supplierBacked
+    ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
+    : loanScheduleTotal(financedPrincipal, ratePct, periods);
   const dailySavingsAmount = Math.max(
     0,
-    Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
+    supplierBacked ? 0 : Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
   );
   const rawDailyInclusive =
     (schedule.total + dailySavingsAmount * termDays) / Math.max(1, termDays);
@@ -1390,6 +1442,7 @@ export function loanPricingPreview(args: {
     loanType: resolvedLoanType,
     periods,
     deductions,
+    productChargeAmount,
     netAmount,
     netDisbursedAmount: netAmount,
     financedPrincipal,
@@ -1419,20 +1472,35 @@ export function loanSummary(
     | "paid"
     | "startDate"
     | "status"
+    | "loanKind"
+    | "supplierPayload"
+    | "processingFeeAmount"
   >,
 ) {
   const approved = loan.approvedAmount ?? loan.principal;
-  const termDays = loanTermDaysOf(loan);
+  const supplierBacked =
+    loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service";
+  const termDays =
+    loan.loanKind === "fuel"
+      ? 1
+      : supplierBacked
+        ? Math.max(1, Math.floor(Number(loan.termDays ?? 14) || 14))
+        : loanTermDaysOf(loan);
   const periods = loan.termMonths > 0 ? loan.termMonths : termPeriodsFromDays(termDays);
-  const financedPrincipal = loan.financedPrincipalAmount ?? approved;
-  const schedule = loanScheduleTotal(financedPrincipal, loan.rate, periods);
+  const productChargeAmount = loanProductChargeAmount(loan);
+  const financedPrincipal =
+    loan.financedPrincipalAmount ?? (supplierBacked ? approved + productChargeAmount : approved);
+  const schedule = supplierBacked
+    ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
+    : loanScheduleTotal(financedPrincipal, loan.rate, periods);
   const balance = Math.max(0, schedule.total - loan.paid);
-  const dailySavingsAmount = loanDailySavingsAmount(approved);
+  const dailySavingsAmount = supplierBacked ? 0 : loanDailySavingsAmount(approved);
   const dueDate = new Date(loan.startDate);
   dueDate.setDate(dueDate.getDate() + termDays);
   return {
     approved,
     financedPrincipal,
+    productChargeAmount,
     termDays,
     periods,
     interest: schedule.interest,
@@ -1485,6 +1553,8 @@ export function loanPenaltySummary(
   const startDate = dateOnlyValue(loan.startDate);
   const today = dateOnlyValue(loan.frozenAt || asOfDate);
   const dueDate = summary.dueDate;
+  const supplierBacked =
+    loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service";
   const totalExpectedCollected = dailyExpected * summary.termDays;
   const paymentsByDate = new Map<string, number>();
 
@@ -1505,26 +1575,28 @@ export function loanPenaltySummary(
   let dailyUnpaidBalance = 0;
   let dailyPenalty = 0;
   let skippedPaymentDays = 0;
+  let paymentCredit = 0;
 
   for (let offset = 0; offset < dailyLoopDays; offset += 1) {
     const day = addCalendarDays(startDate, offset);
+    paymentCredit += paymentsByDate.get(day) ?? 0;
     const expectedToday = dailyUnpaidBalance + dailyExpected;
-    const paidToday = paymentsByDate.get(day) ?? 0;
+    const paidToday = paymentCredit;
     const isPastCollectionDay = diffCalendarDays(day, today) > 0;
-    if (isPastCollectionDay && paidToday <= 0 && expectedToday > 0) {
-      dailyPenalty += expectedToday * (SBC_FEES.penaltyDailyPct / 100);
+    const unpaidAfterPayment = Math.max(0, expectedToday - paidToday);
+    if (!supplierBacked && isPastCollectionDay && unpaidAfterPayment > 0) {
+      dailyPenalty += unpaidAfterPayment * (SBC_FEES.penaltyDailyPct / 100);
       skippedPaymentDays += 1;
     }
-    dailyUnpaidBalance = Math.max(0, expectedToday - paidToday);
+    dailyUnpaidBalance = unpaidAfterPayment;
+    paymentCredit = Math.max(0, paidToday - expectedToday);
   }
 
   const rawDaysPastDue = Math.max(0, diffCalendarDays(dueDate, today));
   const dueDatePenaltyBase = Math.max(0, totalExpectedCollected + dailyPenalty - totalPaid);
-  const dueDatePenalty = compoundedPenalty(
-    dueDatePenaltyBase,
-    SBC_FEES.defaultPenaltyPct,
-    rawDaysPastDue,
-  );
+  const dueDatePenalty = supplierBacked
+    ? dueDatePenaltyBase * (SBC_FEES.penaltyDailyPct / 100) * rawDaysPastDue
+    : compoundedPenalty(dueDatePenaltyBase, SBC_FEES.defaultPenaltyPct, rawDaysPastDue);
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const totalPenalty = Math.max(0, dailyPenalty + dueDatePenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - totalPaid);
