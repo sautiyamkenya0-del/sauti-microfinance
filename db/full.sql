@@ -2603,6 +2603,19 @@ comment on column public.member_carryover_loans.loan_kind is
 create index if not exists idx_member_carryover_loans_kind
 on public.member_carryover_loans(loan_kind, member_id, start_date desc);
 
+-- Migration: 20260527100000_loan_freeze_and_penalty_waivers.sql
+
+alter table public.loans
+  add column if not exists frozen_at date,
+  add column if not exists frozen_note text,
+  add column if not exists penalty_waived_amount numeric(14,2) not null default 0;
+
+comment on column public.loans.frozen_at is
+  'When set, follow-up aging and penalty calculations are frozen at this date.';
+
+comment on column public.loans.penalty_waived_amount is
+  'Director-approved waiver applied against calculated loan penalties.';
+
 -- =====================================================================
 -- End of full.sql
 -- =====================================================================

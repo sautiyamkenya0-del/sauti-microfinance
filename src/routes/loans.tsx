@@ -88,6 +88,7 @@ function LoansHub() {
     memberLoanCount(memberId) + carryoverLoanCount(memberId);
   const isFirstTime = selectedMemberId ? totalLoanCount(selectedMemberId) === 0 : true;
   const reviewerOnly = currentUser.role === "loan_officer";
+  const directorOnly = currentUser.role === "director";
   const loanKindCounts = useMemo(
     () =>
       LOAN_KIND_OPTIONS.reduce<Record<LoanKind, number>>(
@@ -125,10 +126,14 @@ function LoansHub() {
     }
   }, [eligibleMemberAccounts, selectedMemberId]);
 
+  useEffect(() => {
+    if (!directorOnly && tab === "carryover") setTab("book");
+  }, [directorOnly, tab]);
+
   const tabs: { key: Tab; label: string; hidden?: boolean }[] = [
     { key: "book", label: "Loan Book" },
     { key: "new", label: "New / Repeat Application" },
-    { key: "carryover", label: "Carryover Entry" },
+    { key: "carryover", label: "Carryover Entry", hidden: !directorOnly },
     { key: "appraisal", label: "Appraisal & Risk" },
     { key: "review", label: "Pending Review", hidden: reviewerOnly },
     { key: "followups", label: "Follow-ups" },

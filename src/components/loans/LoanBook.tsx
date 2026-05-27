@@ -59,6 +59,18 @@ function dueDateOf(l: Loan): string {
   return loanSummary(l).dueDate;
 }
 
+function logicalLoanStatus(
+  status: string,
+  balance: number,
+  dueDate: string,
+  today: string = new Date().toISOString().slice(0, 10),
+) {
+  if (balance <= 0) return "closed";
+  if (status === "rejected" || status === "pending") return status;
+  if (status === "defaulted" || dueDate < today) return "defaulted";
+  return "active";
+}
+
 /** Daily compliance contribution tier as per common SBC plans. */
 function dailyTotalOf(l: Loan): number {
   return loanSummary(l).dailyCollectionAmount;
@@ -105,31 +117,33 @@ export function LoanBook({
       if (productFilter !== "all" && rowLoanKind !== productFilter) return false;
 
       const status = row.loan.status;
-      const isFinished =
+      const rowSummary =
         row.kind === "carryover"
-          ? row.loan.finished || summarizeLegacyCarryoverLoan(row.loan, policySettings).isFinished
-          : row.loan.status === "closed";
-      const dueDate =
+          ? summarizeLegacyCarryoverLoan(row.loan, policySettings)
+          : loanPenaltySummary(row.loan, transactions);
+      const balance =
         row.kind === "carryover"
-          ? summarizeLegacyCarryoverLoan(row.loan, policySettings).dueDate
-          : dueDateOf(row.loan);
+          ? rowSummary.totalOwedNow
+          : (rowSummary as ReturnType<typeof loanPenaltySummary>).totalOwedNow;
+      const dueDate = rowSummary.dueDate;
+      const logicalStatus = logicalLoanStatus(status, balance, dueDate, today);
       switch (filter) {
         case "all":
           return true;
         case "active":
-          return status === "active" && !isFinished;
+          return logicalStatus === "active";
         case "pending":
           return row.kind === "live" && status === "pending";
         case "approved":
-          return status === "active" || isFinished;
+          return logicalStatus === "active" || logicalStatus === "closed";
         case "rejected":
           return row.kind === "live" && status === "rejected";
         case "completed":
-          return isFinished;
+          return logicalStatus === "closed";
         case "defaulted":
-          return status === "defaulted";
+          return logicalStatus === "defaulted";
         case "overdue":
-          return status === "active" && !isFinished && dueDate < today;
+          return balance > 0 && dueDate < today;
         default:
           return true;
       }
@@ -279,11 +293,16 @@ export function LoanBook({
                   ? loanPenaltySummary(liveLoan, transactions)
                   : summarizeLegacyCarryoverLoan(legacyLoan, policySettings);
               const idNum = l.id.replace(/\D/g, "") || l.id;
-              const statusLabel =
-                row.kind === "carryover" &&
-                (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).isFinished
-                  ? "closed"
-                  : l.status;
+              const currentBalance =
+                row.kind === "live"
+                  ? (summary as ReturnType<typeof loanPenaltySummary>).totalOwedNow
+                  : (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).totalOwedNow;
+              const statusLabel = logicalLoanStatus(
+                l.status,
+                currentBalance,
+                summary.dueDate,
+                today,
+              );
               const tone =
                 statusLabel === "active"
                   ? "success"

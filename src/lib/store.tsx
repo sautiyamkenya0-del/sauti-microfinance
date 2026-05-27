@@ -150,6 +150,9 @@ export type Loan = {
   supplierRequestStatus?: string;
   reviewedBy?: string;
   reviewNote?: string;
+  frozenAt?: string;
+  frozenNote?: string;
+  penaltyWaivedAmount?: number;
 };
 
 export type Transaction = {
@@ -1480,7 +1483,7 @@ export function loanPenaltySummary(
   const summary = loanSummary(loan);
   const dailyExpected = summary.dailyCollectionAmount;
   const startDate = dateOnlyValue(loan.startDate);
-  const today = dateOnlyValue(asOfDate);
+  const today = dateOnlyValue(loan.frozenAt || asOfDate);
   const dueDate = summary.dueDate;
   const totalExpectedCollected = dailyExpected * summary.termDays;
   const paymentsByDate = new Map<string, number>();
@@ -1522,7 +1525,8 @@ export function loanPenaltySummary(
     SBC_FEES.defaultPenaltyPct,
     rawDaysPastDue,
   );
-  const totalPenalty = dailyPenalty + dueDatePenalty;
+  const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
+  const totalPenalty = Math.max(0, dailyPenalty + dueDatePenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - totalPaid);
 
   return {
@@ -1536,6 +1540,7 @@ export function loanPenaltySummary(
     daysPastDue: rawDaysPastDue,
     dueDatePenaltyBase,
     dueDatePenalty,
+    penaltyWaivedAmount,
     totalPenalty,
     totalOwedNow,
   };

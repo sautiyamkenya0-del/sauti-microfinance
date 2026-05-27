@@ -1,5 +1,9 @@
 import { Section, StatCard, Badge } from "@/components/ui-bits";
-import { createStaffMemoRecord } from "@/lib/app-data.functions";
+import {
+  createStaffMemoRecord,
+  freezeLoanFollowupRecord,
+  waiveLoanFollowupPenaltyRecord,
+} from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { useStore, fmtKES, loanPenaltySummary } from "@/lib/store";
 import { useServerFn } from "@tanstack/react-start";
@@ -8,15 +12,29 @@ import { toast } from "sonner";
 import { Bell, Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
 
 export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarryoverLoan[] }) {
-  const { loans, members, transactions, followups, addFollowup, currentUser, policySettings } =
+  const {
+    loans,
+    members,
+    transactions,
+    followups,
+    addFollowup,
+    currentUser,
+    policySettings,
+    reloadAppData,
+  } =
     useStore();
   const sendNotice = useServerFn(createStaffMemoRecord);
+  const waiveLoanPenalty = useServerFn(waiveLoanFollowupPenaltyRecord);
+  const freezeLoan = useServerFn(freezeLoanFollowupRecord);
+  const [query, setQuery] = useState("");
 
   const items = useMemo(() => {
     const liveItems = loans
-      .filter((l) => l.status === "active" || l.status === "defaulted")
+      .filter((l) => l.status !== "pending" && l.status !== "rejected")
       .map((l) => {
         const summary = loanPenaltySummary(l, transactions);
+        const isComplete = summary.totalOwedNow <= 0;
+        const isOverdue = summary.dueDate < new Date().toISOString().slice(0, 10);
         const dailyInstallment = summary.dailyExpected;
         const defaulted = summary.dailyUnpaidBalance;
         const outstanding = summary.totalOwedNow - summary.totalPenalty;
@@ -35,13 +53,16 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           totalDue: summary.totalOwedNow,
           penalties,
           daysMissed,
+          frozen: Boolean(l.frozenAt),
+          include: !isComplete && (l.status === "defaulted" || isOverdue || defaulted > 0 || penalties > 0),
         };
       })
-      .filter((x) => x.defaulted > 0 || x.penalties > 0);
+      .filter((x) => x.member && x.include);
     const carryoverItems = carryoverLoans
-      .filter((loan) => loan.status === "active" || loan.status === "defaulted")
       .map((loan) => {
         const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+        const isComplete = summary.totalOwedNow <= 0;
+        const isOverdue = summary.dueDate < new Date().toISOString().slice(0, 10);
         const dailyInstallment = summary.dailyInclusive;
         const defaulted = summary.arrears;
         const daysMissed = dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0;
@@ -55,11 +76,29 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           totalDue: summary.totalOwedNow,
           penalties: summary.estimatedPenaltyNow,
           daysMissed,
+          frozen: Boolean(summary.frozenAsOf),
+          include:
+            !isComplete &&
+            (loan.status === "defaulted" || isOverdue || defaulted > 0 || summary.totalOwedNow > 0),
         };
       })
-      .filter((x) => x.member && (x.defaulted > 0 || x.outstanding > 0));
-    return [...liveItems, ...carryoverItems].sort((a, b) => b.daysMissed - a.daysMissed);
-  }, [carryoverLoans, loans, members, policySettings, transactions]);
+      .filter((x) => x.member && x.include);
+    const q = query.trim().toLowerCase();
+    const list = [...liveItems, ...carryoverItems].filter((item) => {
+      if (!q) return true;
+      return [
+        item.member?.name,
+        item.member?.id,
+        item.member?.phone,
+        item.member?.businessName,
+        item.loan.id,
+        item.loan.purpose,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q));
+    });
+    return list.sort((a, b) => b.daysMissed - a.daysMissed);
+  }, [carryoverLoans, loans, members, policySettings, query, transactions]);
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);
   const totalDue = items.reduce((s, i) => s + i.totalDue, 0);
@@ -96,6 +135,14 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
       </div>
 
       <Section title={`Loan Follow-ups (${items.length})`}>
+        <div className="border-b border-border p-4">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search member, loan, phone, or business"
+            className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm md:max-w-md"
+          />
+        </div>
         <div className="divide-y divide-border">
           {items.length === 0 && (
             <div className="px-5 py-8 text-sm text-muted-foreground">All loans are current.</div>
@@ -111,6 +158,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
               totalDue,
               penalties,
               daysMissed,
+              frozen,
             }) => {
               const memberFups = followups.filter((f) => f.loanId === loan.id);
               return (
@@ -120,6 +168,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                       <div className="flex items-center gap-2">
                         <h4 className="font-semibold uppercase">{member?.name}</h4>
                         <Badge tone="destructive">{daysMissed} day(s) missed</Badge>
+                        {frozen ? <Badge tone="warning">Frozen</Badge> : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Member: {member?.id} · Loan {loan.id} · {loan.purpose ?? "—"}
@@ -174,6 +223,57 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                     <button className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md hover:bg-muted">
                       <MapPin className="h-3 w-3" /> Live Location
                     </button>
+                    {currentUser.role === "director" ? (
+                      <>
+                        <button
+                          onClick={async () => {
+                            const raw = window.prompt(
+                              `Penalty amount to waive for ${loan.id}`,
+                              String(Math.ceil(penalties)),
+                            );
+                            if (raw == null) return;
+                            const amount = Number(raw);
+                            if (!Number.isFinite(amount) || amount <= 0) {
+                              toast.error("Enter a waiver amount above zero.");
+                              return;
+                            }
+                            await waiveLoanPenalty({
+                              data: {
+                                loanId: loan.id,
+                                loanKind,
+                                amount,
+                                note: "Director follow-up waiver",
+                              },
+                            });
+                            await reloadAppData();
+                            toast.success("Penalty waiver saved.");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-warning/50 px-3 py-1.5 text-warning-foreground hover:bg-warning/10"
+                        >
+                          Waive Penalty
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const confirmed = window.confirm(
+                              `Freeze loan ${loan.id} at today's figures? Balances and penalties will stop aging from this date.`,
+                            );
+                            if (!confirmed) return;
+                            await freezeLoan({
+                              data: {
+                                loanId: loan.id,
+                                loanKind,
+                                note: "Director stopped accrual from follow-ups",
+                              },
+                            });
+                            await reloadAppData();
+                            toast.success("Loan frozen at the current follow-up position.");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-3 py-1.5 text-destructive hover:bg-destructive/10"
+                        >
+                          Stop Loan
+                        </button>
+                      </>
+                    ) : null}
                   </div>
 
                   <FollowupForm

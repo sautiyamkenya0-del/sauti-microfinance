@@ -640,23 +640,28 @@ async function insertTransactionRow(row: {
     if (existingTransactionId) return existingTransactionId;
   }
 
-  const id = await nextPrefixedId("transactions", "T", 1);
-  const { error } = await supabaseAdmin.from("transactions").insert({
-    id,
-    date: row.date ?? new Date().toISOString().slice(0, 10),
-    type: row.type as never,
-    amount: row.amount,
-    member_id: row.member_id ?? null,
-    loan_id: row.loan_id ?? null,
-    by_staff: row.by_staff ?? null,
-    note: row.note ?? null,
-    ref: row.ref ?? null,
-    account: row.account ?? null,
-    payer_name: row.payer_name ?? null,
-    created_at: row.created_at ?? undefined,
-  });
-  if (error) throw new Error(error.message);
-  return id;
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const id = await nextPrefixedId("transactions", "T", 1);
+    const { error } = await supabaseAdmin.from("transactions").insert({
+      id,
+      date: row.date ?? new Date().toISOString().slice(0, 10),
+      type: row.type as never,
+      amount: row.amount,
+      member_id: row.member_id ?? null,
+      loan_id: row.loan_id ?? null,
+      by_staff: row.by_staff ?? null,
+      note: row.note ?? null,
+      ref: row.ref ?? null,
+      account: row.account ?? null,
+      payer_name: row.payer_name ?? null,
+      created_at: row.created_at ?? undefined,
+    });
+    if (!error) return id;
+    lastError = error;
+    if (error.code !== "23505") throw new Error(error.message);
+  }
+  throw new Error(lastError?.message ?? "Failed to allocate a unique transaction id.");
 }
 
 async function resolveExistingTransactionRef(supabaseAdmin: any, ref: string) {
@@ -2966,6 +2971,10 @@ function mapLoanRow(row: any) {
     supplierRequestStatus: row.supplier_request_status ?? undefined,
     reviewedBy: row.reviewed_by ?? undefined,
     reviewNote: row.review_note ?? undefined,
+    frozenAt: row.frozen_at ?? undefined,
+    frozenNote: row.frozen_note ?? undefined,
+    penaltyWaivedAmount:
+      row.penalty_waived_amount == null ? undefined : toNumber(row.penalty_waived_amount),
   };
 }
 
@@ -8938,10 +8947,12 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       policySettings,
     );
     const status =
-      data.finished || computedSummary.balance <= 0
+      computedSummary.totalOwedNow <= 0
         ? "closed"
         : data.status === "closed"
-          ? "closed"
+          ? computedSummary.dueDate < new Date().toISOString().slice(0, 10)
+            ? "defaulted"
+            : "active"
           : data.status;
     const { error } = await runtimeDb.from("member_carryover_loans").upsert({
       id,
@@ -8958,7 +8969,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       closed_on: data.closedOn ?? (status === "closed" ? dueDate : null),
       paid_to_date: data.paidToDate,
       status,
-      finished: data.finished || status === "closed" || computedSummary.balance <= 0,
+      finished: computedSummary.totalOwedNow <= 0,
       penalty_waived_amount: data.penaltyWaivedAmount,
       fee_breakdown: data.feeBreakdown,
       notes: data.notes ?? null,
@@ -9091,6 +9102,164 @@ export const waivePenaltyRecord = createServerFn({ method: "POST" })
     });
     return { ok: true, waivedAmount: waiveAmount };
   });
+
+export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      loanId: string;
+      loanKind?: "live" | "carryover";
+      amount?: number;
+      note?: string;
+    }) => ({
+      loanId: String(data?.loanId ?? "").trim(),
+      loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
+      amount: data?.amount == null ? undefined : Math.max(0, Number(data.amount)),
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.loanId) throw new Error("Loan id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    if (data.loanKind === "carryover") {
+      const { data: loan, error } = await runtimeDb
+        .from("member_carryover_loans")
+        .select("*")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!loan) throw new Error("Carryover loan not found.");
+
+      const policySettings = await loadRuntimePolicySettings(runtimeDb);
+      const summary = summarizeLegacyCarryoverLoan(mapCarryoverLoanForSummary(loan), policySettings);
+      const waiveAmount = Math.min(
+        summary.estimatedPenaltyNow,
+        data.amount && data.amount > 0 ? data.amount : summary.estimatedPenaltyNow,
+      );
+      if (waiveAmount <= 0) throw new Error("There is no penalty amount to waive.");
+
+      const nextWaived = toNumber(loan.penalty_waived_amount) + waiveAmount;
+      const { error: updateError } = await runtimeDb
+        .from("member_carryover_loans")
+        .update({
+          penalty_waived_amount: nextWaived,
+          notes: [loan.notes, `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`]
+            .filter(Boolean)
+            .join("\n"),
+          updated_by: actor.id,
+        })
+        .eq("id", data.loanId);
+      if (updateError) throw new Error(updateError.message);
+      await refreshCarryoverMemberSummary(runtimeDb, loan.member_id);
+      return { ok: true, waivedAmount: waiveAmount };
+    }
+
+    const { data: loan, error } = await runtimeDb
+      .from("loans")
+      .select("*")
+      .eq("id", data.loanId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!loan) throw new Error("Loan not found.");
+    const currentWaived = toNumber(loan.penalty_waived_amount);
+    const waiveAmount = data.amount && data.amount > 0 ? data.amount : 0;
+    if (waiveAmount <= 0) throw new Error("Enter the penalty amount to waive.");
+
+    const { error: updateError } = await runtimeDb
+      .from("loans")
+      .update({
+        penalty_waived_amount: currentWaived + waiveAmount,
+        review_note: [loan.review_note, `Penalty waiver ${waiveAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`]
+          .filter(Boolean)
+          .join("\n"),
+      })
+      .eq("id", data.loanId);
+    if (updateError) throw new Error(updateError.message);
+    return { ok: true, waivedAmount: waiveAmount };
+  });
+
+export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { loanId: string; loanKind?: "live" | "carryover"; note?: string }) => ({
+      loanId: String(data?.loanId ?? "").trim(),
+      loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.loanId) throw new Error("Loan id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const frozenAt = new Date().toISOString().slice(0, 10);
+    if (data.loanKind === "carryover") {
+      const { data: loan, error } = await runtimeDb
+        .from("member_carryover_loans")
+        .select("*")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!loan) throw new Error("Carryover loan not found.");
+      const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+        asJsonObject(loan.fee_breakdown),
+        Math.max(1, Math.floor(toNumber(loan.loan_cycle_number) || 1)),
+      );
+      const { error: updateError } = await runtimeDb
+        .from("member_carryover_loans")
+        .update({
+          status: loan.status === "closed" ? "closed" : "defaulted",
+          fee_breakdown: {
+            ...feeBreakdown,
+            productMeta: {
+              ...(feeBreakdown.productMeta ?? {}),
+              frozenAsOf: frozenAt,
+              frozenBy: actor.id,
+              frozenNote: data.note ?? null,
+            },
+          },
+          notes: [loan.notes, `Loan frozen by ${actor.name} on ${frozenAt}${data.note ? ` - ${data.note}` : ""}`]
+            .filter(Boolean)
+            .join("\n"),
+          updated_by: actor.id,
+        })
+        .eq("id", data.loanId);
+      if (updateError) throw new Error(updateError.message);
+      await refreshCarryoverMemberSummary(runtimeDb, loan.member_id);
+      return { ok: true, frozenAt };
+    }
+
+    const { error: updateError } = await runtimeDb
+      .from("loans")
+      .update({
+        frozen_at: frozenAt,
+        frozen_note: data.note ?? null,
+        status: "defaulted",
+      })
+      .eq("id", data.loanId);
+    if (updateError) throw new Error(updateError.message);
+    return { ok: true, frozenAt };
+  });
+
+function mapCarryoverLoanForSummary(row: any) {
+  return {
+    principal: toNumber(row.principal),
+    interestRatePct: toNumber(row.interest_rate_pct),
+    termDays: Number(row.term_days ?? 30) as 7 | 14 | 30 | 60 | 90,
+    dailySavingsAmount: toNumber(row.daily_savings_amount),
+    startDate: String(row.start_date ?? new Date().toISOString().slice(0, 10)),
+    dueDate: row.due_date ?? undefined,
+    paidToDate: toNumber(row.paid_to_date),
+    status: row.status ?? "active",
+    finished: row.finished === true,
+    penaltyWaivedAmount: toNumber(row.penalty_waived_amount),
+    loanCycleNumber: Math.max(1, Math.floor(toNumber(row.loan_cycle_number) || 1)),
+    feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+      asJsonObject(row.fee_breakdown),
+      Math.max(1, Math.floor(toNumber(row.loan_cycle_number) || 1)),
+    ),
+  };
+}
 
 export const createReportSnapshotRecord = createServerFn({ method: "POST" })
   .inputValidator(
