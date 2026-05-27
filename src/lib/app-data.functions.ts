@@ -448,6 +448,31 @@ function termPeriodsFromDays(termDays?: number) {
   return Math.max(1, Math.ceil(normalizeLoanTermDays(termDays) / 30));
 }
 
+function normalizeLoanKindTermDays(
+  loanKind?: string | null,
+  termDays?: number | null,
+  termMonths?: number | null,
+) {
+  const normalizedKind = normalizeLoanKindValue(loanKind);
+  if (normalizedKind === "fuel") return 1;
+  if (normalizedKind === "stock" || normalizedKind === "service") {
+    return Math.max(1, Math.floor(Number(termDays ?? 14) || 14));
+  }
+  const monthCount = Number(termMonths ?? 0) > 0 ? Number(termMonths) : 1;
+  return normalizeLoanTermDays(termDays ?? monthCount * 30);
+}
+
+function termPeriodsForLoanKind(
+  loanKind?: string | null,
+  termDays?: number | null,
+  termMonths?: number | null,
+) {
+  const normalizedKind = normalizeLoanKindValue(loanKind);
+  const normalizedTermDays = normalizeLoanKindTermDays(loanKind, termDays, termMonths);
+  if (normalizedKind === "financial") return termPeriodsFromDays(normalizedTermDays);
+  return Math.max(1, Math.ceil(normalizedTermDays / 30));
+}
+
 function loanScheduleTotal(principal: number, monthlyRatePct: number, months: number) {
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
   const interest = principal * (monthlyRatePct / 100) * periods;
@@ -497,14 +522,11 @@ function computeLoanPricing(args: {
   const netAmount = Math.max(0, Number(args.netAmount ?? 0));
   const supplierBacked =
     args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service";
-  const termDays =
-    args.loanKind === "fuel"
-      ? 1
-      : supplierBacked
-        ? Math.max(1, Math.floor(Number(args.termDays ?? 14) || 14))
-        : normalizeLoanTermDays(args.termDays ?? Number(args.termMonths ?? 1) * 30);
+  const termDays = normalizeLoanKindTermDays(args.loanKind, args.termDays, args.termMonths);
   const termMonths =
-    Number(args.termMonths ?? 0) > 0 ? Number(args.termMonths ?? 0) : termPeriodsFromDays(termDays);
+    Number(args.termMonths ?? 0) > 0
+      ? Number(args.termMonths ?? 0)
+      : termPeriodsForLoanKind(args.loanKind, termDays, args.termMonths);
   const productChargeAmount = supplierBacked
     ? supplierPayloadChargeAmount(args.loanKind, args.supplierPayload)
     : 0;
@@ -566,16 +588,11 @@ function loanBalanceSummary(loan: {
   const financedPrincipal = Number(
     loan.financed_principal_amount ?? (supplierBacked ? approved + productChargeAmount : approved),
   );
-  const termDays =
-    loanKind === "fuel"
-      ? 1
-      : supplierBacked
-        ? Math.max(1, Math.floor(Number(loan.term_days ?? 14) || 14))
-        : normalizeLoanTermDays(loan.term_days ?? Number(loan.term_months ?? 1) * 30);
+  const termDays = normalizeLoanKindTermDays(loanKind, loan.term_days, loan.term_months);
   const periods =
     Number(loan.term_months ?? 0) > 0
       ? Number(loan.term_months ?? 0)
-      : termPeriodsFromDays(termDays);
+      : termPeriodsForLoanKind(loanKind, termDays, loan.term_months);
   const total = supplierBacked
     ? financedPrincipal
     : loanScheduleTotal(financedPrincipal, Number(loan.rate ?? 0), periods).total;
@@ -5958,19 +5975,21 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     const id = await nextPrefixedId("loans", "L", 1001);
     const netAmount =
       data.status === "active" ? (data.approvedAmount ?? data.principal) : data.approvedAmount;
+    const supplierBacked = data.loanKind !== "financial";
+    const termDays = normalizeLoanKindTermDays(data.loanKind, data.termDays, data.termMonths);
+    const termMonths = termPeriodsForLoanKind(data.loanKind, termDays, data.termMonths);
     const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
     const pricing = computeLoanPricing({
       netAmount: netAmount ?? data.netDisbursedAmount ?? data.principal,
       ratePct: data.rate,
-      termDays: data.termDays,
-      termMonths: data.termMonths,
+      termDays,
+      termMonths,
       processingFeeMode: data.processingFeeMode,
       insuranceFeeMode: data.insuranceFeeMode,
       loanKind: data.loanKind,
       supplierPayload: data.supplierPayload,
       settings: policySettings,
     });
-    const supplierBacked = data.loanKind !== "financial";
     const officerId = data.officerId ?? actor.id;
     const { error } = await supabaseAdmin.from("loans").insert({
       id,
@@ -5995,8 +6014,8 @@ export const createLoanRecord = createServerFn({ method: "POST" })
           ? "paid"
           : ((data.disbursementStatus as string | undefined) ?? "not_requested"),
       rate: supplierBacked ? 0 : data.rate,
-      term_months: data.termMonths,
-      term_days: data.termDays ?? null,
+      term_months: termMonths,
+      term_days: termDays,
       start_date: data.startDate,
       status: data.status as never,
       officer_id: officerId,
@@ -6036,8 +6055,8 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         insuranceFeeMode: data.insuranceFeeMode,
         status: data.status,
         officerId,
-        termDays: data.termDays ?? null,
-        termMonths: data.termMonths,
+        termDays,
+        termMonths,
         purpose: clipAuditText(data.purpose, 160),
         loanKind: data.loanKind,
         supplierPayload: data.supplierPayload,

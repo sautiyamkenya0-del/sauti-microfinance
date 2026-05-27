@@ -297,17 +297,10 @@ export function FirstTimeApplication({
     if (!businessPermanence) {
       return toast.error("Select whether the business is permanent or semi-permanent.");
     }
-    let mid = members.find((x) => x.phone === phone)?.id;
-    if (!mid)
-      mid = await addMember({
-        memberId: normalizedMembershipNo,
-        name: f.fullName,
-        phone,
-        joinedAt: todayIso,
-        status: "active",
-        shares: 0,
-        savingsBalance: 0,
-        category:
+    try {
+      let mid = members.find((x) => x.phone === phone)?.id;
+      if (!mid) {
+        const inferredCategory =
           existing?.category ??
           (f.loanKind === "fuel"
             ? "locomotive"
@@ -315,96 +308,115 @@ export function FirstTimeApplication({
               ? "stock"
               : f.loanKind === "service"
                 ? "service"
-                : "member"),
-        businessType: f.businessType || undefined,
-        businessPermanence,
-        businessName: f.tradingName || undefined,
-        businessAddress: f.businessLocation || undefined,
-      });
-    const applicationPayload = {
-      applicant: {
-        fullName: f.fullName,
-        phone,
-        membershipNo: normalizedMembershipNo,
-        businessType: f.businessType,
-        businessPermanence,
-        tradingName: f.tradingName,
-        businessLocation: f.businessLocation,
-      },
-      contacts: f.contacts,
-      guarantors: f.guarantors,
-      collateral: f.collateral,
-      loan: {
-        loanKind: f.loanKind,
-        purpose: f.purpose,
-        amountApplied: requestedLoanAmount,
-        termDays: calc.termDays,
-        dailyRepayment: calc.dailyPay,
-        dailyInstallment: calc.dailyPay,
-        grandTotalCollected: calc.grandTotalCollected,
-        roundOffBasket: calc.roundOffBasket,
-      },
-    };
-    const supplierPayload =
-      f.loanKind === "fuel"
-        ? {
-            vehiclePlate: f.vehiclePlate,
-            fuelType: f.fuelType,
-            litres: f.fuelLitres,
-            unitPrice: f.fuelUnitPrice,
-            fuelCharge: f.fuelCharge,
-            productChargeAmount: f.fuelCharge,
-            weekStarting: f.fuelWeekStarting,
-            weekEnding: f.fuelWeekEnding,
-            jobCard: {
-              rows: f.fuelJobCardRows,
-              totals: fuelJobCardSummary,
-            },
-            estimatedTotal: requestedLoanAmount,
-            notes: f.supplierNotes,
-            application: applicationPayload,
-          }
-        : f.loanKind === "stock"
+                : "member");
+        mid = await addMember({
+          memberId: normalizedMembershipNo,
+          name: f.fullName,
+          phone,
+          joinedAt: todayIso,
+          status: "active",
+          shares: 0,
+          savingsBalance: 0,
+          category: inferredCategory,
+          memberTags:
+            inferredCategory === "locomotive" ||
+            inferredCategory === "stock" ||
+            inferredCategory === "service"
+              ? ["member", inferredCategory]
+              : ["member"],
+          businessType: f.businessType || undefined,
+          businessPermanence,
+          businessName: f.tradingName || undefined,
+          businessAddress: f.businessLocation || undefined,
+        });
+      }
+      const applicationPayload = {
+        applicant: {
+          fullName: f.fullName,
+          phone,
+          membershipNo: normalizedMembershipNo,
+          businessType: f.businessType,
+          businessPermanence,
+          tradingName: f.tradingName,
+          businessLocation: f.businessLocation,
+        },
+        contacts: f.contacts,
+        guarantors: f.guarantors,
+        collateral: f.collateral,
+        loan: {
+          loanKind: f.loanKind,
+          purpose: f.purpose,
+          amountApplied: requestedLoanAmount,
+          termDays: calc.termDays,
+          dailyRepayment: calc.dailyPay,
+          dailyInstallment: calc.dailyPay,
+          grandTotalCollected: calc.grandTotalCollected,
+          roundOffBasket: calc.roundOffBasket,
+        },
+      };
+      const supplierPayload =
+        f.loanKind === "fuel"
           ? {
-              item: f.stockItem || f.purpose,
-              quantity: f.stockQuantity,
-              unitPrice: f.stockUnitPrice,
-              stockCharge: f.stockCharge,
-              productChargeAmount: f.stockCharge,
+              vehiclePlate: f.vehiclePlate,
+              fuelType: f.fuelType,
+              litres: f.fuelLitres,
+              unitPrice: f.fuelUnitPrice,
+              fuelCharge: f.fuelCharge,
+              productChargeAmount: f.fuelCharge,
+              weekStarting: f.fuelWeekStarting,
+              weekEnding: f.fuelWeekEnding,
+              jobCard: {
+                rows: f.fuelJobCardRows,
+                totals: fuelJobCardSummary,
+              },
               estimatedTotal: requestedLoanAmount,
               notes: f.supplierNotes,
               application: applicationPayload,
             }
-          : f.loanKind === "service"
+          : f.loanKind === "stock"
             ? {
-                serviceType: f.serviceType || f.purpose,
+                item: f.stockItem || f.purpose,
+                quantity: f.stockQuantity,
+                unitPrice: f.stockUnitPrice,
+                stockCharge: f.stockCharge,
+                productChargeAmount: f.stockCharge,
+                estimatedTotal: requestedLoanAmount,
                 notes: f.supplierNotes,
                 application: applicationPayload,
               }
-            : { application: applicationPayload };
-    const loanId = await addLoan({
-      memberId: mid,
-      principal: requestedLoanAmount,
-      rate: calc.ratePct,
-      termDays: calc.termDays,
-      termMonths: termPeriodsFromDays(calc.termDays, loanType),
-      startDate: new Date().toISOString().slice(0, 10),
-      officerId: currentUser.id,
-      status: "pending",
-      financedPrincipalAmount: calc.financedPrincipal,
-      netDisbursedAmount: calc.netDisbursed,
-      processingFeeAmount: calc.ded.processing,
-      insuranceFeeAmount: calc.ded.insurance,
-      transactionFeeAmount: calc.ded.transactionCost,
-      processingFeeMode: f.processingFeeMode,
-      insuranceFeeMode: f.insuranceFeeMode,
-      disbursementStatus: "not_requested",
-      purpose: f.purpose,
-      loanKind: f.loanKind,
-      supplierPayload,
-    });
-    toast.success("Application submitted — awaiting appraisal & review.");
-    onSubmitted?.(loanId, mid);
+            : f.loanKind === "service"
+              ? {
+                  serviceType: f.serviceType || f.purpose,
+                  notes: f.supplierNotes,
+                  application: applicationPayload,
+                }
+              : { application: applicationPayload };
+      const loanId = await addLoan({
+        memberId: mid,
+        principal: requestedLoanAmount,
+        rate: calc.ratePct,
+        termDays: calc.termDays,
+        termMonths: termPeriodsFromDays(calc.termDays, loanType),
+        startDate: new Date().toISOString().slice(0, 10),
+        officerId: currentUser.id,
+        status: "pending",
+        financedPrincipalAmount: calc.financedPrincipal,
+        netDisbursedAmount: calc.netDisbursed,
+        processingFeeAmount: calc.ded.processing,
+        insuranceFeeAmount: calc.ded.insurance,
+        transactionFeeAmount: calc.ded.transactionCost,
+        processingFeeMode: f.processingFeeMode,
+        insuranceFeeMode: f.insuranceFeeMode,
+        disbursementStatus: "not_requested",
+        purpose: f.purpose,
+        loanKind: f.loanKind,
+        supplierPayload,
+      });
+      toast.success("Application submitted — awaiting appraisal & review.");
+      onSubmitted?.(loanId, mid);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save loan application.");
+    }
   };
 
   return (
@@ -653,7 +665,9 @@ export function FirstTimeApplication({
             type="number"
             label={f.loanKind === "fuel" ? "Repayment Hours / Days" : "Repayment Days"}
             value={String(f.repaymentDays)}
-            onChange={(v) => set("repaymentDays", f.loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))}
+            onChange={(v) =>
+              set("repaymentDays", f.loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))
+            }
           />
           {f.loanKind === "fuel" ? (
             <Input label="Repayment Term" value="24 hours" onChange={() => {}} />

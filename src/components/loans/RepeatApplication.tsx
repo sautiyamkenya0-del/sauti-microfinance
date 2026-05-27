@@ -142,73 +142,81 @@ export function RepeatApplication({
   const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
-    const applicationPayload = {
-      reconfirmed: { confirmKYC, confirmKin, confirmGuar, confirmBiz, changesSinceLast },
-      loan: {
-        loanKind,
-        purpose,
-        amountApplied: requestedLoanAmount,
-        termDays: calc.termDays,
-        dailyRepayment: calc.daily,
-        dailyInstallment: calc.daily,
-        grandTotalCollected: calc.grandTotalCollected,
-        roundOffBasket: calc.roundOffBasket,
-      },
-    };
-    const supplierPayload =
-      loanKind === "fuel"
-        ? {
-            vehiclePlate,
-            fuelType,
-            litres: fuelLitres,
-            unitPrice: fuelUnitPrice,
-            fuelCharge,
-            productChargeAmount: fuelCharge,
-            jobCard: {
-              rows: fuelJobCardRows,
-              totals: fuelJobCardSummary,
-            },
-            estimatedTotal: requestedLoanAmount,
-            notes: supplierNotes,
-            application: applicationPayload,
-          }
-        : loanKind === "stock"
+    try {
+      const applicationPayload = {
+        reconfirmed: { confirmKYC, confirmKin, confirmGuar, confirmBiz, changesSinceLast },
+        loan: {
+          loanKind,
+          purpose,
+          amountApplied: requestedLoanAmount,
+          termDays: calc.termDays,
+          dailyRepayment: calc.daily,
+          dailyInstallment: calc.daily,
+          grandTotalCollected: calc.grandTotalCollected,
+          roundOffBasket: calc.roundOffBasket,
+        },
+      };
+      const supplierPayload =
+        loanKind === "fuel"
           ? {
-              item: stockItem || purpose,
-              quantity: stockQuantity,
-              unitPrice: stockUnitPrice,
-              stockCharge,
-              productChargeAmount: stockCharge,
+              vehiclePlate,
+              fuelType,
+              litres: fuelLitres,
+              unitPrice: fuelUnitPrice,
+              fuelCharge,
+              productChargeAmount: fuelCharge,
+              jobCard: {
+                rows: fuelJobCardRows,
+                totals: fuelJobCardSummary,
+              },
               estimatedTotal: requestedLoanAmount,
               notes: supplierNotes,
               application: applicationPayload,
             }
-          : loanKind === "service"
-            ? { serviceType: serviceType || purpose, notes: supplierNotes, application: applicationPayload }
-            : { application: applicationPayload };
-    const loanId = await addLoan({
-      memberId: member.id,
-      principal: requestedLoanAmount,
-      rate: calc.ratePct,
-      termDays: calc.termDays,
-      termMonths: termPeriodsFromDays(calc.termDays, loanType),
-      startDate: new Date().toISOString().slice(0, 10),
-      officerId: currentUser.id,
-      status: "pending",
-      financedPrincipalAmount: calc.financedPrincipal,
-      netDisbursedAmount: calc.net,
-      processingFeeAmount: calc.ded.processing,
-      insuranceFeeAmount: calc.ded.insurance,
-      transactionFeeAmount: calc.ded.transactionCost,
-      processingFeeMode,
-      insuranceFeeMode,
-      disbursementStatus: "not_requested",
-      purpose,
-      loanKind,
-      supplierPayload,
-    });
-    toast.success("Repeat application submitted for review.");
-    onSubmitted?.(loanId, member.id);
+          : loanKind === "stock"
+            ? {
+                item: stockItem || purpose,
+                quantity: stockQuantity,
+                unitPrice: stockUnitPrice,
+                stockCharge,
+                productChargeAmount: stockCharge,
+                estimatedTotal: requestedLoanAmount,
+                notes: supplierNotes,
+                application: applicationPayload,
+              }
+            : loanKind === "service"
+              ? {
+                  serviceType: serviceType || purpose,
+                  notes: supplierNotes,
+                  application: applicationPayload,
+                }
+              : { application: applicationPayload };
+      const loanId = await addLoan({
+        memberId: member.id,
+        principal: requestedLoanAmount,
+        rate: calc.ratePct,
+        termDays: calc.termDays,
+        termMonths: termPeriodsFromDays(calc.termDays, loanType),
+        startDate: new Date().toISOString().slice(0, 10),
+        officerId: currentUser.id,
+        status: "pending",
+        financedPrincipalAmount: calc.financedPrincipal,
+        netDisbursedAmount: calc.net,
+        processingFeeAmount: calc.ded.processing,
+        insuranceFeeAmount: calc.ded.insurance,
+        transactionFeeAmount: calc.ded.transactionCost,
+        processingFeeMode,
+        insuranceFeeMode,
+        disbursementStatus: "not_requested",
+        purpose,
+        loanKind,
+        supplierPayload,
+      });
+      toast.success("Repeat application submitted for review.");
+      onSubmitted?.(loanId, member.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save repeat application.");
+    }
   };
 
   return (
@@ -374,7 +382,9 @@ export function RepeatApplication({
             type="number"
             label={loanKind === "fuel" ? "Repayment Hours / Days" : "Repayment Days"}
             value={String(repaymentDays)}
-            onChange={(v) => setRepaymentDays(loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))}
+            onChange={(v) =>
+              setRepaymentDays(loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))
+            }
           />
           {loanKind === "fuel" ? (
             <Input label="Repayment Term" value="24 hours" onChange={() => {}} />

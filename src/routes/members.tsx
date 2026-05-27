@@ -153,7 +153,12 @@ function MembersPage() {
   );
 
   const filtered = memberRegistry.filter((m) => {
-    const matchesSearch = m.name.toLowerCase().includes(q.toLowerCase()) || m.phone.includes(q);
+    const query = q.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      [m.id, formatMembershipNumber(m.id), m.name, m.phone, m.businessName, m.businessType]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
     if (!matchesSearch) return false;
     if (registryView === "all") return true;
     if (registryView === "normal") {

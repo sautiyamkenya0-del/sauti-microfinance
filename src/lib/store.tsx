@@ -708,11 +708,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  function refreshAfterMutation(fallbackMessage = "Saved, but background sync failed.") {
-    const task = refreshFromDatabase();
-    void task.catch((error: any) => {
+  async function refreshAfterMutation(fallbackMessage = "Saved, but background sync failed.") {
+    try {
+      await refreshFromDatabase({ force: true });
+    } catch (error: any) {
       toast.error(error?.message ?? fallbackMessage);
-    });
+    }
   }
 
   async function refreshAfterAuth() {
@@ -837,7 +838,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             investorNotes: (m as any).investorNotes,
           },
         });
-        refreshAfterMutation("Member was saved, but background sync failed.");
+        await refreshAfterMutation("Member was saved, but background sync failed.");
         return result.id;
       },
       updateMember: async (m) => {
@@ -870,7 +871,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             memberTags: m.memberTags,
           },
         });
-        refreshAfterMutation("Member was updated, but background sync failed.");
+        await refreshAfterMutation("Member was updated, but background sync failed.");
         return result.id;
       },
       addLoan: async (l) => {
@@ -910,7 +911,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             supplierPayload: l.supplierPayload,
           },
         });
-        refreshAfterMutation("Loan was saved, but background sync failed.");
+        await refreshAfterMutation("Loan was saved, but background sync failed.");
         return result.id;
       },
       approveLoan: async (loanId, approvedAmount, by, note) => {
@@ -1423,7 +1424,8 @@ export function loanPricingPreview(args: {
         insuranceMode: args.insuranceFeeMode,
       });
   const fixedFees = summarizeLoanFixedFees(supplierBacked ? undefined : args.fixedFees);
-  const financedPrincipal = deductions.financedPrincipal + fixedFees.totalFinanced + productChargeAmount;
+  const financedPrincipal =
+    deductions.financedPrincipal + fixedFees.totalFinanced + productChargeAmount;
   const periods = termPeriodsFromDays(termDays, resolvedLoanType);
   const schedule = supplierBacked
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
@@ -1565,7 +1567,10 @@ export function loanPenaltySummary(
     paymentsByDate.set(paymentDate, (paymentsByDate.get(paymentDate) ?? 0) + transaction.amount);
   }
 
-  const transactionPaid = Array.from(paymentsByDate.values()).reduce((sum, amount) => sum + amount, 0);
+  const transactionPaid = Array.from(paymentsByDate.values()).reduce(
+    (sum, amount) => sum + amount,
+    0,
+  );
   const totalPaid = Math.max(Number(loan.paid ?? 0), transactionPaid);
   const lastDailyDate = diffCalendarDays(startDate, today) >= 0 ? today : startDate;
   const dailyLoopDays = Math.max(
