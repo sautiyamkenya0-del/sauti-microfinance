@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ArrowRightLeft, PiggyBank, ShieldCheck, Wallet } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
 import {
@@ -87,6 +88,7 @@ function SavingsPage() {
   const members = data?.members ?? [];
   const docketBalances = data?.docketBalances ?? [];
   const movements = data?.docketMovements ?? [];
+  const carryoverProfiles = data?.carryoverProfiles ?? [];
 
   const selectedDepositMember = members.find((member: any) => member.id === depositForm.memberId);
   const selectedTransferMember = members.find((member: any) => member.id === transferForm.memberId);
@@ -108,6 +110,38 @@ function SavingsPage() {
         penalty_payment: 0,
       });
     }
+    for (const profile of carryoverProfiles) {
+      const memberId = String(profile.member_id ?? "");
+      const breakdown = profile.collection_breakdown ?? {};
+      const entry = map.get(memberId);
+      if (!entry) continue;
+      entry.investment = Math.max(
+        entry.investment,
+        Number(profile.investment_balance ?? breakdown.investmentBalance ?? 0),
+      );
+      entry.purpose_pool = Math.max(
+        entry.purpose_pool,
+        Number(breakdown.purposePoolBalance ?? breakdown.purpose_pool ?? 0),
+      );
+      entry.penalty_payment = Math.max(
+        entry.penalty_payment,
+        Number(profile.penalties_outstanding ?? breakdown.penaltyPaymentBalance ?? 0),
+      );
+      entry.withdrawable_savings = Math.max(
+        entry.withdrawable_savings,
+        Number(profile.pending_balance ?? breakdown.withdrawableSavingsBalance ?? 0),
+      );
+    }
+    for (const row of movements) {
+      const memberId = String(row.member_id ?? "");
+      const entry = map.get(memberId);
+      if (!entry) continue;
+      const amount = Number(row.amount ?? 0);
+      const fromDocket = String(row.from_docket ?? "");
+      const toDocket = String(row.to_docket ?? "");
+      if (fromDocket && fromDocket in entry) entry[fromDocket] = Number(entry[fromDocket] ?? 0) - amount;
+      if (toDocket && toDocket in entry) entry[toDocket] = Number(entry[toDocket] ?? 0) + amount;
+    }
     for (const row of docketBalances) {
       const memberId = String(row.member_id ?? "");
       const entry = map.get(memberId) ?? {
@@ -124,7 +158,7 @@ function SavingsPage() {
       map.set(memberId, entry);
     }
     return map;
-  }, [docketBalances, members]);
+  }, [carryoverProfiles, docketBalances, members, movements]);
 
   const complianceTotal = members.reduce(
     (sum: number, member: any) => sum + Number(member.savings_balance ?? 0),
@@ -482,13 +516,14 @@ function MemberSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <Select
+    <MemberSearchSelect
+      members={members}
       value={value}
       onChange={onChange}
-      options={members.map((member: any) => [
-        member.id,
-        `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
-      ])}
+      emptyLabel="Select member"
+      describeMember={(member: any) =>
+        `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`
+      }
     />
   );
 }

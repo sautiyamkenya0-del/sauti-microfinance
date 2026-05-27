@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Building2, HandCoins, RefreshCw, WalletCards } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
 import {
@@ -221,15 +222,15 @@ function WithdrawalsPage() {
               />
 
               {outflowForm.kind === "client_withdrawal" ? (
-                <Select
+                <MemberSearchSelect
+                  members={members}
                   value={outflowForm.memberId}
                   onChange={(value) =>
                     setOutflowForm((current) => ({ ...current, memberId: value }))
                   }
-                  options={members.map((member: any) => [
-                    member.id,
-                    `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`,
-                  ])}
+                  describeMember={(member: any) =>
+                    `${member.id} - ${member.name} (${memberCategoryLabel(member.member_category)})`
+                  }
                 />
               ) : null}
 
@@ -302,15 +303,13 @@ function WithdrawalsPage() {
 
               {outflowForm.kind === "loan_disbursement" ? (
                 <>
-                  <Select
+                  <MemberSearchSelect
+                    members={members}
                     value={outflowForm.memberId}
                     onChange={(value) =>
                       setOutflowForm((current) => ({ ...current, memberId: value, loanId: "" }))
                     }
-                    options={members.map((member: any) => [
-                      member.id,
-                      `${member.id} - ${member.name}`,
-                    ])}
+                    describeMember={(member: any) => `${member.id} - ${member.name}`}
                   />
                   <Select
                     value={outflowForm.loanId}

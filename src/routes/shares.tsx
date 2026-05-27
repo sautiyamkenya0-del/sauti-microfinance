@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard, DirectorOnly } from "@/components/ui-bits";
 import { useStore, fmtKES, hasMemberTag, isMemberCategory } from "@/lib/store";
@@ -68,17 +69,12 @@ function SharesPage() {
         <div className="grid lg:grid-cols-3 gap-6">
           <Section title="Issue shares">
             <div className="p-5 space-y-3">
-              <select
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+              <MemberSearchSelect
+                members={memberAccounts}
                 value={memberId}
-                onChange={(e) => setMemberId(e.target.value)}
-              >
-                {memberAccounts.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} — {m.shares} units
-                  </option>
-                ))}
-              </select>
+                onChange={setMemberId}
+                describeMember={(member) => `${member.name} - ${member.shares ?? 0} units`}
+              />
               <input
                 type="number"
                 min={1}

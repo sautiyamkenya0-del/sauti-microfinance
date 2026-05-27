@@ -12,6 +12,7 @@ import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
 import { PendingReview } from "@/components/loans/PendingReview";
 import { RepeatApplication } from "@/components/loans/RepeatApplication";
 import { Simulator } from "@/components/loans/Simulator";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
@@ -433,18 +434,14 @@ function CarryoverEntry({
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Member
             </span>
-            <select
-              value={memberId}
-              onChange={(event) => setMemberId(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            >
-              <option value="">Select member</option>
-              {eligibleMembers.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.id} - {member.name} - {member.phone}
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <MemberSearchSelect
+                members={eligibleMembers}
+                value={memberId}
+                onChange={setMemberId}
+                describeMember={(member) => `${member.id} - ${member.name} - ${member.phone ?? ""}`}
+              />
+            </div>
           </label>
           <label className="block">
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">

@@ -1,5 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useStore, fmtKES, isMemberCategory, loanSummary } from "@/lib/store";
+import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useMemo, useState } from "react";
+
+import { useStore, fmtKES, hasMemberTag, isMemberCategory, loanPenaltySummary } from "@/lib/store";
+import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
+import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { AppHeader } from "@/components/AppHeader";
 import { StatCard, Section, Badge, DirectorOnly, RestrictedNotice } from "@/components/ui-bits";
 import { Banknote, Users, PiggyBank, TrendingUp, Wallet, PieChart } from "lucide-react";
@@ -21,11 +26,64 @@ export const Route = createFileRoute("/")({
 });
 
 function Dashboard() {
-  const { members, loans, transactions, investors, sharePrice, pettyCash } = useStore();
-  const memberAccounts = members.filter((member) => isMemberCategory(member.category));
+  const { members, loans, transactions, investors, sharePrice, pettyCash, policySettings } =
+    useStore();
+  const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
+  const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const memberAccounts = members.filter(
+    (member) =>
+      isMemberCategory(member.category) ||
+      hasMemberTag(member.memberTags, "member", member.category),
+  );
 
-  const activeLoans = loans.filter((l) => l.status === "active");
-  const portfolio = activeLoans.reduce((s, l) => s + loanSummary(l).balance, 0);
+  useEffect(() => {
+    loadCarryoverLoans()
+      .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
+      .catch(() => setCarryoverLoans([]));
+  }, [loadCarryoverLoans]);
+
+  const liveLoanHealth = useMemo(
+    () =>
+      loans
+        .filter((loan) => loan.status !== "pending" && loan.status !== "rejected")
+        .map((loan) => ({
+          key: loan.id,
+          loanId: loan.id,
+          memberId: loan.memberId,
+          label: loan.loanKind ?? "financial",
+          approved: loan.principal,
+          termDays: loan.termDays,
+          paid: loan.paid,
+          total: loanPenaltySummary(loan, transactions).totalExpectedCollected,
+          balance: loanPenaltySummary(loan, transactions).totalOwedNow,
+          rate: loan.rate,
+        }))
+        .filter((row) => row.balance > 0),
+    [loans, transactions],
+  );
+  const carryoverLoanHealth = useMemo(
+    () =>
+      carryoverLoans
+        .map((loan) => {
+          const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+          return {
+            key: `carryover-${loan.id}`,
+            loanId: loan.id,
+            memberId: loan.memberId,
+            label: `${loan.loanKind ?? "financial"} carryover`,
+            approved: loan.principal,
+            termDays: summary.termDays,
+            paid: loan.paidToDate,
+            total: summary.totalExpectedCollected,
+            balance: summary.totalOwedNow,
+            rate: summary.ratePct,
+          };
+        })
+        .filter((row) => row.balance > 0),
+    [carryoverLoans, policySettings],
+  );
+  const activeLoanRows = [...liveLoanHealth, ...carryoverLoanHealth];
+  const portfolio = activeLoanRows.reduce((s, l) => s + l.balance, 0);
   const totalSavings = memberAccounts.reduce((s, m) => s + m.savingsBalance, 0);
   const totalShares = memberAccounts.reduce((s, m) => s + m.shares, 0) * sharePrice;
   const investorCapital = investors.reduce((s, i) => s + i.contributed, 0);
@@ -62,7 +120,7 @@ function Dashboard() {
               <StatCard
                 label="Loan Portfolio"
                 value={fmtKES(portfolio)}
-                hint={`${activeLoans.length} active loans`}
+                hint={`${activeLoanRows.length} active loans`}
                 icon={<Banknote className="h-5 w-5" />}
               />
             </Link>
@@ -223,19 +281,19 @@ function Dashboard() {
 
           <Section title="Active Loan Health">
             <div className="divide-y divide-border">
-              {activeLoans.map((l) => {
+              {activeLoanRows.slice(0, 8).map((l) => {
                 const m = members.find((x) => x.id === l.memberId);
-                const summary = loanSummary(l);
-                const pct = Math.min(100, Math.round((l.paid / summary.total) * 100));
+                const pct = Math.min(100, Math.round((l.paid / Math.max(1, l.total)) * 100));
                 return (
-                  <div key={l.id} className="px-5 py-3">
+                  <div key={l.key} className="px-5 py-3">
                     <div className="flex justify-between items-center mb-1.5">
                       <div>
                         <div className="text-sm font-medium">
-                          {m?.name} <span className="text-xs text-muted-foreground">/ {l.id}</span>
+                          {m?.name}{" "}
+                          <span className="text-xs text-muted-foreground">/ {l.loanId}</span>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {fmtKES(summary.approved)} @ {l.rate}% / {summary.termDays} days
+                          {fmtKES(l.approved)} @ {l.rate}% / {l.termDays} days / {l.label}
                         </div>
                       </div>
                       <Badge tone={pct > 70 ? "success" : pct > 30 ? "default" : "warning"}>
@@ -248,6 +306,11 @@ function Dashboard() {
                   </div>
                 );
               })}
+              {activeLoanRows.length === 0 ? (
+                <div className="px-5 py-8 text-center text-sm text-muted-foreground">
+                  No active loan balances found.
+                </div>
+              ) : null}
             </div>
           </Section>
         </div>
@@ -275,9 +338,9 @@ function Dashboard() {
               <StatCard
                 label="Avg. Loan Size"
                 value={fmtKES(
-                  activeLoans.length
+                  activeLoanRows.length
                     ? Math.round(
-                        activeLoans.reduce((s, l) => s + l.principal, 0) / activeLoans.length,
+                        activeLoanRows.reduce((s, l) => s + l.approved, 0) / activeLoanRows.length,
                       )
                     : 0,
                 )}

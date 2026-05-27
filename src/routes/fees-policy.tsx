@@ -3897,6 +3897,21 @@ function GuidedCarryoverLoanCard({
       ),
     });
   };
+  const updateProductMeta = (nextMeta: Record<string, unknown>) => {
+    onChange({
+      ...loan,
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        {
+          ...feeBreakdown,
+          productMeta: {
+            ...(feeBreakdown.productMeta ?? {}),
+            ...nextMeta,
+          },
+        },
+        loan.loanCycleNumber,
+      ),
+    });
+  };
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -3918,6 +3933,118 @@ function GuidedCarryoverLoanCard({
             className="input"
           />
         </Field>
+        <Field label="Carryover product">
+          <select
+            value={loan.loanKind ?? "financial"}
+            onChange={(event) => {
+              const loanKind = event.target.value as LoanKind;
+              onChange({
+                ...loan,
+                loanKind,
+                label:
+                  !loan.label || /^(Legacy|Financial|Fuel|Stock) loan/i.test(loan.label)
+                    ? `${loanKind === "fuel" ? "Fuel" : loanKind === "stock" ? "Stock" : "Financial"} carryover`
+                    : loan.label,
+              });
+            }}
+            className="input"
+          >
+            <option value="financial">Financial</option>
+            <option value="fuel">Fuel</option>
+            <option value="stock">Stock</option>
+            <option value="service">Service</option>
+          </select>
+        </Field>
+        {loan.loanKind === "fuel" ? (
+          <>
+            <Field label="Vehicle / plate">
+              <input
+                value={String(feeBreakdown.productMeta?.vehiclePlate ?? "")}
+                onChange={(event) => updateProductMeta({ vehiclePlate: event.target.value })}
+                className="input"
+              />
+            </Field>
+            <NumberField
+              label="Fuel amount"
+              value={Number(feeBreakdown.productMeta?.fuelAmount ?? loan.principal)}
+              onChange={(value) =>
+                onChange({
+                  ...loan,
+                  principal: value,
+                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                    {
+                      ...feeBreakdown,
+                      productMeta: { ...(feeBreakdown.productMeta ?? {}), fuelAmount: value },
+                    },
+                    loan.loanCycleNumber,
+                  ),
+                })
+              }
+            />
+            <NumberField
+              label="Fuel charge"
+              value={Number(feeBreakdown.productMeta?.fuelCharge ?? feeBreakdown.processingFeeAmount ?? 0)}
+              onChange={(value) =>
+                onChange({
+                  ...loan,
+                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                    {
+                      ...feeBreakdown,
+                      processingFeeAmount: value,
+                      productMeta: { ...(feeBreakdown.productMeta ?? {}), fuelCharge: value },
+                    },
+                    loan.loanCycleNumber,
+                  ),
+                })
+              }
+            />
+          </>
+        ) : null}
+        {loan.loanKind === "stock" ? (
+          <>
+            <Field label="Stock item">
+              <input
+                value={String(feeBreakdown.productMeta?.stockItem ?? "")}
+                onChange={(event) => updateProductMeta({ stockItem: event.target.value })}
+                className="input"
+              />
+            </Field>
+            <NumberField
+              label="Stock amount"
+              value={Number(feeBreakdown.productMeta?.stockAmount ?? loan.principal)}
+              onChange={(value) =>
+                onChange({
+                  ...loan,
+                  principal: value,
+                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                    {
+                      ...feeBreakdown,
+                      productMeta: { ...(feeBreakdown.productMeta ?? {}), stockAmount: value },
+                    },
+                    loan.loanCycleNumber,
+                  ),
+                })
+              }
+            />
+            <NumberField
+              label="Stock charge"
+              value={Number(feeBreakdown.productMeta?.stockCharge ?? feeBreakdown.processingFeeAmount ?? 0)}
+              onChange={(value) =>
+                onChange({
+                  ...loan,
+                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                    {
+                      ...feeBreakdown,
+                      processingFeeAmount: value,
+                      productMeta: { ...(feeBreakdown.productMeta ?? {}), stockCharge: value },
+                    },
+                    loan.loanCycleNumber,
+                  ),
+                })
+              }
+            />
+          </>
+        ) : null}
         <NumberField
           label="Net disbursed"
           value={loan.principal}

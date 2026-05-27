@@ -7445,6 +7445,7 @@ export const listWithdrawalOperationsRecord = createServerFn({ method: "GET" }).
       transactions,
       loans,
       penalties,
+      carryoverProfiles,
     ] = await Promise.all([
       fetchAllRows(() =>
         runtimeDb
@@ -7497,6 +7498,13 @@ export const listWithdrawalOperationsRecord = createServerFn({ method: "GET" }).
       fetchAllRows(() =>
         runtimeDb.from("penalties").select("id, member_id, loan_id, amount, reason, status"),
       ),
+      fetchAllRows(() =>
+        runtimeDb
+          .from("member_carryover_profiles")
+          .select(
+            "member_id, investment_balance, pending_balance, penalties_outstanding, collection_breakdown",
+          ),
+      ),
     ]);
 
     const cashSummary = await computeSystemCashSummary(runtimeDb);
@@ -7512,6 +7520,7 @@ export const listWithdrawalOperationsRecord = createServerFn({ method: "GET" }).
       transactions,
       loans,
       penalties,
+      carryoverProfiles,
       cashSummary,
     };
   },
