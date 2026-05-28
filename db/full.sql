@@ -53,13 +53,14 @@ create table if not exists public.members (
   first_name text, last_name text, dob date, gender text check (gender in ('Male','Female')),
   email text, address text, city text, county text, village text,
   savings_only boolean not null default false, old_system_id text,
-  business_name text, business_type text, business_address text,
+  business_name text, business_type text, business_address text, vehicle_plate text,
   field_officer_id text references public.staff(id) on delete set null,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 alter table public.members enable row level security;
 create index if not exists idx_members_phone on public.members(phone);
 create index if not exists idx_members_field_officer on public.members(field_officer_id);
+create index if not exists idx_members_vehicle_plate on public.members(vehicle_plate) where vehicle_plate is not null;
 drop trigger if exists trg_members_updated_at on public.members;
 create trigger trg_members_updated_at before update on public.members for each row execute function public.tg_set_updated_at();
 
@@ -2625,6 +2626,18 @@ comment on column public.loans.frozen_at is
 
 comment on column public.loans.penalty_waived_amount is
   'Director-approved waiver applied against calculated loan penalties.';
+
+-- Migration: 20260527131500_member_vehicle_plate_for_locomotives.sql
+
+alter table public.members
+  add column if not exists vehicle_plate text;
+
+create index if not exists idx_members_vehicle_plate
+on public.members(vehicle_plate)
+where vehicle_plate is not null;
+
+comment on column public.members.vehicle_plate is
+  'Default vehicle plate for locomotive members so fuel refill rows do not repeat the plate on every entry.';
 
 -- =====================================================================
 -- End of full.sql

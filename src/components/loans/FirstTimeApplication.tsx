@@ -85,14 +85,14 @@ export function FirstTimeApplication({
     overrideRatePct: 0,
     loanKind: initialLoanKind,
     purpose: "Stock/Goods",
-    vehiclePlate: "",
+    vehiclePlate: existing?.vehiclePlate ?? "",
     fuelType: "Petrol",
     fuelLitres: 0,
     fuelUnitPrice: 0,
     fuelCharge: 0,
     fuelWeekStarting: "",
     fuelWeekEnding: "",
-    fuelJobCardRows: blankFuelJobCardRows(),
+    fuelJobCardRows: blankFuelJobCardRows(1),
     stockItem: "",
     stockQuantity: 0,
     stockUnitPrice: 0,
@@ -118,7 +118,9 @@ export function FirstTimeApplication({
     () => summarizeFuelJobCardRows(f.fuelJobCardRows),
     [f.fuelJobCardRows],
   );
+  const fuelChargeTotal = fuelJobCardSummary.totalFuelCharge || f.fuelCharge;
   const fuelFallbackTotal = f.fuelLitres * f.fuelUnitPrice;
+  const resolvedVehiclePlate = existing?.vehiclePlate || f.vehiclePlate.trim().toUpperCase();
   const stockComputedTotal = f.stockQuantity * f.stockUnitPrice;
   const requestedLoanAmount =
     f.loanKind === "fuel"
@@ -150,6 +152,7 @@ export function FirstTimeApplication({
         phone: existing.phone,
         membershipNo: formatMembershipNumber(existing.id),
         businessPermanence: existing.businessPermanence ?? prev.businessPermanence,
+        vehiclePlate: existing.vehiclePlate ?? prev.vehiclePlate,
       }));
       return;
     }
@@ -208,7 +211,7 @@ export function FirstTimeApplication({
 
   const calc = useMemo(() => {
     const productChargeAmount =
-      f.loanKind === "fuel" ? f.fuelCharge : f.loanKind === "stock" ? f.stockCharge : 0;
+      f.loanKind === "fuel" ? fuelChargeTotal : f.loanKind === "stock" ? f.stockCharge : 0;
     const pricing = loanPricingPreview({
       loanType,
       loanKind: f.loanKind,
@@ -258,7 +261,7 @@ export function FirstTimeApplication({
     cardFeeDue,
     f.cardFeeMode,
     f.loanKind,
-    f.fuelCharge,
+    fuelChargeTotal,
     fuelJobCardSummary.totalCost,
     fuelFallbackTotal,
     requestedLoanAmount,
@@ -297,6 +300,9 @@ export function FirstTimeApplication({
     if (!businessPermanence) {
       return toast.error("Select whether the business is permanent or semi-permanent.");
     }
+    if (f.loanKind === "fuel" && !resolvedVehiclePlate) {
+      return toast.error("Enter the locomotive vehicle plate on the first fuel application.");
+    }
     try {
       let mid = members.find((x) => x.phone === phone)?.id;
       if (!mid) {
@@ -309,8 +315,12 @@ export function FirstTimeApplication({
               : f.loanKind === "service"
                 ? "service"
                 : "member");
+        const serverGeneratedMemberId =
+          normalizedMembershipNo === normalizeMembershipNumber(nextMemberNo)
+            ? undefined
+            : normalizedMembershipNo;
         mid = await addMember({
-          memberId: normalizedMembershipNo,
+          memberId: serverGeneratedMemberId,
           name: f.fullName,
           phone,
           joinedAt: todayIso,
@@ -328,6 +338,7 @@ export function FirstTimeApplication({
           businessPermanence,
           businessName: f.tradingName || undefined,
           businessAddress: f.businessLocation || undefined,
+          vehiclePlate: inferredCategory === "locomotive" ? resolvedVehiclePlate : undefined,
         });
       }
       const applicationPayload = {
@@ -335,6 +346,7 @@ export function FirstTimeApplication({
           fullName: f.fullName,
           phone,
           membershipNo: normalizedMembershipNo,
+          vehiclePlate: resolvedVehiclePlate || undefined,
           businessType: f.businessType,
           businessPermanence,
           tradingName: f.tradingName,
@@ -357,12 +369,12 @@ export function FirstTimeApplication({
       const supplierPayload =
         f.loanKind === "fuel"
           ? {
-              vehiclePlate: f.vehiclePlate,
+              vehiclePlate: resolvedVehiclePlate,
               fuelType: f.fuelType,
               litres: f.fuelLitres,
               unitPrice: f.fuelUnitPrice,
-              fuelCharge: f.fuelCharge,
-              productChargeAmount: f.fuelCharge,
+              fuelCharge: fuelChargeTotal,
+              productChargeAmount: fuelChargeTotal,
               weekStarting: f.fuelWeekStarting,
               weekEnding: f.fuelWeekEnding,
               jobCard: {
@@ -583,29 +595,20 @@ export function FirstTimeApplication({
           />
           {f.loanKind === "fuel" && (
             <>
-              <Input
-                label="Vehicle / Plate"
-                value={f.vehiclePlate}
-                onChange={(v) => set("vehiclePlate", v)}
-              />
-              <Input
-                type="date"
-                label="Week Starting"
-                value={f.fuelWeekStarting}
-                onChange={(v) => set("fuelWeekStarting", v)}
-              />
-              <Input
-                type="date"
-                label="Week Ending"
-                value={f.fuelWeekEnding}
-                onChange={(v) => set("fuelWeekEnding", v)}
-              />
-              <Input
-                type="number"
-                label="Fuel Charge"
-                value={String(f.fuelCharge)}
-                onChange={(v) => set("fuelCharge", Number(v))}
-              />
+              {existing?.vehiclePlate ? (
+                <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
+                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Vehicle / Plate
+                  </div>
+                  <div className="mt-1 font-mono font-semibold">{existing.vehiclePlate}</div>
+                </div>
+              ) : (
+                <Input
+                  label="Vehicle / Plate"
+                  value={f.vehiclePlate}
+                  onChange={(v) => set("vehiclePlate", v.toUpperCase())}
+                />
+              )}
               <FuelJobCardFields
                 rows={f.fuelJobCardRows}
                 onChange={(rows) => set("fuelJobCardRows", rows)}

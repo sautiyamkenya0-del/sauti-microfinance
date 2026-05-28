@@ -12,6 +12,12 @@ import {
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+  fuelEntryDayLabel,
+  normalizeFuelJobCardRows,
+  summarizeFuelJobCardRows,
+  type FuelJobCardRow,
+} from "./FuelJobCardFields";
 
 type Filter =
   | "all"
@@ -79,6 +85,133 @@ function dailyTotalOf(l: Loan): number {
 type LoanBookRow =
   | { kind: "live"; loan: Loan; sortKey: string }
   | { kind: "carryover"; loan: LegacyCarryoverLoan; sortKey: string };
+
+type FuelRecordRow = {
+  loanId: string;
+  source: "live" | "carryover";
+  memberId: string;
+  memberName: string;
+  vehiclePlate: string;
+  status: string;
+  entry: FuelJobCardRow;
+  entryIndex: number;
+};
+
+function textValue(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function numberValue(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, next) : 0;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function meaningfulFuelRows(rows: FuelJobCardRow[]) {
+  return rows.filter(
+    (row) =>
+      row.date ||
+      row.time ||
+      row.fuelType ||
+      row.attendantName ||
+      row.liters > 0 ||
+      row.pricePerLitre > 0 ||
+      row.total > 0 ||
+      row.fuelCharge > 0 ||
+      row.odometerReading > 0,
+  );
+}
+
+function fuelRowsFromLiveLoan(loan: Loan) {
+  const payload = objectValue(loan.supplierPayload);
+  const jobCard = objectValue(payload.jobCard);
+  const rows = meaningfulFuelRows(normalizeFuelJobCardRows(jobCard.rows ?? payload.fuelEntries, 1));
+  if (rows.length > 0) return rows;
+  const fallbackTotal = numberValue(payload.estimatedTotal ?? loan.principal);
+  const fallbackCharge = numberValue(payload.fuelCharge ?? payload.productChargeAmount);
+  if (fallbackTotal <= 0 && fallbackCharge <= 0) return [];
+  return normalizeFuelJobCardRows(
+    [
+      {
+        date: loan.startDate,
+        fuelType: textValue(payload.fuelType),
+        liters: numberValue(payload.litres ?? payload.liters),
+        pricePerLitre: numberValue(payload.unitPrice ?? payload.pricePerLitre),
+        total: fallbackTotal,
+        fuelCharge: fallbackCharge,
+      },
+    ],
+    1,
+  );
+}
+
+function fuelRowsFromCarryoverLoan(loan: LegacyCarryoverLoan) {
+  const productMeta = objectValue(loan.feeBreakdown?.productMeta);
+  const jobCard = objectValue(productMeta.jobCard);
+  const rows = meaningfulFuelRows(
+    normalizeFuelJobCardRows(productMeta.fuelEntries ?? jobCard.rows, 1),
+  );
+  if (rows.length > 0) return rows;
+  const fallbackTotal = numberValue(productMeta.fuelAmount ?? loan.principal);
+  const fallbackCharge = numberValue(
+    productMeta.fuelCharge ?? loan.feeBreakdown?.processingFeeAmount,
+  );
+  if (fallbackTotal <= 0 && fallbackCharge <= 0) return [];
+  return normalizeFuelJobCardRows(
+    [
+      {
+        date: loan.startDate,
+        total: fallbackTotal,
+        fuelCharge: fallbackCharge,
+      },
+    ],
+    1,
+  );
+}
+
+function vehiclePlateForFuelLoan(
+  loan: Loan | LegacyCarryoverLoan,
+  member?: { vehiclePlate?: string },
+) {
+  if ("paid" in loan) {
+    return textValue(loan.supplierPayload?.vehiclePlate) || member?.vehiclePlate || "";
+  }
+  return textValue(loan.feeBreakdown?.productMeta?.vehiclePlate) || member?.vehiclePlate || "";
+}
+
+function fuelRecordsForLiveLoan(loan: Loan, member?: { id: string; name: string; vehiclePlate?: string }) {
+  if ((loan.loanKind ?? "financial") !== "fuel") return [];
+  return fuelRowsFromLiveLoan(loan).map<FuelRecordRow>((entry, entryIndex) => ({
+    loanId: loan.id,
+    source: "live",
+    memberId: loan.memberId,
+    memberName: member?.name ?? "",
+    vehiclePlate: vehiclePlateForFuelLoan(loan, member),
+    status: loan.status,
+    entry,
+    entryIndex,
+  }));
+}
+
+function fuelRecordsForCarryoverLoan(
+  loan: LegacyCarryoverLoan,
+  member?: { id: string; name: string; vehiclePlate?: string },
+) {
+  if ((loan.loanKind ?? "financial") !== "fuel") return [];
+  return fuelRowsFromCarryoverLoan(loan).map<FuelRecordRow>((entry, entryIndex) => ({
+    loanId: loan.id,
+    source: "carryover",
+    memberId: loan.memberId,
+    memberName: member?.name ?? "",
+    vehiclePlate: vehiclePlateForFuelLoan(loan, member),
+    status: loan.finished ? "closed" : loan.status,
+    entry,
+    entryIndex,
+  }));
+}
 
 export function LoanBook({
   carryoverLoans = [],
@@ -178,6 +311,24 @@ export function LoanBook({
     policySettings,
     transactions,
   ]);
+
+  const fuelRecords = useMemo(
+    () => [
+      ...loans.flatMap((loan) =>
+        fuelRecordsForLiveLoan(
+          loan,
+          members.find((member) => member.id === loan.memberId),
+        ),
+      ),
+      ...carryoverLoans.flatMap((loan) =>
+        fuelRecordsForCarryoverLoan(
+          loan,
+          members.find((member) => member.id === loan.memberId),
+        ),
+      ),
+    ],
+    [carryoverLoans, loans, members],
+  );
 
   const empty = loans.length === 0 && carryoverLoans.length === 0;
 
@@ -410,6 +561,8 @@ export function LoanBook({
         </table>
       </div>
 
+      {currentUser.role !== "loan_officer" && <FuelRecordsPanel records={fuelRecords} />}
+
       {repayFor && (
         <div
           className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4"
@@ -458,6 +611,185 @@ export function LoanBook({
         </div>
       )}
     </Section>
+  );
+}
+
+function fuelEntryTotal(entry: FuelJobCardRow) {
+  return entry.total > 0 ? entry.total : entry.liters * entry.pricePerLitre;
+}
+
+function FuelEntryTable({ records }: { records: FuelRecordRow[] }) {
+  if (records.length === 0) {
+    return <div className="text-xs text-muted-foreground">No detailed fuel entries saved.</div>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border border-border">
+      <table className="min-w-[980px] w-full text-xs">
+        <thead className="bg-muted/50 text-muted-foreground uppercase">
+          <tr>
+            <th className="px-3 py-2 text-left">Date</th>
+            <th className="px-3 py-2 text-left">Time</th>
+            <th className="px-3 py-2 text-left">Fuel Type</th>
+            <th className="px-3 py-2 text-right">Liters</th>
+            <th className="px-3 py-2 text-right">Price/Litre</th>
+            <th className="px-3 py-2 text-right">Total</th>
+            <th className="px-3 py-2 text-right">Fuel Charge</th>
+            <th className="px-3 py-2 text-left">Attendant Name</th>
+            <th className="px-3 py-2 text-right">Odometer Reading</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {records.map((record) => (
+            <tr key={`${record.loanId}-${record.entryIndex}`}>
+              <td className="px-3 py-2">
+                <div>{record.entry.date || "-"}</div>
+                <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+                  {fuelEntryDayLabel(record.entry, record.entryIndex)}
+                </div>
+              </td>
+              <td className="px-3 py-2">{record.entry.time || "-"}</td>
+              <td className="px-3 py-2">{record.entry.fuelType || "-"}</td>
+              <td className="px-3 py-2 text-right">{record.entry.liters.toFixed(2)}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(record.entry.pricePerLitre)}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(fuelEntryTotal(record.entry))}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(record.entry.fuelCharge)}</td>
+              <td className="px-3 py-2">{record.entry.attendantName || "-"}</td>
+              <td className="px-3 py-2 text-right">
+                {record.entry.odometerReading > 0 ? record.entry.odometerReading.toFixed(0) : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FuelEntriesDetails({ records }: { records: FuelRecordRow[] }) {
+  if (records.length === 0) return null;
+  const summary = summarizeFuelJobCardRows(records.map((record) => record.entry));
+  return (
+    <details className="mt-3 rounded-md border border-border bg-muted/20 p-3">
+      <summary className="cursor-pointer text-xs font-semibold">
+        Fuel entries - {records.length} refill(s), {summary.totalLiters.toFixed(2)} liters,{" "}
+        {fmtKES(summary.totalCost)}
+      </summary>
+      <div className="mt-3">
+        <FuelEntryTable records={records} />
+      </div>
+    </details>
+  );
+}
+
+function FuelRecordsPanel({ records }: { records: FuelRecordRow[] }) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return records;
+    return records.filter((record) =>
+      [
+        record.memberId,
+        record.memberName,
+        record.vehiclePlate,
+        record.loanId,
+        record.entry.fuelType,
+        record.entry.attendantName,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q)),
+    );
+  }, [query, records]);
+  const summary = summarizeFuelJobCardRows(filtered.map((record) => record.entry));
+
+  if (records.length === 0) return null;
+
+  return (
+    <div className="border-t border-border px-5 py-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">Locomotive Fuel Records</div>
+          <div className="text-xs text-muted-foreground">
+            Filter by membership number, client name, vehicle plate, fuel type, attendant, or loan.
+          </div>
+        </div>
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search plate or member no."
+          className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm sm:w-72"
+        />
+      </div>
+      <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
+        <Stat label="Refills" v={String(filtered.length)} />
+        <Stat label="Fuel Consumed" v={`${summary.totalLiters.toFixed(2)} L`} />
+        <Stat label="Fuel Total" v={fmtKES(summary.totalCost)} />
+        <Stat label="Fuel Charges" v={fmtKES(summary.totalFuelCharge)} />
+      </div>
+      <div className="mt-3 overflow-x-auto rounded-md border border-border">
+        <table className="min-w-[1180px] w-full text-xs">
+          <thead className="bg-muted/50 text-muted-foreground uppercase">
+            <tr>
+              <th className="px-3 py-2 text-left">Member</th>
+              <th className="px-3 py-2 text-left">Plate</th>
+              <th className="px-3 py-2 text-left">Loan</th>
+              <th className="px-3 py-2 text-left">Status</th>
+              <th className="px-3 py-2 text-left">Date</th>
+              <th className="px-3 py-2 text-left">Time</th>
+              <th className="px-3 py-2 text-left">Fuel Type</th>
+              <th className="px-3 py-2 text-right">Liters</th>
+              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-right">Charge</th>
+              <th className="px-3 py-2 text-right">Odometer</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {filtered.map((record) => (
+              <tr key={`${record.source}-${record.loanId}-${record.entryIndex}`}>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{record.memberName || "-"}</div>
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    {record.memberId}
+                  </div>
+                </td>
+                <td className="px-3 py-2 font-mono">{record.vehiclePlate || "-"}</td>
+                <td className="px-3 py-2">
+                  {record.loanId}
+                  <div className="text-[10px] uppercase text-muted-foreground">
+                    {record.source}
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  <Badge tone={record.status === "defaulted" ? "destructive" : "muted"}>
+                    {record.status}
+                  </Badge>
+                </td>
+                <td className="px-3 py-2">
+                  <div>{record.entry.date || "-"}</div>
+                  <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+                    {fuelEntryDayLabel(record.entry, record.entryIndex)}
+                  </div>
+                </td>
+                <td className="px-3 py-2">{record.entry.time || "-"}</td>
+                <td className="px-3 py-2">{record.entry.fuelType || "-"}</td>
+                <td className="px-3 py-2 text-right">{record.entry.liters.toFixed(2)}</td>
+                <td className="px-3 py-2 text-right">{fmtKES(fuelEntryTotal(record.entry))}</td>
+                <td className="px-3 py-2 text-right">{fmtKES(record.entry.fuelCharge)}</td>
+                <td className="px-3 py-2 text-right">
+                  {record.entry.odometerReading > 0 ? record.entry.odometerReading.toFixed(0) : "-"}
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={11} className="px-3 py-6 text-center text-muted-foreground">
+                  No fuel records match that filter.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -600,6 +932,7 @@ export function MemberLoanHistory({
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                   </div>
+                  <FuelEntriesDetails records={fuelRecordsForCarryoverLoan(l, member)} />
                 </div>
               );
             })}
@@ -638,6 +971,7 @@ export function MemberLoanHistory({
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                   </div>
+                  <FuelEntriesDetails records={fuelRecordsForLiveLoan(l, member)} />
                 </div>
               );
             })}

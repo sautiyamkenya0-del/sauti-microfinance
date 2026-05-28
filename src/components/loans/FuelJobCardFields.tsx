@@ -16,26 +16,37 @@ export type FuelJobCardRow = {
   liters: number;
   pricePerLitre: number;
   total: number;
+  fuelCharge: number;
   attendantName: string;
+  odometerReading: number;
+  /** @deprecated Old signature fields are kept so existing saved payloads still hydrate safely. */
   attendantSign: string;
+  /** @deprecated Old signature fields are kept so existing saved payloads still hydrate safely. */
   driverSign: string;
+  /** @deprecated Use odometerReading for new refill rows. */
   odometerStart: number;
+  /** @deprecated Use odometerReading for new refill rows. */
   odometerEnd: number;
+  /** @deprecated Kept for old weekly job-card payloads. */
   kmCovered: number;
+  /** @deprecated Replaced by attendantName plus profile-linked vehicle details. */
   driverName: string;
+  /** @deprecated Old signature fields are kept so existing saved payloads still hydrate safely. */
   driverSignature: string;
 };
 
-export function blankFuelJobCardRows(): FuelJobCardRow[] {
-  return FUEL_JOB_DAYS.map((day) => ({
-    day,
+function blankFuelJobCardRow(index: number): FuelJobCardRow {
+  return {
+    day: FUEL_JOB_DAYS[index % FUEL_JOB_DAYS.length] ?? `Entry ${index + 1}`,
     date: "",
     time: "",
     fuelType: "",
     liters: 0,
     pricePerLitre: 0,
     total: 0,
+    fuelCharge: 0,
     attendantName: "",
+    odometerReading: 0,
     attendantSign: "",
     driverSign: "",
     odometerStart: 0,
@@ -43,7 +54,71 @@ export function blankFuelJobCardRows(): FuelJobCardRow[] {
     kmCovered: 0,
     driverName: "",
     driverSignature: "",
-  }));
+  };
+}
+
+function numericValue(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, next) : 0;
+}
+
+function textValue(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+export function blankFuelJobCardRows(count = 1): FuelJobCardRow[] {
+  return Array.from({ length: Math.max(1, Math.floor(Number(count) || 1)) }, (_, index) =>
+    blankFuelJobCardRow(index),
+  );
+}
+
+export function normalizeFuelJobCardRows(value: unknown, fallbackCount = 1): FuelJobCardRow[] {
+  const source = Array.isArray(value) ? value : [];
+  if (source.length === 0) return blankFuelJobCardRows(fallbackCount);
+  return source.map((row, index) => {
+    const typed = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+    const blank = blankFuelJobCardRow(index);
+    const liters = numericValue(typed.liters ?? typed.litres);
+    const pricePerLitre = numericValue(typed.pricePerLitre ?? typed.pricePerLiter);
+    const computedTotal = liters * pricePerLitre;
+    const total = numericValue(typed.total) || computedTotal;
+    return {
+      ...blank,
+      day: textValue(typed.day) || blank.day,
+      date: textValue(typed.date),
+      time: textValue(typed.time),
+      fuelType: textValue(typed.fuelType),
+      liters,
+      pricePerLitre,
+      total,
+      fuelCharge: numericValue(typed.fuelCharge ?? typed.charge),
+      attendantName: textValue(typed.attendantName),
+      odometerReading: numericValue(typed.odometerReading ?? typed.odometer),
+      attendantSign: textValue(typed.attendantSign),
+      driverSign: textValue(typed.driverSign),
+      odometerStart: numericValue(typed.odometerStart),
+      odometerEnd: numericValue(typed.odometerEnd),
+      kmCovered: numericValue(typed.kmCovered),
+      driverName: textValue(typed.driverName),
+      driverSignature: textValue(typed.driverSignature),
+    };
+  });
+}
+
+export function resizeFuelJobCardRows(rows: FuelJobCardRow[], countValue: number) {
+  const count = Math.max(1, Math.floor(Number(countValue) || 1));
+  const normalized = normalizeFuelJobCardRows(rows, count);
+  return Array.from({ length: count }, (_, index) => normalized[index] ?? blankFuelJobCardRow(index));
+}
+
+export function fuelEntryDayLabel(row: Pick<FuelJobCardRow, "date" | "day">, index = 0) {
+  if (row.date) {
+    const value = new Date(`${row.date}T00:00:00`);
+    if (!Number.isNaN(value.getTime())) {
+      return value.toLocaleDateString(undefined, { weekday: "long" });
+    }
+  }
+  return row.day || `Entry ${index + 1}`;
 }
 
 export function summarizeFuelJobCardRows(rows: FuelJobCardRow[]) {
@@ -58,10 +133,12 @@ export function summarizeFuelJobCardRows(rows: FuelJobCardRow[]) {
       return {
         totalLiters: summary.totalLiters + Number(row.liters ?? 0),
         totalCost: summary.totalCost + total,
+        totalFuelCharge: summary.totalFuelCharge + Number(row.fuelCharge ?? 0),
         totalKm: summary.totalKm + kmCovered,
+        latestOdometer: Math.max(summary.latestOdometer, Number(row.odometerReading ?? 0)),
       };
     },
-    { totalLiters: 0, totalCost: 0, totalKm: 0 },
+    { totalLiters: 0, totalCost: 0, totalFuelCharge: 0, totalKm: 0, latestOdometer: 0 },
   );
 }
 
@@ -85,6 +162,9 @@ export function FuelJobCardFields({
         if (key === "liters" || key === "pricePerLitre") {
           next.total = Number(next.liters ?? 0) * Number(next.pricePerLitre ?? 0);
         }
+        if (key === "date") {
+          next.day = fuelEntryDayLabel({ date: String(value ?? ""), day: row.day }, index);
+        }
         if (key === "odometerStart" || key === "odometerEnd") {
           next.kmCovered = Math.max(
             0,
@@ -100,12 +180,12 @@ export function FuelJobCardFields({
     <div className="md:col-span-2 lg:col-span-3 rounded-lg border border-border bg-muted/20 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold">Sauti Business Community</div>
+          <div className="text-sm font-semibold">Fuel refill entries</div>
           <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            Weekly Fuel Consumption Job Card - Leadway Petrol Station
+            Date, fuel type, litres, price, charge, attendant, and odometer reading
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div className="rounded-md border border-border bg-background/50 p-2">
             <div className="text-[10px] uppercase text-muted-foreground">Liters</div>
             <div className="font-semibold">{summary.totalLiters.toFixed(2)}</div>
@@ -115,31 +195,34 @@ export function FuelJobCardFields({
             <div className="font-semibold">KSh {summary.totalCost.toFixed(0)}</div>
           </div>
           <div className="rounded-md border border-border bg-background/50 p-2">
-            <div className="text-[10px] uppercase text-muted-foreground">KM</div>
-            <div className="font-semibold">{summary.totalKm.toFixed(0)}</div>
+            <div className="text-[10px] uppercase text-muted-foreground">Fuel Charge</div>
+            <div className="font-semibold">KSh {summary.totalFuelCharge.toFixed(0)}</div>
+          </div>
+          <div className="rounded-md border border-border bg-background/50 p-2">
+            <div className="text-[10px] uppercase text-muted-foreground">Odometer</div>
+            <div className="font-semibold">{summary.latestOdometer.toFixed(0)}</div>
           </div>
         </div>
       </div>
 
       <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[980px] w-full text-xs">
+        <table className="min-w-[1120px] w-full text-xs">
           <thead className="text-muted-foreground">
             <tr>
-              <th className="py-2 pr-2 text-left">Day</th>
               <th className="py-2 pr-2 text-left">Date</th>
               <th className="py-2 pr-2 text-left">Time</th>
               <th className="py-2 pr-2 text-left">Fuel Type</th>
               <th className="py-2 pr-2 text-right">Liters</th>
-              <th className="py-2 pr-2 text-right">Price/Litre</th>
-              <th className="py-2 pr-2 text-right">Total</th>
-              <th className="py-2 pr-2 text-left">Attendant</th>
-              <th className="py-2 pr-2 text-left">Driver</th>
+              <th className="py-2 pr-2 text-right">Price/Litre (KSh)</th>
+              <th className="py-2 pr-2 text-right">Total (KSh)</th>
+              <th className="py-2 pr-2 text-right">Fuel Charge</th>
+              <th className="py-2 pr-2 text-left">Attendant Name</th>
+              <th className="py-2 pr-2 text-right">Odometer Reading</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map((row, index) => (
-              <tr key={row.day}>
-                <td className="py-2 pr-2 font-medium">{row.day}</td>
+              <tr key={`${index}-${row.day}`}>
                 <td className="py-2 pr-2">
                   <input
                     type="date"
@@ -147,6 +230,9 @@ export function FuelJobCardFields({
                     onChange={(event) => updateRow(index, "date", event.target.value)}
                     className="loan-input"
                   />
+                  <div className="mt-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                    {fuelEntryDayLabel(row, index)}
+                  </div>
                 </td>
                 <td className="py-2 pr-2">
                   <input
@@ -194,6 +280,17 @@ export function FuelJobCardFields({
                 </td>
                 <td className="py-2 pr-2">
                   <input
+                    type="number"
+                    min={0}
+                    value={row.fuelCharge}
+                    onChange={(event) =>
+                      updateRow(index, "fuelCharge", Number(event.target.value))
+                    }
+                    className="loan-input text-right"
+                  />
+                </td>
+                <td className="py-2 pr-2">
+                  <input
                     value={row.attendantName}
                     onChange={(event) => updateRow(index, "attendantName", event.target.value)}
                     className="loan-input"
@@ -201,78 +298,13 @@ export function FuelJobCardFields({
                 </td>
                 <td className="py-2 pr-2">
                   <input
-                    value={row.driverName}
-                    onChange={(event) => updateRow(index, "driverName", event.target.value)}
-                    className="loan-input"
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[760px] w-full text-xs">
-          <thead className="text-muted-foreground">
-            <tr>
-              <th className="py-2 pr-2 text-left">Day</th>
-              <th className="py-2 pr-2 text-right">Odometer Start</th>
-              <th className="py-2 pr-2 text-right">Odometer End</th>
-              <th className="py-2 pr-2 text-right">KM Covered</th>
-              <th className="py-2 pr-2 text-left">Driver Sign</th>
-              <th className="py-2 pr-2 text-left">Attendant Sign</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {rows.map((row, index) => (
-              <tr key={`${row.day}-usage`}>
-                <td className="py-2 pr-2 font-medium">{row.day}</td>
-                <td className="py-2 pr-2">
-                  <input
                     type="number"
                     min={0}
-                    value={row.odometerStart}
+                    value={row.odometerReading}
                     onChange={(event) =>
-                      updateRow(index, "odometerStart", Number(event.target.value))
+                      updateRow(index, "odometerReading", Number(event.target.value))
                     }
                     className="loan-input text-right"
-                  />
-                </td>
-                <td className="py-2 pr-2">
-                  <input
-                    type="number"
-                    min={0}
-                    value={row.odometerEnd}
-                    onChange={(event) =>
-                      updateRow(index, "odometerEnd", Number(event.target.value))
-                    }
-                    className="loan-input text-right"
-                  />
-                </td>
-                <td className="py-2 pr-2">
-                  <input
-                    type="number"
-                    min={0}
-                    value={row.kmCovered}
-                    onChange={(event) =>
-                      updateRow(index, "kmCovered", Number(event.target.value))
-                    }
-                    className="loan-input text-right"
-                  />
-                </td>
-                <td className="py-2 pr-2">
-                  <input
-                    value={row.driverSignature}
-                    onChange={(event) => updateRow(index, "driverSignature", event.target.value)}
-                    className="loan-input"
-                  />
-                </td>
-                <td className="py-2 pr-2">
-                  <input
-                    value={row.attendantSign}
-                    onChange={(event) => updateRow(index, "attendantSign", event.target.value)}
-                    className="loan-input"
                   />
                 </td>
               </tr>

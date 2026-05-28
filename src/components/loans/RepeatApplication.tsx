@@ -48,12 +48,12 @@ export function RepeatApplication({
   const [loanAmount, setLoanAmount] = useState(10000);
   const [overrideRatePct, setOverrideRatePct] = useState(0);
   const [purpose, setPurpose] = useState("Stock/Goods");
-  const [vehiclePlate, setVehiclePlate] = useState("");
+  const [vehiclePlate, setVehiclePlate] = useState(member?.vehiclePlate ?? "");
   const [fuelType, setFuelType] = useState("Petrol");
   const [fuelLitres, setFuelLitres] = useState(0);
   const [fuelUnitPrice, setFuelUnitPrice] = useState(0);
   const [fuelCharge, setFuelCharge] = useState(0);
-  const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows());
+  const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
   const [stockItem, setStockItem] = useState("");
   const [stockQuantity, setStockQuantity] = useState(0);
   const [stockUnitPrice, setStockUnitPrice] = useState(0);
@@ -74,7 +74,9 @@ export function RepeatApplication({
     () => summarizeFuelJobCardRows(fuelJobCardRows),
     [fuelJobCardRows],
   );
+  const fuelChargeTotal = fuelJobCardSummary.totalFuelCharge || fuelCharge;
   const fuelFallbackTotal = fuelLitres * fuelUnitPrice;
+  const resolvedVehiclePlate = member?.vehiclePlate || vehiclePlate.trim().toUpperCase();
   const stockComputedTotal = stockQuantity * stockUnitPrice;
   const requestedLoanAmount =
     loanKind === "fuel"
@@ -96,7 +98,7 @@ export function RepeatApplication({
 
   const calc = useMemo(() => {
     const productChargeAmount =
-      loanKind === "fuel" ? fuelCharge : loanKind === "stock" ? stockCharge : 0;
+      loanKind === "fuel" ? fuelChargeTotal : loanKind === "stock" ? stockCharge : 0;
     const pricing = loanPricingPreview({
       loanType,
       loanKind,
@@ -124,7 +126,7 @@ export function RepeatApplication({
   }, [
     insuranceFeeMode,
     loanKind,
-    fuelCharge,
+    fuelChargeTotal,
     fuelFallbackTotal,
     fuelJobCardSummary.totalCost,
     requestedLoanAmount,
@@ -142,6 +144,9 @@ export function RepeatApplication({
   const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
+    if (loanKind === "fuel" && !resolvedVehiclePlate) {
+      return toast.error("Add the locomotive vehicle plate on the member profile before repeat fuel.");
+    }
     try {
       const applicationPayload = {
         reconfirmed: { confirmKYC, confirmKin, confirmGuar, confirmBiz, changesSinceLast },
@@ -159,12 +164,12 @@ export function RepeatApplication({
       const supplierPayload =
         loanKind === "fuel"
           ? {
-              vehiclePlate,
+              vehiclePlate: resolvedVehiclePlate,
               fuelType,
               litres: fuelLitres,
               unitPrice: fuelUnitPrice,
-              fuelCharge,
-              productChargeAmount: fuelCharge,
+              fuelCharge: fuelChargeTotal,
+              productChargeAmount: fuelChargeTotal,
               jobCard: {
                 rows: fuelJobCardRows,
                 totals: fuelJobCardSummary,
@@ -323,13 +328,20 @@ export function RepeatApplication({
           />
           {loanKind === "fuel" && (
             <>
-              <Input label="Vehicle / Plate" value={vehiclePlate} onChange={setVehiclePlate} />
-              <Input
-                type="number"
-                label="Fuel Charge"
-                value={String(fuelCharge)}
-                onChange={(v) => setFuelCharge(Number(v))}
-              />
+              {member.vehiclePlate ? (
+                <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
+                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Vehicle / Plate
+                  </div>
+                  <div className="mt-1 font-mono font-semibold">{member.vehiclePlate}</div>
+                </div>
+              ) : (
+                <Input
+                  label="Vehicle / Plate"
+                  value={vehiclePlate}
+                  onChange={(value) => setVehiclePlate(value.toUpperCase())}
+                />
+              )}
               <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
             </>
           )}

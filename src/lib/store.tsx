@@ -105,6 +105,7 @@ export type Member = {
   businessType?: string;
   businessPermanence?: BusinessPermanence;
   businessAddress?: string;
+  vehiclePlate?: string;
   fieldOfficerId?: string;
 };
 
@@ -532,6 +533,7 @@ type Store = {
     businessType?: string;
     businessPermanence?: BusinessPermanence;
     businessAddress?: string;
+    vehiclePlate?: string;
     fieldOfficerId?: string;
   }) => Promise<string>;
   addStaff: (s: Omit<Staff, "id">) => Promise<string>;
@@ -831,6 +833,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             businessType: m.businessType,
             businessPermanence: m.businessPermanence,
             businessAddress: m.businessAddress,
+            vehiclePlate: m.vehiclePlate,
             fieldOfficerId: m.fieldOfficerId || currentUser.id,
             category: m.category,
             memberTags: (m as any).memberTags,
@@ -866,6 +869,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             businessType: m.businessType,
             businessPermanence: m.businessPermanence,
             businessAddress: m.businessAddress,
+            vehiclePlate: m.vehiclePlate,
             fieldOfficerId: m.fieldOfficerId,
             category: m.category,
             memberTags: m.memberTags,

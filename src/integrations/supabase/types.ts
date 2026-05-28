@@ -517,6 +517,7 @@ export type Database = {
           status: Database["public"]["Enums"]["member_status"];
           third_name: string | null;
           updated_at: string;
+          vehicle_plate: string | null;
           village: string | null;
         };
         Insert: {
@@ -555,6 +556,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["member_status"];
           third_name?: string | null;
           updated_at?: string;
+          vehicle_plate?: string | null;
           village?: string | null;
         };
         Update: {
@@ -593,6 +595,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["member_status"];
           third_name?: string | null;
           updated_at?: string;
+          vehicle_plate?: string | null;
           village?: string | null;
         };
         Relationships: [

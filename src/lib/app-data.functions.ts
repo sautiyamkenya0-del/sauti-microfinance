@@ -3414,6 +3414,7 @@ function mapMemberRow(row: any) {
     businessType: row.business_type ?? undefined,
     businessPermanence,
     businessAddress: row.business_address ?? undefined,
+    vehiclePlate: row.vehicle_plate ?? undefined,
     fieldOfficerId: row.field_officer_id ?? undefined,
   };
 }
@@ -4906,6 +4907,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       businessType?: string;
       businessPermanence?: "permanent" | "semi";
       businessAddress?: string;
+      vehiclePlate?: string;
       fieldOfficerId?: string;
       category?: MemberCategory;
       memberTags?: MemberCategory[];
@@ -4937,6 +4939,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
           ? data.businessPermanence
           : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
+      vehiclePlate: data?.vehiclePlate?.trim().toUpperCase() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
       memberTags: normalizeMemberTags(data?.memberTags, data?.category),
@@ -5030,6 +5033,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       business_type: data.businessType ?? null,
       business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
+      vehicle_plate: data.vehiclePlate ?? null,
       field_officer_id: fieldOfficerId,
       member_category: memberCategory,
       member_tags: memberTags,
@@ -5090,6 +5094,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
         shares,
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
+        vehiclePlate: data.vehiclePlate ?? null,
         investorContribution: data.investorContribution || 0,
       },
     });
@@ -5121,6 +5126,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       businessType?: string;
       businessPermanence?: "permanent" | "semi";
       businessAddress?: string;
+      vehiclePlate?: string;
       fieldOfficerId?: string;
       category?: MemberCategory;
       memberTags?: MemberCategory[];
@@ -5150,6 +5156,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
           ? data.businessPermanence
           : undefined,
       businessAddress: data?.businessAddress?.trim() || undefined,
+      vehiclePlate: data?.vehiclePlate?.trim().toUpperCase() || undefined,
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
       memberTags: normalizeMemberTags(data?.memberTags, data?.category),
@@ -5254,6 +5261,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       business_type: data.businessType ?? null,
       business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
+      vehicle_plate: data.vehiclePlate ?? null,
       field_officer_id: data.fieldOfficerId ?? null,
       member_category: memberCategory,
       member_tags: memberTags,
@@ -5492,6 +5500,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         savingsBalance: nextSavingsBalance,
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
+        vehiclePlate: data.vehiclePlate ?? null,
       },
     });
     return { id: finalMemberId };

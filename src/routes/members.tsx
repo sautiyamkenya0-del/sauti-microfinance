@@ -42,6 +42,7 @@ type MemberForm = {
   businessType: string;
   businessPermanence: "" | BusinessPermanence;
   businessAddress: string;
+  vehiclePlate: string;
   fieldOfficerId: string;
   shares: number;
   savingsBalance: number;
@@ -96,6 +97,7 @@ function MembersPage() {
     businessType: "",
     businessPermanence: "" as "" | BusinessPermanence,
     businessAddress: "",
+    vehiclePlate: "",
     fieldOfficerId: "",
     shares: 0,
     savingsBalance: 0,
@@ -132,6 +134,7 @@ function MembersPage() {
     businessType: member.businessType ?? "",
     businessPermanence: member.businessPermanence ?? "",
     businessAddress: member.businessAddress ?? "",
+    vehiclePlate: member.vehiclePlate ?? "",
     fieldOfficerId: member.fieldOfficerId ?? "",
     shares: member.shares,
     savingsBalance: member.savingsBalance,
@@ -156,7 +159,15 @@ function MembersPage() {
     const query = q.trim().toLowerCase();
     const matchesSearch =
       !query ||
-      [m.id, formatMembershipNumber(m.id), m.name, m.phone, m.businessName, m.businessType]
+      [
+        m.id,
+        formatMembershipNumber(m.id),
+        m.name,
+        m.phone,
+        m.businessName,
+        m.businessType,
+        m.vehiclePlate,
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     if (!matchesSearch) return false;
@@ -278,6 +289,11 @@ function MembersPage() {
                         <Badge tone={m.category === "both" ? "accent" : "default"}>
                           {memberCategoryLabel(m.category)}
                         </Badge>
+                        {m.vehiclePlate && (
+                          <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                            {m.vehiclePlate}
+                          </div>
+                        )}
                       </td>
                       <td className="px-5 py-3">
                         <Badge tone={m.status === "active" ? "success" : "muted"}>{m.status}</Badge>
@@ -605,6 +621,17 @@ function MembersPage() {
                       onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
                     />
                   </Field>
+                  {form.memberTags.includes("locomotive") && (
+                    <Field label="Vehicle / Plate">
+                      <input
+                        className="input"
+                        value={form.vehiclePlate}
+                        onChange={(e) =>
+                          setForm({ ...form, vehiclePlate: e.target.value.toUpperCase() })
+                        }
+                      />
+                    </Field>
+                  )}
                   <Field label="Field Officer ID">
                     <input
                       className="input"
@@ -743,12 +770,17 @@ function MembersPage() {
                         businessType: form.businessType || undefined,
                         businessPermanence: form.businessPermanence || undefined,
                         businessAddress: form.businessAddress || undefined,
+                        vehiclePlate: form.vehiclePlate || undefined,
                         fieldOfficerId: form.fieldOfficerId || undefined,
                       });
                       toast.success("Member updated");
                     } else {
+                      const serverGeneratedMemberId =
+                        normalizedMemberNo === normalizeMembershipNumber(nextMemberNo)
+                          ? undefined
+                          : normalizedMemberNo;
                       await addMember({
-                        memberId: normalizedMemberNo,
+                        memberId: serverGeneratedMemberId,
                         name: fullName,
                         phone,
                         status: "active",
@@ -769,6 +801,7 @@ function MembersPage() {
                         businessType: form.businessType || undefined,
                         businessPermanence: form.businessPermanence || undefined,
                         businessAddress: form.businessAddress || undefined,
+                        vehiclePlate: form.vehiclePlate || undefined,
                         fieldOfficerId: form.fieldOfficerId || undefined,
                         category: form.category,
                         memberTags: form.memberTags,

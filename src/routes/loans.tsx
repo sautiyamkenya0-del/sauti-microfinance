@@ -8,6 +8,12 @@ import { AppraisalForm } from "@/components/loans/AppraisalForm";
 import { FieldVisits } from "@/components/loans/FieldVisits";
 import { FirstTimeApplication } from "@/components/loans/FirstTimeApplication";
 import { FollowUps } from "@/components/loans/FollowUps";
+import {
+  FuelJobCardFields,
+  blankFuelJobCardRows,
+  resizeFuelJobCardRows,
+  summarizeFuelJobCardRows,
+} from "@/components/loans/FuelJobCardFields";
 import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
 import { PendingReview } from "@/components/loans/PendingReview";
 import { RepeatApplication } from "@/components/loans/RepeatApplication";
@@ -310,7 +316,7 @@ function LoansHub() {
           <CarryoverEntry
             members={memberAccounts}
             initialLoanKind={selectedLoanKind === "financial" ? "fuel" : selectedLoanKind}
-            saveCarryoverLoan={saveCarryoverLoan}
+            saveCarryoverLoan={(args) => saveCarryoverLoan({ data: args.data as never })}
             onSaved={refreshCarryoverLoans}
           />
         )}
@@ -369,7 +375,10 @@ function CarryoverEntry({
   const [ratePct, setRatePct] = useState(0);
   const [termDays, setTermDays] = useState(loanKind === "fuel" ? 1 : 30);
   const [paidToDate, setPaidToDate] = useState(0);
+  const [status, setStatus] = useState<"active" | "defaulted" | "closed">("active");
   const [vehiclePlate, setVehiclePlate] = useState("");
+  const [fuelEntryCount, setFuelEntryCount] = useState(1);
+  const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
   const [stockItem, setStockItem] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -384,13 +393,22 @@ function CarryoverEntry({
   }, [loanKind, termDays]);
 
   const selectedMember = members.find((member) => member.id === memberId);
-  const totalOpeningBalance = amount + charge;
+  const fuelJobCardSummary = useMemo(
+    () => summarizeFuelJobCardRows(fuelJobCardRows),
+    [fuelJobCardRows],
+  );
+  const selectedVehiclePlate = selectedMember?.vehiclePlate || vehiclePlate.trim().toUpperCase();
+  const fuelAmount = fuelJobCardSummary.totalCost || amount;
+  const fuelCharge = fuelJobCardSummary.totalFuelCharge || charge;
+  const effectiveAmount = loanKind === "fuel" ? fuelAmount : amount;
+  const effectiveCharge = loanKind === "fuel" ? fuelCharge : charge;
+  const totalOpeningBalance = effectiveAmount + effectiveCharge;
 
   async function saveDraft() {
     if (!memberId) return toast.error("Select a member first.");
-    if (amount <= 0) return toast.error("Enter the carryover amount.");
-    if (loanKind === "fuel" && !vehiclePlate.trim()) {
-      return toast.error("Enter the vehicle plate for fuel carryover.");
+    if (effectiveAmount <= 0) return toast.error("Enter the carryover amount.");
+    if (loanKind === "fuel" && !selectedVehiclePlate) {
+      return toast.error("Add a vehicle plate to this locomotive profile or this carryover entry.");
     }
     if (loanKind === "stock" && !stockItem.trim()) {
       return toast.error("Enter the stock item.");
@@ -400,32 +418,43 @@ function CarryoverEntry({
     try {
       const productMeta =
         loanKind === "fuel"
-          ? { vehiclePlate: vehiclePlate.trim(), fuelAmount: amount, fuelCharge: charge }
+          ? {
+              vehiclePlate: selectedVehiclePlate,
+              fuelAmount: effectiveAmount,
+              fuelCharge: effectiveCharge,
+              fuelEntries: fuelJobCardRows,
+              jobCard: {
+                rows: fuelJobCardRows,
+                totals: fuelJobCardSummary,
+              },
+            }
           : loanKind === "stock"
-            ? { stockItem: stockItem.trim(), stockAmount: amount, stockCharge: charge }
+            ? { stockItem: stockItem.trim(), stockAmount: effectiveAmount, stockCharge: charge }
             : {};
+      const savedPaidToDate =
+        status === "closed" && paidToDate <= 0 ? totalOpeningBalance : paidToDate;
       await saveCarryoverLoan({
         data: {
           memberId,
           label:
             loanKind === "fuel"
-              ? `Fuel carryover - ${vehiclePlate.trim()}`
+              ? `Fuel carryover - ${selectedVehiclePlate}`
               : loanKind === "stock"
                 ? `Stock carryover - ${stockItem.trim()}`
                 : "Financial carryover",
           loanKind,
           loanCycleNumber: 1,
-          principal: amount,
+          principal: effectiveAmount,
           interestRatePct: ratePct,
           termDays: Math.max(1, Math.floor(termDays)),
           dailySavingsAmount: 0,
           startDate: date,
-          paidToDate,
-          status: "active",
-          finished: false,
+          paidToDate: savedPaidToDate,
+          status,
+          finished: status === "closed",
           penaltyWaivedAmount: 0,
           feeBreakdown: {
-            processingFeeAmount: charge,
+            processingFeeAmount: effectiveCharge,
             productMeta,
           },
           notes: `${loanKindLabel(loanKind)} carryover entered from Lending page. Opening balance ${totalOpeningBalance}.`,
@@ -436,7 +465,10 @@ function CarryoverEntry({
       setAmount(0);
       setCharge(0);
       setPaidToDate(0);
+      setStatus("active");
       setVehiclePlate("");
+      setFuelEntryCount(1);
+      setFuelJobCardRows(blankFuelJobCardRows(1));
       setStockItem("");
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to save carryover loan.");
@@ -486,17 +518,51 @@ function CarryoverEntry({
               className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
             />
           </label>
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Carryover Status
+            </span>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as "active" | "defaulted" | "closed")}
+              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+            >
+              <option value="active">Active</option>
+              <option value="defaulted">Defaulted</option>
+              <option value="closed">Finished</option>
+            </select>
+          </label>
           {loanKind === "fuel" ? (
-            <label className="block">
-              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                Vehicle Plate
-              </span>
-              <input
-                value={vehiclePlate}
-                onChange={(event) => setVehiclePlate(event.target.value.toUpperCase())}
-                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+            <>
+              {selectedMember?.vehiclePlate ? (
+                <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
+                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Vehicle Plate
+                  </div>
+                  <div className="mt-1 font-mono font-semibold">{selectedMember.vehiclePlate}</div>
+                </div>
+              ) : (
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Vehicle Plate
+                  </span>
+                  <input
+                    value={vehiclePlate}
+                    onChange={(event) => setVehiclePlate(event.target.value.toUpperCase())}
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  />
+                </label>
+              )}
+              <NumberInput
+                label="Fuel Entries"
+                value={fuelEntryCount}
+                onChange={(value) => {
+                  const count = Math.max(1, Math.floor(Number(value) || 1));
+                  setFuelEntryCount(count);
+                  setFuelJobCardRows((current) => resizeFuelJobCardRows(current, count));
+                }}
               />
-            </label>
+            </>
           ) : null}
           {loanKind === "stock" ? (
             <label className="block">
@@ -512,14 +578,22 @@ function CarryoverEntry({
           ) : null}
           <NumberInput
             label={
-              loanKind === "fuel" ? "Fuel Amount" : loanKind === "stock" ? "Stock Amount" : "Amount"
+              loanKind === "fuel"
+                ? "Fallback Fuel Amount"
+                : loanKind === "stock"
+                  ? "Stock Amount"
+                  : "Amount"
             }
             value={amount}
             onChange={setAmount}
           />
           <NumberInput
             label={
-              loanKind === "fuel" ? "Fuel Charge" : loanKind === "stock" ? "Stock Charge" : "Charge"
+              loanKind === "fuel"
+                ? "Fallback Fuel Charge"
+                : loanKind === "stock"
+                  ? "Stock Charge"
+                  : "Charge"
             }
             value={charge}
             onChange={setCharge}
@@ -536,6 +610,9 @@ function CarryoverEntry({
             />
           </label>
           <NumberInput label="Paid To Date" value={paidToDate} onChange={setPaidToDate} />
+          {loanKind === "fuel" ? (
+            <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
+          ) : null}
         </div>
         <div className="mt-5 flex justify-end">
           <button
@@ -557,11 +634,11 @@ function CarryoverEntry({
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Amount</span>
-            <span>{fmtKES(amount)}</span>
+            <span>{fmtKES(effectiveAmount)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Charge</span>
-            <span>{fmtKES(charge)}</span>
+            <span>{fmtKES(effectiveCharge)}</span>
           </div>
           <div className="flex justify-between border-t border-border pt-2 font-semibold">
             <span>Total opening balance</span>

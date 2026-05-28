@@ -25,6 +25,12 @@ import {
 import { toast } from "sonner";
 
 import { AppHeader } from "@/components/AppHeader";
+import {
+  FuelJobCardFields,
+  normalizeFuelJobCardRows,
+  resizeFuelJobCardRows,
+  summarizeFuelJobCardRows,
+} from "@/components/loans/FuelJobCardFields";
 import { PaymentFlowTree } from "@/components/PaymentFlowTree";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
@@ -363,6 +369,7 @@ function PolicyCenterPage() {
     carryoverLoanDraft,
     policySettings,
   );
+  const carryoverLoanDraftFuelRows = carryoverFuelRows(carryoverLoanDraft);
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
   const carryoverLoanInputs = [...guidedClosedLoans, ...guidedDefaultedLoans, ...guidedActiveLoans];
   const carryoverHasDraftData =
@@ -856,7 +863,11 @@ function PolicyCenterPage() {
 
   async function saveCarryoverLoanDraft() {
     if (!selectedClient) return;
-    await saveCarryoverLoan({ data: carryoverLoanDraft });
+    const nextDraft =
+      carryoverLoanDraft.loanKind === "fuel"
+        ? withCarryoverFuelRows(carryoverLoanDraft, carryoverFuelRows(carryoverLoanDraft))
+        : carryoverLoanDraft;
+    await saveCarryoverLoan({ data: nextDraft });
     await refreshCarryoverDetails(selectedClient.id);
     await refreshAllCarryoverLoans();
     toast.success(carryoverLoanDraft.id ? "Carryover loan updated" : "Carryover loan saved");
@@ -2596,51 +2607,27 @@ function PolicyCenterPage() {
                             />
                           </Field>
                           <NumberField
-                            label="Fuel amount"
-                            value={Number(
-                              carryoverLoanDraft.feeBreakdown?.productMeta?.fuelAmount ??
-                                carryoverLoanDraft.principal,
-                            )}
+                            label="Fuel entries"
+                            value={carryoverLoanDraftFuelRows.length}
                             onChange={(value) =>
-                              setCarryoverLoanDraft((current) => ({
-                                ...current,
-                                principal: value,
-                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                                  {
-                                    ...current.feeBreakdown,
-                                    productMeta: {
-                                      ...(current.feeBreakdown?.productMeta ?? {}),
-                                      fuelAmount: value,
-                                    },
-                                  },
-                                  current.loanCycleNumber,
+                              setCarryoverLoanDraft((current) =>
+                                withCarryoverFuelRows(
+                                  current,
+                                  resizeFuelJobCardRows(carryoverFuelRows(current), value),
                                 ),
-                              }))
+                              )
                             }
                           />
-                          <NumberField
-                            label="Fuel charge"
-                            value={Number(
-                              carryoverLoanDraft.feeBreakdown?.productMeta?.fuelCharge ?? 0,
-                            )}
-                            onChange={(value) =>
-                              setCarryoverLoanDraft((current) => ({
-                                ...current,
-                                interestRatePct: 0,
-                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                                  {
-                                    ...current.feeBreakdown,
-                                    processingFeeAmount: value,
-                                    productMeta: {
-                                      ...(current.feeBreakdown?.productMeta ?? {}),
-                                      fuelCharge: value,
-                                    },
-                                  },
-                                  current.loanCycleNumber,
-                                ),
-                              }))
-                            }
-                          />
+                          <div className="md:col-span-2 xl:col-span-4">
+                            <FuelJobCardFields
+                              rows={carryoverLoanDraftFuelRows}
+                              onChange={(rows) =>
+                                setCarryoverLoanDraft((current) =>
+                                  withCarryoverFuelRows(current, rows),
+                                )
+                              }
+                            />
+                          </div>
                         </>
                       )}
                       {carryoverLoanDraft.loanKind === "stock" && (
@@ -3522,6 +3509,55 @@ function guidedLoanKindLabel(value: LoanKind) {
         : "Financial";
 }
 
+function carryoverFuelRows(loan: LegacyCarryoverLoan, fallbackCount = 1) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const productMeta = feeBreakdown.productMeta ?? {};
+  const jobCard = productMeta.jobCard && typeof productMeta.jobCard === "object"
+    ? (productMeta.jobCard as Record<string, unknown>)
+    : {};
+  return normalizeFuelJobCardRows(
+    productMeta.fuelEntries ?? jobCard.rows,
+    Math.max(1, fallbackCount),
+  );
+}
+
+function withCarryoverFuelRows(loan: LegacyCarryoverLoan, rows: ReturnType<typeof carryoverFuelRows>) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const summary = summarizeFuelJobCardRows(rows);
+  const fuelAmount = summary.totalCost > 0 ? summary.totalCost : loan.principal;
+  const fuelCharge =
+    summary.totalFuelCharge > 0
+      ? summary.totalFuelCharge
+      : Number(feeBreakdown.productMeta?.fuelCharge ?? feeBreakdown.processingFeeAmount ?? 0);
+  return {
+    ...loan,
+    principal: fuelAmount,
+    feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+      {
+        ...feeBreakdown,
+        processingFeeAmount: fuelCharge,
+        productMeta: {
+          ...(feeBreakdown.productMeta ?? {}),
+          fuelAmount,
+          fuelCharge,
+          fuelEntries: rows,
+          jobCard: {
+            rows,
+            totals: summary,
+          },
+        },
+      },
+      loan.loanCycleNumber,
+    ),
+  };
+}
+
 function applyGuidedCarryoverLoanKind(
   loan: LegacyCarryoverLoan,
   loanKind: LoanKind,
@@ -4041,6 +4077,7 @@ function GuidedCarryoverLoanCard({
       ),
     });
   };
+  const fuelRows = carryoverFuelRows(loan);
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -4094,41 +4131,18 @@ function GuidedCarryoverLoanCard({
               />
             </Field>
             <NumberField
-              label="Fuel amount"
-              value={Number(feeBreakdown.productMeta?.fuelAmount ?? loan.principal)}
+              label="Fuel entries"
+              value={fuelRows.length}
               onChange={(value) =>
-                onChange({
-                  ...loan,
-                  principal: value,
-                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                    {
-                      ...feeBreakdown,
-                      productMeta: { ...(feeBreakdown.productMeta ?? {}), fuelAmount: value },
-                    },
-                    loan.loanCycleNumber,
-                  ),
-                })
+                onChange(withCarryoverFuelRows(loan, resizeFuelJobCardRows(fuelRows, value)))
               }
             />
-            <NumberField
-              label="Fuel charge"
-              value={Number(
-                feeBreakdown.productMeta?.fuelCharge ?? feeBreakdown.processingFeeAmount ?? 0,
-              )}
-              onChange={(value) =>
-                onChange({
-                  ...loan,
-                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                    {
-                      ...feeBreakdown,
-                      processingFeeAmount: value,
-                      productMeta: { ...(feeBreakdown.productMeta ?? {}), fuelCharge: value },
-                    },
-                    loan.loanCycleNumber,
-                  ),
-                })
-              }
-            />
+            <div className="md:col-span-2">
+              <FuelJobCardFields
+                rows={fuelRows}
+                onChange={(rows) => onChange(withCarryoverFuelRows(loan, rows))}
+              />
+            </div>
           </>
         ) : null}
         {loan.loanKind === "stock" ? (
