@@ -291,7 +291,7 @@ function ReportsPage() {
       expected: row.summary.totalExpectedCollected,
       paid: row.loan.paidToDate,
       penalties: row.summary.estimatedPenaltyNow,
-      defaulted: row.status === "defaulted" ? row.summary.totalOwedNow : 0,
+      defaulted: row.summary.defaultedAmount,
       balance: row.summary.totalOwedNow,
     })),
   ];

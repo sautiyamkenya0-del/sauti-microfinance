@@ -44,11 +44,12 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const daysAfterFinalDueDate = Math.max(0, daysBetweenDates(summary.dueDate, today));
         const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyExpected;
-        const defaulted = summary.dailyUnpaidBalance;
-        const outstanding = summary.totalOwedNow - summary.totalPenalty;
+        const arrears = summary.dailyUnpaidBalance;
+        const defaulted = summary.defaultedAmount || arrears;
+        const outstanding = Math.max(0, summary.totalOwedNow - summary.totalPenalty);
         const daysMissed = Math.max(
           summary.skippedPaymentDays,
-          dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0,
+          dailyInstallment > 0 ? Math.floor(arrears / dailyInstallment) : 0,
         );
         const daysPastDue = summary.daysPastDue;
         const penalties = summary.totalPenalty;
@@ -65,9 +66,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
           dueDate: summary.dueDate,
           frozen: Boolean(l.frozenAt),
+          autoStopped: summary.autoStopped,
           include:
-            !isComplete &&
-            (l.status === "defaulted" || isOverdue || defaulted > 0 || penalties > 0),
+            !isComplete && (l.status === "defaulted" || isOverdue || arrears > 0 || penalties > 0),
         };
       })
       .filter((x) => x.member && x.include);
@@ -78,8 +79,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const daysAfterFinalDueDate = Math.max(0, daysBetweenDates(summary.dueDate, today));
         const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyInclusive;
-        const defaulted = summary.arrears;
-        const daysMissed = dailyInstallment > 0 ? Math.floor(defaulted / dailyInstallment) : 0;
+        const arrears = summary.arrears;
+        const defaulted = summary.defaultedAmount || arrears;
+        const daysMissed = dailyInstallment > 0 ? Math.floor(arrears / dailyInstallment) : 0;
         const daysPastDue = summary.daysPastDue;
         return {
           loan: { ...loan, purpose: "carryover" },
@@ -94,11 +96,12 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
           dueDate: summary.dueDate,
           frozen: Boolean(summary.frozenAsOf),
+          autoStopped: summary.autoStopped,
           include:
             !isComplete &&
             (loan.status === "defaulted" ||
               isOverdue ||
-              defaulted > 0 ||
+              arrears > 0 ||
               summary.estimatedPenaltyNow > 0),
         };
       })
@@ -187,6 +190,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
               daysPastDue,
               dueDate,
               frozen,
+              autoStopped,
             }) => {
               const memberFups = followups.filter((f) => f.loanId === loan.id);
               return (
@@ -201,14 +205,13 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                             : `${daysMissed} day(s) missed`}
                         </Badge>
                         {frozen ? <Badge tone="warning">Frozen</Badge> : null}
+                        {autoStopped ? <Badge tone="warning">Stopped at cap</Badge> : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Member: {member?.id} · Loan {loan.id} · {loan.purpose ?? "—"}
                         {loanKind === "carryover" ? " · carryover" : ""}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Final due date {dueDate}
-                      </div>
+                      <div className="text-xs text-muted-foreground">Final due date {dueDate}</div>
                       <div className="text-xs">
                         <span className="font-medium">Phone:</span> {member?.phone}
                       </div>

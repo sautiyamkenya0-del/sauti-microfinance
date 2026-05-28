@@ -47,7 +47,7 @@ import {
   type MemberCategory,
 } from "@/lib/membership";
 import { normalizeFeePolicies, type FeePolicy } from "@/lib/fees-policy";
-import { buildLoanDailyLedger } from "@/lib/loan-calculations";
+import { DEFAULT_DEFAULTED_AMOUNT_STOP_CAP, buildLoanDailyLedger } from "@/lib/loan-calculations";
 import {
   DEFAULT_POLICY_SETTINGS,
   getActivePolicySettings,
@@ -1557,9 +1557,15 @@ export function loanPenaltySummary(
     payments,
     fallbackPaid: totalPaid,
     penaltyPct: SBC_FEES.penaltyDailyPct,
+    defaultPenaltyPct: SBC_FEES.defaultPenaltyPct,
+    defaultedAmountCap: DEFAULT_DEFAULTED_AMOUNT_STOP_CAP,
   });
   const totalPenalty = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - ledger.totalPaid);
+  const autoStopped =
+    ledger.daysPastDue > 0 &&
+    DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
+    totalOwedNow >= DEFAULT_DEFAULTED_AMOUNT_STOP_CAP;
 
   return {
     ...summary,
@@ -1567,15 +1573,17 @@ export function loanPenaltySummary(
     totalPaid: ledger.totalPaid,
     dailyExpected,
     dailyUnpaidBalance: ledger.currentDailyBalance,
-    dailyPenalty: ledger.automaticPenaltyAmount,
+    dailyPenalty: ledger.dailyPenaltyAmount,
     skippedPaymentDays: ledger.penaltyDays,
     daysPastDue: ledger.daysPastDue,
     dueDatePenaltyBase: ledger.currentDailyBalance,
-    dueDatePenalty: 0,
+    dueDatePenalty: ledger.defaultPenaltyAmount,
     penaltyWaivedAmount,
     totalPenalty,
     totalOwedNow,
-    defaultedAmount: ledger.defaultedAmount,
+    defaultedAmount: ledger.daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    autoStopped,
+    autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
     repaymentLedger: ledger.rows,
   };
 }

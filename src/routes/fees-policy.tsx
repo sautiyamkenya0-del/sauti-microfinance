@@ -1038,8 +1038,8 @@ function PolicyCenterPage() {
             icon={<Wallet className="h-5 w-5" />}
           />
           <StatCard
-            label="Penalty Rate"
-            value={`${policySettings.percentages.penaltyDailyPct}%`}
+            label="Penalty Rates"
+            value={`${policySettings.percentages.penaltyDailyPct}% / ${policySettings.percentages.defaultPenaltyPct}%`}
             icon={<Percent className="h-5 w-5" />}
             tone="warning"
           />
@@ -3515,16 +3515,20 @@ function carryoverFuelRows(loan: LegacyCarryoverLoan, fallbackCount = 1) {
     loan.loanCycleNumber,
   );
   const productMeta = feeBreakdown.productMeta ?? {};
-  const jobCard = productMeta.jobCard && typeof productMeta.jobCard === "object"
-    ? (productMeta.jobCard as Record<string, unknown>)
-    : {};
+  const jobCard =
+    productMeta.jobCard && typeof productMeta.jobCard === "object"
+      ? (productMeta.jobCard as Record<string, unknown>)
+      : {};
   return normalizeFuelJobCardRows(
     productMeta.fuelEntries ?? jobCard.rows,
     Math.max(1, fallbackCount),
   );
 }
 
-function withCarryoverFuelRows(loan: LegacyCarryoverLoan, rows: ReturnType<typeof carryoverFuelRows>) {
+function withCarryoverFuelRows(
+  loan: LegacyCarryoverLoan,
+  rows: ReturnType<typeof carryoverFuelRows>,
+) {
   const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
     loan.feeBreakdown,
     loan.loanCycleNumber,

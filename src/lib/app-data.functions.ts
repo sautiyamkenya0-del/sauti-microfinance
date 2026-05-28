@@ -43,6 +43,7 @@ import {
   normalizeLegacyCarryoverLoanFeeBreakdown,
   summarizeLegacyCarryoverLoan,
 } from "@/lib/legacy-finance";
+import { DEFAULT_DEFAULTED_AMOUNT_STOP_CAP, buildLoanDailyLedger } from "@/lib/loan-calculations";
 import { requestMpesaWithdrawalPayout } from "@/lib/mpesa-payouts.server";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
@@ -608,6 +609,126 @@ function loanBalanceSummary(loan: {
   };
 }
 
+type LoanRepaymentPayment = {
+  date: string;
+  amount: number;
+};
+
+function loanPaymentDate(row: Record<string, unknown>) {
+  const raw = String(row.created_at ?? row.date ?? new Date().toISOString()).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
+}
+
+function mapLoanRepaymentPayments(rows: Record<string, unknown>[]): LoanRepaymentPayment[] {
+  return rows
+    .filter((row) => String(row.type ?? "") === "loan_repayment")
+    .map((row) => ({
+      date: loanPaymentDate(row),
+      amount: Math.max(0, toNumber(row.amount as number | string | null | undefined)),
+    }))
+    .filter((payment) => payment.amount > 0);
+}
+
+async function fetchLoanRepaymentPayments(runtimeDb: any, loanId: string) {
+  if (!loanId) return [];
+  const rows = await fetchAllRows<Record<string, unknown>>(() =>
+    runtimeDb
+      .from("transactions")
+      .select("date, created_at, type, amount")
+      .eq("loan_id", loanId)
+      .eq("type", "loan_repayment")
+      .order("date", { ascending: true }),
+  );
+  return mapLoanRepaymentPayments(rows);
+}
+
+async function liveLoanAccountingSummary(
+  runtimeDb: any,
+  loan: Record<string, any>,
+  settings: typeof DEFAULT_POLICY_SETTINGS,
+  options?: {
+    asOfDate?: string;
+    payments?: LoanRepaymentPayment[];
+    fallbackPaid?: number;
+  },
+) {
+  const base = loanBalanceSummary(loan as any);
+  const loanKind = normalizeLoanKindValue(loan.loan_kind);
+  const supplierBacked = loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
+  const dailySavingsAmount = supplierBacked ? 0 : base.approved <= 5000 ? 50 : 100;
+  const roundOffStep = Math.max(5, settings.percentages.roundOffStep || ROUNDING_BASE);
+  const dailyInstallment = roundUpKES(
+    (base.total + dailySavingsAmount * base.termDays) / Math.max(1, base.termDays),
+    roundOffStep,
+  );
+  const totalExpectedCollected = roundMoney(dailyInstallment * base.termDays);
+  const loanId = String(loan.id ?? "").trim();
+  const payments = options?.payments ?? (await fetchLoanRepaymentPayments(runtimeDb, loanId));
+  const transactionPaid = payments.reduce((sum, payment) => roundMoney(sum + payment.amount), 0);
+  const fallbackPaid = Math.max(
+    0,
+    toNumber(loan.paid),
+    transactionPaid,
+    Number(options?.fallbackPaid ?? 0),
+  );
+  const asOfDate = String(loan.frozen_at ?? options?.asOfDate ?? new Date().toISOString()).slice(
+    0,
+    10,
+  );
+  const ledger = buildLoanDailyLedger({
+    startDate: String(loan.start_date ?? new Date().toISOString().slice(0, 10)),
+    termDays: base.termDays,
+    dailyInstallment,
+    totalExpected: totalExpectedCollected,
+    asOfDate,
+    payments,
+    fallbackPaid,
+    penaltyPct: settings.percentages.penaltyDailyPct,
+    defaultPenaltyPct: settings.percentages.defaultPenaltyPct,
+    priorPenaltyAmount: 0,
+    defaultedAmountCap: DEFAULT_DEFAULTED_AMOUNT_STOP_CAP,
+  });
+  const penaltyWaivedAmount = Math.max(0, toNumber(loan.penalty_waived_amount));
+  const totalPenalty = Math.max(0, roundMoney(ledger.totalPenalty - penaltyWaivedAmount));
+  const totalOwedNow = Math.max(
+    0,
+    roundMoney(totalExpectedCollected + totalPenalty - ledger.totalPaid),
+  );
+  const autoStopped =
+    ledger.daysPastDue > 0 &&
+    DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
+    totalOwedNow >= DEFAULT_DEFAULTED_AMOUNT_STOP_CAP;
+
+  return {
+    ...base,
+    dailySavingsAmount,
+    dailyInstallment,
+    totalExpectedCollected,
+    totalPaid: ledger.totalPaid,
+    totalPenalty,
+    totalOwedNow,
+    balance: totalOwedNow,
+    total: roundMoney(ledger.totalPaid + totalOwedNow),
+    dueDate: ledger.dueDate,
+    daysPastDue: ledger.daysPastDue,
+    defaultedAmount: ledger.daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    autoStopped,
+    autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
+    isFinished: totalOwedNow <= 0,
+  };
+}
+
+function nextLiveLoanStatus(
+  currentStatus: string,
+  summary: { totalOwedNow: number; dueDate: string },
+  asOfDate: string = new Date().toISOString().slice(0, 10),
+): "pending" | "active" | "closed" | "defaulted" | "rejected" {
+  if (currentStatus === "pending" || currentStatus === "rejected") return currentStatus;
+  if (summary.totalOwedNow <= 0) return "closed";
+  if (summary.dueDate < asOfDate || currentStatus === "defaulted") return "defaulted";
+  return "active";
+}
+
 function normalizeLoanKindValue(value?: string | null) {
   return value === "fuel" || value === "stock" || value === "service" ? value : "financial";
 }
@@ -682,9 +803,12 @@ function carryoverLoanBalanceSummary(
   );
 
   return {
-    total: summary.totalExpectedCollected,
+    total: roundMoney(
+      toNumber(loan.paid_to_date as number | string | null | undefined) + summary.totalOwedNow,
+    ),
     paid: toNumber(loan.paid_to_date as number | string | null | undefined),
     balance: summary.totalOwedNow,
+    dueDate: summary.dueDate,
   };
 }
 
@@ -719,14 +843,23 @@ async function assertNoDuplicateOpenLoanKind(
 
   const { data: carryoverData, error: carryoverError } = await carryoverQuery;
   if (carryoverError) throw new Error(carryoverError.message);
-  const blockingLiveLoans = (data ?? []).filter((loan: Record<string, unknown>) => {
+  const blockingLiveLoans: Record<string, unknown>[] = [];
+  for (const loan of (data ?? []) as Record<string, unknown>[]) {
     const status = String(loan.status ?? "");
-    if (status === "pending") return true;
-    if (status === "closed" || status === "rejected") {
-      return loanBalanceSummary(loan as any).balance > 0;
+    if (status === "pending") {
+      blockingLiveLoans.push(loan);
+      continue;
     }
-    return ["active", "defaulted"].includes(status) && loanBalanceSummary(loan as any).balance > 0;
-  });
+    if (status === "rejected") continue;
+    const summary = await liveLoanAccountingSummary(supabaseAdmin, loan as any, policySettings);
+    if (status === "closed") {
+      if (summary.balance > 0) blockingLiveLoans.push(loan);
+      continue;
+    }
+    if (["active", "defaulted"].includes(status) && summary.balance > 0) {
+      blockingLiveLoans.push(loan);
+    }
+  }
   const blockingCarryoverLoans = (carryoverData ?? []).filter((loan: Record<string, unknown>) => {
     const status = String(loan.status ?? "active");
     const summary = carryoverLoanBalanceSummary(loan, policySettings);
@@ -1950,9 +2083,11 @@ export async function applyMpesaPaymentToDatabase(args: {
   const carryoverOpenLoans = sortOpenLoansByDispatchDate(
     ((carryoverRows ?? []) as Record<string, any>[]).filter((loan) => loan.finished !== true),
   );
-  const openLoanTargets = sortOpenLoansByDispatchDate([
-    ...liveOpenLoans.map((loan) => {
-      const summary = loanBalanceSummary(loan as any);
+  const liveOpenLoanTargets = await Promise.all(
+    liveOpenLoans.map(async (loan) => {
+      const summary = await liveLoanAccountingSummary(supabaseAdmin, loan as any, policySettings, {
+        asOfDate: paymentDate,
+      });
       return {
         source: "live" as const,
         id: String(loan.id),
@@ -1961,12 +2096,16 @@ export async function applyMpesaPaymentToDatabase(args: {
         created_at: loan.created_at ?? null,
         loan_kind: loan.loan_kind ?? "financial",
         loan,
-        status: String(loan.status ?? "active"),
-        paid: summary.paid,
+        status: nextLiveLoanStatus(String(loan.status ?? "active"), summary, paymentDate),
+        paid: summary.totalPaid,
         balance: summary.balance,
         total: summary.total,
+        dueDate: summary.dueDate,
       };
     }),
+  );
+  const openLoanTargets = sortOpenLoansByDispatchDate([
+    ...liveOpenLoanTargets,
     ...carryoverOpenLoans.map((loan) => {
       const summary = carryoverLoanBalanceSummary(loan, policySettings);
       return {
@@ -1977,10 +2116,16 @@ export async function applyMpesaPaymentToDatabase(args: {
         created_at: loan.created_at ?? null,
         loan_kind: loan.loan_kind ?? "financial",
         loan,
-        status: String(loan.status ?? "active"),
+        status:
+          summary.balance <= 0
+            ? "closed"
+            : summary.dueDate < paymentDate || loan.status === "defaulted"
+              ? "defaulted"
+              : "active",
         paid: summary.paid,
         balance: summary.balance,
         total: summary.total,
+        dueDate: summary.dueDate,
       };
     }),
   ]);
@@ -2356,8 +2501,13 @@ export async function applyMpesaPaymentToDatabase(args: {
       );
 
       const nextPaid = roundMoney(target.paid + safeApplied);
-      const nextBalance = Math.max(0, roundMoney(target.total - nextPaid));
-      const nextStatus = nextBalance <= 0 ? "closed" : target.status;
+      const nextBalance = Math.max(0, roundMoney(balance - safeApplied));
+      const nextStatus =
+        nextBalance <= 0
+          ? "closed"
+          : target.dueDate < paymentDate || target.status === "defaulted"
+            ? "defaulted"
+            : "active";
       target.paid = nextPaid;
       target.balance = nextBalance;
       target.status = nextStatus;
@@ -6574,6 +6724,22 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         throw new Error("This member has a defaulted loan. Record the money as a loan repayment.");
       }
 
+      const { data: defaultedCarryoverLoans, error: defaultedCarryoverError } = await (
+        supabaseAdmin as any
+      )
+        .from("member_carryover_loans")
+        .select("id")
+        .eq("member_id", resolvedMemberId)
+        .eq("status", "defaulted")
+        .eq("finished", false)
+        .limit(1);
+      if (defaultedCarryoverError) throw new Error(defaultedCarryoverError.message);
+      if ((defaultedCarryoverLoans ?? []).length > 0) {
+        throw new Error(
+          "This member has a defaulted carryover loan. Record the money as a loan repayment.",
+        );
+      }
+
       const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
         .from("penalties")
         .select("id")
@@ -6669,14 +6835,17 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         .maybeSingle();
       if (loanError) throw new Error(loanError.message);
       if (loan) {
-        const summary = loanBalanceSummary(loan);
-        const nextPaid = Number(loan.paid ?? 0) + data.amount;
-        const nextBalance = Math.max(0, summary.total - nextPaid);
+        const nextSummary = await liveLoanAccountingSummary(
+          supabaseAdmin,
+          loan as Record<string, any>,
+          policySettings,
+        );
+        const nextStatus = nextLiveLoanStatus(String(loan.status ?? "active"), nextSummary);
         const { error: updateLoanError } = await supabaseAdmin
           .from("loans")
           .update({
-            paid: nextPaid,
-            status: nextBalance <= 0 ? "closed" : loan.status,
+            paid: nextSummary.totalPaid,
+            status: nextStatus,
           })
           .eq("id", data.loanId);
         if (updateLoanError) throw new Error(updateLoanError.message);
@@ -8226,14 +8395,18 @@ async function settlePenaltiesFromDocketDeposit(args: {
           account: formatMembershipNumber(String(args.member.id)),
           note: "Daily repayment included with penalty payment",
         });
-        const summary = loanBalanceSummary(activeLoan);
-        const nextPaid = toNumber(activeLoan.paid) + repaymentAmount;
-        const nextBalance = Math.max(0, summary.total - nextPaid);
+        const policySettings = await loadRuntimePolicySettings(args.runtimeDb);
+        const nextSummary = await liveLoanAccountingSummary(
+          args.runtimeDb,
+          activeLoan as Record<string, any>,
+          policySettings,
+        );
+        const nextStatus = nextLiveLoanStatus(String(activeLoan.status ?? "active"), nextSummary);
         const { error: updateLoanError } = await args.runtimeDb
           .from("loans")
           .update({
-            paid: nextPaid,
-            status: nextBalance <= 0 ? "closed" : activeLoan.status,
+            paid: nextSummary.totalPaid,
+            status: nextStatus,
           })
           .eq("id", activeLoan.id);
         if (updateLoanError) throw new Error(updateLoanError.message);
@@ -9957,6 +10130,41 @@ export const waivePenaltyRecord = createServerFn({ method: "POST" })
       if (penaltyUpdateError) throw new Error(penaltyUpdateError.message);
     }
 
+    if (penalty.loan_id) {
+      const { data: liveLoan, error: liveLoanError } = await runtimeDb
+        .from("loans")
+        .select("id, penalty_waived_amount")
+        .eq("id", penalty.loan_id)
+        .maybeSingle();
+      if (liveLoanError) throw new Error(liveLoanError.message);
+      if (liveLoan) {
+        const { error: linkedUpdateError } = await runtimeDb
+          .from("loans")
+          .update({
+            penalty_waived_amount: toNumber(liveLoan.penalty_waived_amount) + waiveAmount,
+          })
+          .eq("id", penalty.loan_id);
+        if (linkedUpdateError) throw new Error(linkedUpdateError.message);
+      } else {
+        const { data: carryoverLoan, error: carryoverLoanError } = await runtimeDb
+          .from("member_carryover_loans")
+          .select("id, member_id, penalty_waived_amount")
+          .eq("id", penalty.loan_id)
+          .maybeSingle();
+        if (carryoverLoanError) throw new Error(carryoverLoanError.message);
+        if (carryoverLoan) {
+          const { error: linkedUpdateError } = await runtimeDb
+            .from("member_carryover_loans")
+            .update({
+              penalty_waived_amount: toNumber(carryoverLoan.penalty_waived_amount) + waiveAmount,
+            })
+            .eq("id", penalty.loan_id);
+          if (linkedUpdateError) throw new Error(linkedUpdateError.message);
+          await refreshCarryoverMemberSummary(runtimeDb, carryoverLoan.member_id);
+        }
+      }
+    }
+
     await auditAction({
       actor,
       action: "penalty.waived",
@@ -10039,9 +10247,18 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!loan) throw new Error("Loan not found.");
+    const policySettings = await loadRuntimePolicySettings(runtimeDb);
+    const summary = await liveLoanAccountingSummary(
+      runtimeDb,
+      loan as Record<string, any>,
+      policySettings,
+    );
     const currentWaived = toNumber(loan.penalty_waived_amount);
-    const waiveAmount = data.amount && data.amount > 0 ? data.amount : 0;
-    if (waiveAmount <= 0) throw new Error("Enter the penalty amount to waive.");
+    const waiveAmount = Math.min(
+      summary.totalPenalty,
+      data.amount && data.amount > 0 ? data.amount : summary.totalPenalty,
+    );
+    if (waiveAmount <= 0) throw new Error("There is no penalty amount to waive.");
 
     const { error: updateError } = await runtimeDb
       .from("loans")
@@ -10172,6 +10389,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
 
   const transactionsByMember = new Map<string, Record<string, unknown>[]>();
   const repaymentByLiveLoan = new Map<string, number>();
+  const repaymentRowsByLiveLoan = new Map<string, Record<string, unknown>[]>();
   const transactionMemberPatches: Array<{ id: string; memberId: string }> = [];
 
   for (const transaction of transactions) {
@@ -10192,6 +10410,9 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     if (String(transaction.type ?? "") === "loan_repayment") {
       const loanId = String(transaction.loan_id ?? "").trim();
       if (loanId) {
+        const group = repaymentRowsByLiveLoan.get(loanId) ?? [];
+        group.push(transaction);
+        repaymentRowsByLiveLoan.set(loanId, group);
         repaymentByLiveLoan.set(
           loanId,
           roundMoney((repaymentByLiveLoan.get(loanId) ?? 0) + toNumber(transaction.amount as any)),
@@ -10292,17 +10513,18 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
   let liveLoansUpdated = 0;
   for (const loan of liveLoans) {
     const loanId = String(loan.id ?? "").trim();
-    if (!loanId || !repaymentByLiveLoan.has(loanId)) continue;
-    const paid = repaymentByLiveLoan.get(loanId) ?? 0;
-    const summary = loanBalanceSummary({ ...(loan as any), paid });
+    if (!loanId) continue;
     const currentStatus = String(loan.status ?? "active");
-    const nextStatus =
-      summary.balance <= 0 && currentStatus !== "rejected" && currentStatus !== "pending"
-        ? "closed"
-        : currentStatus;
+    if (currentStatus === "pending" || currentStatus === "rejected") continue;
+    const payments = mapLoanRepaymentPayments(repaymentRowsByLiveLoan.get(loanId) ?? []);
+    const summary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
+      payments,
+      fallbackPaid: repaymentByLiveLoan.get(loanId) ?? toNumber(loan.paid as any),
+    });
+    const nextStatus = nextLiveLoanStatus(currentStatus, summary);
     const { error } = await runtimeDb
       .from("loans")
-      .update({ paid, status: nextStatus })
+      .update({ paid: summary.totalPaid, status: nextStatus })
       .eq("id", loanId);
     if (error) throw new Error(error.message);
     liveLoansUpdated += 1;
@@ -10345,11 +10567,21 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
         { ...mapCarryoverLoanForSummary(loan), paidToDate: 0 },
         policySettings,
       );
-      const fullExpected = summary.totalExpectedCollected;
+      const fullExpected = summary.totalOwedNow;
       const applied = Math.min(remaining, fullExpected);
       remaining = roundMoney(remaining - applied);
-      const status = applied >= fullExpected ? "closed" : String(loan.status ?? "active");
-      const finished = applied >= fullExpected;
+      const appliedSummary = summarizeLegacyCarryoverLoan(
+        { ...mapCarryoverLoanForSummary(loan), paidToDate: applied },
+        policySettings,
+      );
+      const finished = appliedSummary.totalOwedNow <= 0;
+      const status = finished
+        ? "closed"
+        : appliedSummary.dueDate < new Date().toISOString().slice(0, 10)
+          ? "defaulted"
+          : String(loan.status ?? "active") === "closed"
+            ? "active"
+            : String(loan.status ?? "active");
       const { error } = await runtimeDb
         .from("member_carryover_loans")
         .update({

@@ -129,7 +129,7 @@ function Policies() {
 
           <Section title="D. Default & Recovery">
             <ul className="list-disc space-y-2 p-5 pl-9 text-sm text-muted-foreground">
-              <li>Increased penalty applies after due date as listed above.</li>
+              <li>Default penalty applies after the final due date as listed above.</li>
               <li>Guarantors and collateral may be invoked after written notice.</li>
               <li>
                 Final recourse: management may apply restricted savings against outstanding

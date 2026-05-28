@@ -5,7 +5,11 @@ import {
   transactionFeeForAmount,
   type PolicySettings,
 } from "@/lib/policy-settings";
-import { addIsoDays, buildLoanDailyLedger } from "@/lib/loan-calculations";
+import {
+  DEFAULT_DEFAULTED_AMOUNT_STOP_CAP,
+  addIsoDays,
+  buildLoanDailyLedger,
+} from "@/lib/loan-calculations";
 
 export type LegacyCarryoverProfile = {
   memberId: string;
@@ -294,24 +298,30 @@ export function summarizeLegacyCarryoverLoan(
     asOfDate: effectiveAsOfDate,
     fallbackPaid: paidToDate,
     penaltyPct: settings.percentages.penaltyDailyPct,
+    defaultPenaltyPct: settings.percentages.defaultPenaltyPct,
     priorPenaltyAmount,
     defaultFromDate: addIsoDays(dueDate, 1),
+    defaultedAmountCap: DEFAULT_DEFAULTED_AMOUNT_STOP_CAP,
   });
   const elapsedDays = Math.max(0, Math.min(termDays, diffDays(loan.startDate, effectiveAsOfDate)));
   const scheduledCollectedToDate = ledger.scheduledCollectedToDate;
   const arrears = ledger.currentDailyBalance;
   const balance = Math.max(0, totalExpectedCollected - ledger.totalPaid);
-  const dailyPenaltyDays = ledger.penaltyDays;
+  const dailyPenaltyDays = ledger.dailyPenaltyDays;
   const dailyPenaltyAmount = priorPenaltyAmount;
   const dueDatePenaltyDays = ledger.daysPastDue;
-  const calculatedArrearsPenalty = ledger.automaticPenaltyAmount;
-  const arrearsPenalty = ledger.automaticPenaltyAmount;
+  const calculatedArrearsPenalty = ledger.dailyPenaltyAmount;
+  const arrearsPenalty = priorPenaltyAmount + ledger.dailyPenaltyAmount;
   const daysPastDue = ledger.daysPastDue;
   const dueDatePenaltyBase = ledger.currentDailyBalance;
-  const overduePenalty = 0;
+  const overduePenalty = ledger.defaultPenaltyAmount;
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const estimatedPenaltyNow = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + estimatedPenaltyNow - ledger.totalPaid);
+  const autoStopped =
+    daysPastDue > 0 &&
+    DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
+    totalOwedNow >= DEFAULT_DEFAULTED_AMOUNT_STOP_CAP;
   const paidPct = totalExpectedCollected > 0 ? (paidToDate / totalExpectedCollected) * 100 : 0;
   const isFinished = totalOwedNow <= 0;
 
@@ -352,6 +362,9 @@ export function summarizeLegacyCarryoverLoan(
     overduePenalty,
     estimatedPenaltyNow,
     totalOwedNow,
+    defaultedAmount: daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    autoStopped,
+    autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
     paidPct,
     isFinished,
     penaltyWaivedAmount,
