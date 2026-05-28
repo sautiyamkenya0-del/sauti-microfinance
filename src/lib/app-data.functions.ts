@@ -684,7 +684,7 @@ function carryoverLoanBalanceSummary(
   return {
     total: summary.totalExpectedCollected,
     paid: toNumber(loan.paid_to_date as number | string | null | undefined),
-    balance: summary.balance,
+    balance: summary.totalOwedNow,
   };
 }
 
@@ -693,13 +693,16 @@ async function assertNoDuplicateOpenLoanKind(
   args: { memberId: string; loanKind?: string | null; excludeLoanId?: string | null },
 ) {
   const loanKind = normalizeLoanKindValue(args.loanKind);
+  const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
   let query = (supabaseAdmin as any)
     .from("loans")
-    .select("id, status")
+    .select(
+      "id, status, principal, approved_amount, financed_principal_amount, rate, term_days, term_months, paid, loan_kind, supplier_payload, processing_fee_amount",
+    )
     .eq("member_id", args.memberId)
     .eq("loan_kind", loanKind)
-    .in("status", ["pending", "active", "defaulted"])
-    .limit(1);
+    .neq("status", "rejected")
+    .limit(50);
 
   if (args.excludeLoanId) query = query.neq("id", args.excludeLoanId);
 
@@ -707,19 +710,31 @@ async function assertNoDuplicateOpenLoanKind(
   if (error) throw new Error(error.message);
   let carryoverQuery = (supabaseAdmin as any)
     .from("member_carryover_loans")
-    .select("id, status")
+    .select("*")
     .eq("member_id", args.memberId)
     .eq("loan_kind", loanKind)
-    .in("status", ["active", "defaulted"])
-    .eq("finished", false)
-    .limit(1);
+    .limit(50);
 
   if (args.excludeLoanId) carryoverQuery = carryoverQuery.neq("id", args.excludeLoanId);
 
   const { data: carryoverData, error: carryoverError } = await carryoverQuery;
   if (carryoverError) throw new Error(carryoverError.message);
+  const blockingLiveLoans = (data ?? []).filter((loan: Record<string, unknown>) => {
+    const status = String(loan.status ?? "");
+    if (status === "pending") return true;
+    if (status === "closed" || status === "rejected") {
+      return loanBalanceSummary(loan as any).balance > 0;
+    }
+    return ["active", "defaulted"].includes(status) && loanBalanceSummary(loan as any).balance > 0;
+  });
+  const blockingCarryoverLoans = (carryoverData ?? []).filter((loan: Record<string, unknown>) => {
+    const status = String(loan.status ?? "active");
+    const summary = carryoverLoanBalanceSummary(loan, policySettings);
+    if (status === "closed" || loan.finished === true) return summary.balance > 0;
+    return ["active", "defaulted"].includes(status) && summary.balance > 0;
+  });
 
-  if ((data ?? []).length > 0 || (carryoverData ?? []).length > 0) {
+  if (blockingLiveLoans.length > 0 || blockingCarryoverLoans.length > 0) {
     const label =
       loanKind === "financial"
         ? "financial"
@@ -9796,14 +9811,20 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       },
       policySettings,
     );
+    const today = new Date().toISOString().slice(0, 10);
     const status =
       computedSummary.totalOwedNow <= 0
         ? "closed"
-        : data.status === "closed"
-          ? computedSummary.dueDate < new Date().toISOString().slice(0, 10)
-            ? "defaulted"
-            : "active"
-          : data.status;
+        : computedSummary.dueDate < today
+          ? "defaulted"
+          : "active";
+    if (status !== "closed") {
+      await assertNoDuplicateOpenLoanKind(runtimeDb, {
+        memberId: data.memberId,
+        loanKind: data.loanKind,
+        excludeLoanId: id,
+      });
+    }
     const { error } = await runtimeDb.from("member_carryover_loans").upsert({
       id,
       member_id: data.memberId,
@@ -9819,7 +9840,7 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
       closed_on: data.closedOn ?? (status === "closed" ? dueDate : null),
       paid_to_date: data.paidToDate,
       status,
-      finished: computedSummary.totalOwedNow <= 0,
+      finished: status === "closed",
       penalty_waived_amount: data.penaltyWaivedAmount,
       fee_breakdown: data.feeBreakdown,
       notes: data.notes ?? null,

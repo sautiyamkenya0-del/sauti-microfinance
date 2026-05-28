@@ -6,11 +6,18 @@ import { Section, StatCard } from "@/components/ui-bits";
 import {
   fmtKES,
   isMemberCategory,
+  loanPenaltySummary,
   loanSummary,
   sbcDeductions,
   transactionFeeAmountForLoan,
   useStore,
 } from "@/lib/store";
+import {
+  fuelEntryDayLabel,
+  normalizeFuelJobCardRows,
+  summarizeFuelJobCardRows,
+  type FuelJobCardRow,
+} from "@/components/loans/FuelJobCardFields";
 import { createReportSnapshotRecord } from "@/lib/app-data.functions";
 import {
   summarizeLegacyCarryoverLoan,
@@ -44,6 +51,19 @@ type BookRow = {
   count: number;
   amount: number;
   note: string;
+};
+
+type ReportScope = "daily" | "monthly" | "full";
+
+type FuelReportRow = {
+  key: string;
+  loanId: string;
+  source: "live" | "carryover";
+  memberId: string;
+  memberName: string;
+  vehiclePlate: string;
+  entry: FuelJobCardRow;
+  entryIndex: number;
 };
 
 const PURPOSE_POOL_DISTRIBUTION = [
@@ -93,6 +113,8 @@ function ReportsPage() {
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [purposePoolMemberId, setPurposePoolMemberId] = useState("");
+  const [reportScope, setReportScope] = useState<ReportScope>("daily");
+  const [fuelMemberId, setFuelMemberId] = useState("");
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -215,6 +237,168 @@ function ReportsPage() {
     (sum, penalty) => sum + penalty.amount,
     0,
   );
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const reportWindowRange = reportWindow(reportScope, todayIso);
+  const inReportWindow = (date?: string) =>
+    reportScope === "full" ||
+    (!!date &&
+      date.slice(0, 10) >= reportWindowRange.start &&
+      date.slice(0, 10) <= reportWindowRange.end);
+  const periodMembersJoined = memberAccounts.filter((member) => inReportWindow(member.joinedAt));
+  const periodTransactions = transactions.filter((transaction) => inReportWindow(transaction.date));
+  const periodPenalties = penalties.filter((penalty) => inReportWindow(penalty.date));
+  const periodRoundOff = roundOff.filter((entry) => inReportWindow(entry.date));
+  const periodPettyCash = pettyCash.filter((entry) => inReportWindow(entry.date));
+  const periodLiveLoans = loans.filter((loan) => inReportWindow(loan.startDate));
+  const periodCarryoverLoans = carryoverLoans.filter((loan) => inReportWindow(loan.startDate));
+  const liveLoanHealth = loans
+    .filter((loan) => loan.status !== "pending" && loan.status !== "rejected")
+    .map((loan) => {
+      const summary = loanPenaltySummary(loan, transactions, todayIso);
+      return {
+        loan,
+        summary,
+        status:
+          summary.totalOwedNow <= 0
+            ? "closed"
+            : summary.dueDate < todayIso || loan.status === "defaulted"
+              ? "defaulted"
+              : "active",
+      };
+    });
+  const carryoverLoanHealth = carryoverLoanRows.map((row) => ({
+    ...row,
+    status:
+      row.summary.totalOwedNow <= 0
+        ? "closed"
+        : row.summary.dueDate < todayIso || row.loan.status === "defaulted"
+          ? "defaulted"
+          : "active",
+  }));
+  const allLoanHealth = [
+    ...liveLoanHealth.map((row) => ({
+      kind: row.loan.loanKind ?? "financial",
+      status: row.status,
+      expected: row.summary.totalExpectedCollected,
+      paid: row.summary.totalPaid,
+      penalties: row.summary.totalPenalty,
+      defaulted: row.summary.defaultedAmount,
+      balance: row.summary.totalOwedNow,
+    })),
+    ...carryoverLoanHealth.map((row) => ({
+      kind: row.loan.loanKind ?? "financial",
+      status: row.status,
+      expected: row.summary.totalExpectedCollected,
+      paid: row.loan.paidToDate,
+      penalties: row.summary.estimatedPenaltyNow,
+      defaulted: row.status === "defaulted" ? row.summary.totalOwedNow : 0,
+      balance: row.summary.totalOwedNow,
+    })),
+  ];
+  const activeLoanCount = allLoanHealth.filter((row) => row.status === "active").length;
+  const defaultedLoanCount = allLoanHealth.filter((row) => row.status === "defaulted").length;
+  const closedLoanCount = allLoanHealth.filter((row) => row.status === "closed").length;
+  const periodMoneyRows: BookRow[] = [
+    movementRow(
+      "members_joined",
+      "Members joined",
+      periodMembersJoined.length,
+      0,
+      "New member accounts opened in the selected period.",
+    ),
+    movementRow(
+      "deposits",
+      "Deposits",
+      periodTransactions,
+      "deposit",
+      "Member savings deposits collected.",
+    ),
+    movementRow(
+      "withdrawals",
+      "Withdrawals",
+      periodTransactions,
+      "withdrawal",
+      "Member withdrawals paid out.",
+    ),
+    movementRow(
+      "loan_repayments",
+      "Loan repayments",
+      periodTransactions,
+      "loan_repayment",
+      "Loan money collected in the selected period.",
+    ),
+    movementRow(
+      "loan_disbursements",
+      "Loan disbursements",
+      periodTransactions,
+      "loan_disbursement",
+      "Loan money sent out.",
+    ),
+    movementRow(
+      "share_purchases",
+      "Share purchases",
+      periodTransactions,
+      "share_purchase",
+      "Share capital collected.",
+    ),
+    movementRow(
+      "fee_payments",
+      "Fees",
+      periodTransactions,
+      "fee_payment",
+      "Membership, card, sticker, purpose-pool, and related fee collections.",
+    ),
+    movementRow(
+      "investor_contributions",
+      "Investor contributions",
+      periodTransactions,
+      "investor_contribution",
+      "Investor capital received.",
+    ),
+    movementRow(
+      "petty_cash",
+      "Petty cash expenses",
+      periodPettyCash.length,
+      periodPettyCash.reduce((sum, entry) => sum + entry.amount, 0),
+      "Operating expenses recorded.",
+    ),
+    movementRow(
+      "penalties",
+      "Penalties",
+      periodPenalties.length,
+      periodPenalties.reduce((sum, penalty) => sum + penalty.amount, 0),
+      "Paid, outstanding, and waived penalty records created in this period.",
+    ),
+    movementRow(
+      "round_off",
+      "Round-off collected",
+      periodRoundOff.length,
+      periodRoundOff.reduce((sum, entry) => sum + entry.amount, 0),
+      "Small rounding surplus captured.",
+    ),
+  ];
+  const loanCategoryReportRows = (["financial", "fuel", "stock", "service"] as const).map(
+    (kind) => {
+      const rows = allLoanHealth.filter((row) => row.kind === kind);
+      return {
+        key: kind,
+        label: `${kind[0].toUpperCase()}${kind.slice(1)} loans`,
+        active: rows.filter((row) => row.status === "active").length,
+        defaulted: rows.filter((row) => row.status === "defaulted").length,
+        closed: rows.filter((row) => row.status === "closed").length,
+        expected: rows.reduce((sum, row) => sum + row.expected, 0),
+        paid: rows.reduce((sum, row) => sum + row.paid, 0),
+        penalties: rows.reduce((sum, row) => sum + row.penalties, 0),
+        defaultedAmount: rows.reduce((sum, row) => sum + row.defaulted, 0),
+        balance: rows.reduce((sum, row) => sum + row.balance, 0),
+      };
+    },
+  );
+  const fuelReportRows = buildFuelReportRows({ loans, carryoverLoans, members }).filter(
+    (row) =>
+      (!fuelMemberId || row.memberId === fuelMemberId) && inReportWindow(row.entry.date || ""),
+  );
+  const fuelReportSummary = summarizeFuelJobCardRows(fuelReportRows.map((row) => row.entry));
 
   const totalRevenue =
     interestEarned +
@@ -411,6 +595,122 @@ function ReportsPage() {
             tone="warning"
           />
         </div>
+
+        <Section
+          title="Daily / Monthly / Full Report"
+          action={
+            <div className="flex flex-wrap gap-1">
+              {(["daily", "monthly", "full"] as ReportScope[]).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => setReportScope(scope)}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium capitalize ${
+                    reportScope === scope
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-card hover:bg-muted"
+                  }`}
+                >
+                  {scope}
+                </button>
+              ))}
+            </div>
+          }
+        >
+          <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
+            <MiniStat
+              label="Report Window"
+              value={
+                reportScope === "full"
+                  ? "Full"
+                  : `${reportWindowRange.start} -> ${reportWindowRange.end}`
+              }
+            />
+            <MiniStat label="Members Joined" value={String(periodMembersJoined.length)} />
+            <MiniStat
+              label="Active / Defaulted"
+              value={`${activeLoanCount} / ${defaultedLoanCount}`}
+            />
+            <MiniStat
+              label="Fuel Consumed"
+              value={`${fuelReportSummary.totalLiters.toFixed(2)} L`}
+            />
+          </div>
+        </Section>
+
+        <BookTable
+          title="Period Movement"
+          rows={periodMoneyRows}
+          totalLabel="Money movement"
+          totalCount={periodMoneyRows.reduce((sum, row) => sum + row.count, 0)}
+          totalAmount={periodMoneyRows.reduce((sum, row) => sum + row.amount, 0)}
+          totalNote="Total of all amount-bearing activity in the selected report window."
+        />
+
+        <Section title="Loan Category Status">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Category</th>
+                  <th className="px-5 py-3 text-right">Active</th>
+                  <th className="px-5 py-3 text-right">Defaulted</th>
+                  <th className="px-5 py-3 text-right">Finished</th>
+                  <th className="px-5 py-3 text-right">Expected</th>
+                  <th className="px-5 py-3 text-right">Paid</th>
+                  <th className="px-5 py-3 text-right">Penalties</th>
+                  <th className="px-5 py-3 text-right">Defaulted Amount</th>
+                  <th className="px-5 py-3 text-right">Balance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {loanCategoryReportRows.map((row) => (
+                  <tr key={row.key}>
+                    <td className="px-5 py-3 font-medium">{row.label}</td>
+                    <td className="px-5 py-3 text-right">{row.active}</td>
+                    <td className="px-5 py-3 text-right">{row.defaulted}</td>
+                    <td className="px-5 py-3 text-right">{row.closed}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.expected)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.paid)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.penalties)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.defaultedAmount)}</td>
+                    <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
+            Statuses are derived from repayment balance and dates, so a loan with unpaid balance
+            past due is reported as defaulted even if an old row was manually marked otherwise.
+          </div>
+        </Section>
+
+        <Section
+          title="Fuel Consumption"
+          action={
+            <select
+              value={fuelMemberId}
+              onChange={(event) => setFuelMemberId(event.target.value)}
+              className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
+            >
+              <option value="">All clients</option>
+              {memberAccounts.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.id} - {member.name}
+                </option>
+              ))}
+            </select>
+          }
+        >
+          <div className="grid gap-3 p-5 sm:grid-cols-4">
+            <MiniStat label="Entries" value={String(fuelReportRows.length)} />
+            <MiniStat label="Liters" value={`${fuelReportSummary.totalLiters.toFixed(2)} L`} />
+            <MiniStat label="Fuel Total" value={fmtKES(fuelReportSummary.totalCost)} />
+            <MiniStat label="Fuel Charges" value={fmtKES(fuelReportSummary.totalFuelCharge)} />
+          </div>
+          <FuelReportTable rows={fuelReportRows} />
+        </Section>
 
         <BookTable
           title="Company Book"
@@ -887,6 +1187,225 @@ function summarizeOfficerPerformance(
 function monthLabel(key: string) {
   const [year, month] = key.split("-").map(Number);
   return new Intl.DateTimeFormat("en-KE", { month: "short" }).format(new Date(year, month - 1, 1));
+}
+
+function reportWindow(scope: ReportScope, todayIso: string) {
+  if (scope === "full") return { start: "0000-01-01", end: todayIso };
+  if (scope === "monthly") return { start: `${todayIso.slice(0, 7)}-01`, end: todayIso };
+  return { start: todayIso, end: todayIso };
+}
+
+function movementRow(
+  key: string,
+  label: string,
+  source: Array<{ type?: string; amount?: number }> | number,
+  typeOrAmount: string | number,
+  note: string,
+): BookRow {
+  if (Array.isArray(source) && typeof typeOrAmount === "string") {
+    const rows = source.filter((row) => row.type === typeOrAmount);
+    return {
+      key,
+      label,
+      count: rows.length,
+      amount: rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0),
+      note,
+    };
+  }
+  return {
+    key,
+    label,
+    count: Number(source ?? 0),
+    amount: Number(typeOrAmount ?? 0),
+    note,
+  };
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function textValue(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function numberValue(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, next) : 0;
+}
+
+function meaningfulFuelRows(rows: FuelJobCardRow[]) {
+  return rows.filter(
+    (row) =>
+      row.date ||
+      row.time ||
+      row.fuelType ||
+      row.attendantName ||
+      row.liters > 0 ||
+      row.pricePerLitre > 0 ||
+      row.total > 0 ||
+      row.fuelCharge > 0 ||
+      row.odometerReading > 0,
+  );
+}
+
+function fuelRowsFromLiveLoan(loan: ReturnType<typeof useStore>["loans"][number]) {
+  const payload = objectValue(loan.supplierPayload);
+  const jobCard = objectValue(payload.jobCard);
+  const rows = meaningfulFuelRows(normalizeFuelJobCardRows(jobCard.rows ?? payload.fuelEntries, 1));
+  if (rows.length > 0) return rows;
+  const fallbackTotal = numberValue(payload.estimatedTotal ?? loan.principal);
+  const fallbackCharge = numberValue(payload.fuelCharge ?? payload.productChargeAmount);
+  if (fallbackTotal <= 0 && fallbackCharge <= 0) return [];
+  return normalizeFuelJobCardRows(
+    [
+      {
+        date: loan.startDate,
+        fuelType: textValue(payload.fuelType),
+        liters: numberValue(payload.litres ?? payload.liters),
+        pricePerLitre: numberValue(payload.unitPrice ?? payload.pricePerLitre),
+        total: fallbackTotal,
+        fuelCharge: fallbackCharge,
+      },
+    ],
+    1,
+  );
+}
+
+function fuelRowsFromCarryoverLoan(loan: LegacyCarryoverLoan) {
+  const productMeta = objectValue(loan.feeBreakdown?.productMeta);
+  const jobCard = objectValue(productMeta.jobCard);
+  const rows = meaningfulFuelRows(
+    normalizeFuelJobCardRows(productMeta.fuelEntries ?? jobCard.rows, 1),
+  );
+  if (rows.length > 0) return rows;
+  const fallbackTotal = numberValue(productMeta.fuelAmount ?? loan.principal);
+  const fallbackCharge = numberValue(
+    productMeta.fuelCharge ?? loan.feeBreakdown?.processingFeeAmount,
+  );
+  if (fallbackTotal <= 0 && fallbackCharge <= 0) return [];
+  return normalizeFuelJobCardRows(
+    [{ date: loan.startDate, total: fallbackTotal, fuelCharge: fallbackCharge }],
+    1,
+  );
+}
+
+function buildFuelReportRows(args: {
+  loans: ReturnType<typeof useStore>["loans"];
+  carryoverLoans: LegacyCarryoverLoan[];
+  members: ReturnType<typeof useStore>["members"];
+}): FuelReportRow[] {
+  const liveRows = args.loans.flatMap((loan) => {
+    if ((loan.loanKind ?? "financial") !== "fuel") return [];
+    const member = args.members.find((item) => item.id === loan.memberId);
+    const vehiclePlate =
+      textValue(loan.supplierPayload?.vehiclePlate) || member?.vehiclePlate || "";
+    return fuelRowsFromLiveLoan(loan).map((entry, entryIndex) => ({
+      key: `live-${loan.id}-${entryIndex}`,
+      loanId: loan.id,
+      source: "live" as const,
+      memberId: loan.memberId,
+      memberName: member?.name ?? "",
+      vehiclePlate,
+      entry,
+      entryIndex,
+    }));
+  });
+  const carryoverRows = args.carryoverLoans.flatMap((loan) => {
+    if ((loan.loanKind ?? "financial") !== "fuel") return [];
+    const member = args.members.find((item) => item.id === loan.memberId);
+    const vehiclePlate =
+      textValue(loan.feeBreakdown?.productMeta?.vehiclePlate) || member?.vehiclePlate || "";
+    return fuelRowsFromCarryoverLoan(loan).map((entry, entryIndex) => ({
+      key: `carryover-${loan.id}-${entryIndex}`,
+      loanId: loan.id,
+      source: "carryover" as const,
+      memberId: loan.memberId,
+      memberName: member?.name ?? "",
+      vehiclePlate,
+      entry,
+      entryIndex,
+    }));
+  });
+  return [...liveRows, ...carryoverRows].sort((a, b) =>
+    String(b.entry.date).localeCompare(String(a.entry.date)),
+  );
+}
+
+function fuelEntryTotal(entry: FuelJobCardRow) {
+  return entry.total > 0 ? entry.total : entry.liters * entry.pricePerLitre;
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function FuelReportTable({ rows }: { rows: FuelReportRow[] }) {
+  return (
+    <div className="overflow-x-auto border-t border-border">
+      <table className="min-w-[1180px] w-full text-xs">
+        <thead className="bg-muted/50 text-muted-foreground uppercase">
+          <tr>
+            <th className="px-3 py-2 text-left">Member</th>
+            <th className="px-3 py-2 text-left">Plate</th>
+            <th className="px-3 py-2 text-left">Loan</th>
+            <th className="px-3 py-2 text-left">Date</th>
+            <th className="px-3 py-2 text-left">Time</th>
+            <th className="px-3 py-2 text-left">Fuel Type</th>
+            <th className="px-3 py-2 text-right">Liters</th>
+            <th className="px-3 py-2 text-right">Price/Litre</th>
+            <th className="px-3 py-2 text-right">Total</th>
+            <th className="px-3 py-2 text-right">Fuel Charge</th>
+            <th className="px-3 py-2 text-left">Attendant</th>
+            <th className="px-3 py-2 text-right">Odometer</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <td className="px-3 py-2">
+                <div className="font-medium">{row.memberName || "-"}</div>
+                <div className="font-mono text-[10px] text-muted-foreground">{row.memberId}</div>
+              </td>
+              <td className="px-3 py-2 font-mono">{row.vehiclePlate || "-"}</td>
+              <td className="px-3 py-2">
+                {row.loanId}
+                <div className="text-[10px] uppercase text-muted-foreground">{row.source}</div>
+              </td>
+              <td className="px-3 py-2">
+                <div>{row.entry.date || "-"}</div>
+                <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+                  {fuelEntryDayLabel(row.entry, row.entryIndex)}
+                </div>
+              </td>
+              <td className="px-3 py-2">{row.entry.time || "-"}</td>
+              <td className="px-3 py-2">{row.entry.fuelType || "-"}</td>
+              <td className="px-3 py-2 text-right">{row.entry.liters.toFixed(2)}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(row.entry.pricePerLitre)}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(fuelEntryTotal(row.entry))}</td>
+              <td className="px-3 py-2 text-right">{fmtKES(row.entry.fuelCharge)}</td>
+              <td className="px-3 py-2">{row.entry.attendantName || "-"}</td>
+              <td className="px-3 py-2 text-right">
+                {row.entry.odometerReading > 0 ? row.entry.odometerReading.toFixed(0) : "-"}
+              </td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={12} className="px-3 py-6 text-center text-muted-foreground">
+                No fuel records match this report window.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function Row({ label, value, bold }: { label: string; value: number; bold?: boolean }) {

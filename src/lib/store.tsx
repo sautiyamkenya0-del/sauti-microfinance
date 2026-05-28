@@ -47,6 +47,7 @@ import {
   type MemberCategory,
 } from "@/lib/membership";
 import { normalizeFeePolicies, type FeePolicy } from "@/lib/fees-policy";
+import { buildLoanDailyLedger } from "@/lib/loan-calculations";
 import {
   DEFAULT_POLICY_SETTINGS,
   getActivePolicySettings,
@@ -1524,31 +1525,6 @@ export function loanSummary(
   };
 }
 
-function dateOnlyValue(value?: string) {
-  if (!value) return "";
-  return value.slice(0, 10);
-}
-
-function addCalendarDays(date: string, days: number) {
-  const next = new Date(`${dateOnlyValue(date)}T00:00:00`);
-  next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
-}
-
-function diffCalendarDays(from: string, to: string) {
-  const start = new Date(`${dateOnlyValue(from)}T00:00:00`).getTime();
-  const end = new Date(`${dateOnlyValue(to)}T00:00:00`).getTime();
-  return Math.floor((end - start) / (24 * 60 * 60 * 1000));
-}
-
-function compoundedPenalty(baseAmount: number, pct: number, days: number) {
-  const principal = Math.max(0, Number(baseAmount ?? 0));
-  const dailyRate = Math.max(0, Number(pct ?? 0)) / 100;
-  const normalizedDays = Math.max(0, Math.floor(Number(days ?? 0)));
-  if (principal <= 0 || dailyRate <= 0 || normalizedDays <= 0) return 0;
-  return principal * (Math.pow(1 + dailyRate, normalizedDays) - 1);
-}
-
 export function loanPenaltySummary(
   loan: Loan,
   transactions: Transaction[] = [],
@@ -1556,74 +1532,51 @@ export function loanPenaltySummary(
 ) {
   const summary = loanSummary(loan);
   const dailyExpected = summary.dailyCollectionAmount;
-  const startDate = dateOnlyValue(loan.startDate);
-  const today = dateOnlyValue(loan.frozenAt || asOfDate);
-  const dueDate = summary.dueDate;
-  const supplierBacked =
-    loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service";
+  const today = (loan.frozenAt || asOfDate).slice(0, 10);
   const totalExpectedCollected = dailyExpected * summary.termDays;
-  const paymentsByDate = new Map<string, number>();
+  const payments: { date: string; amount: number }[] = [];
 
   for (const transaction of transactions) {
     if (transaction.type !== "loan_repayment") continue;
     if (transaction.loanId !== loan.id) continue;
-    const paymentDate = dateOnlyValue(transaction.createdAt || transaction.date);
-    paymentsByDate.set(paymentDate, (paymentsByDate.get(paymentDate) ?? 0) + transaction.amount);
+    payments.push({
+      date: (transaction.createdAt || transaction.date).slice(0, 10),
+      amount: transaction.amount,
+    });
   }
 
-  const transactionPaid = Array.from(paymentsByDate.values()).reduce(
-    (sum, amount) => sum + amount,
-    0,
-  );
+  const transactionPaid = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const totalPaid = Math.max(Number(loan.paid ?? 0), transactionPaid);
-  const lastDailyDate = diffCalendarDays(startDate, today) >= 0 ? today : startDate;
-  const dailyLoopDays = Math.max(
-    0,
-    Math.min(summary.termDays, diffCalendarDays(startDate, lastDailyDate) + 1),
-  );
-  let dailyUnpaidBalance = 0;
-  let dailyPenalty = 0;
-  let skippedPaymentDays = 0;
-  let paymentCredit = 0;
-
-  for (let offset = 0; offset < dailyLoopDays; offset += 1) {
-    const day = addCalendarDays(startDate, offset);
-    paymentCredit += paymentsByDate.get(day) ?? 0;
-    const expectedToday = dailyUnpaidBalance + dailyExpected;
-    const paidToday = paymentCredit;
-    const isPastCollectionDay = diffCalendarDays(day, today) > 0;
-    const unpaidAfterPayment = Math.max(0, expectedToday - paidToday);
-    if (!supplierBacked && isPastCollectionDay && unpaidAfterPayment > 0) {
-      dailyPenalty += unpaidAfterPayment * (SBC_FEES.penaltyDailyPct / 100);
-      skippedPaymentDays += 1;
-    }
-    dailyUnpaidBalance = unpaidAfterPayment;
-    paymentCredit = Math.max(0, paidToday - expectedToday);
-  }
-
-  const rawDaysPastDue = Math.max(0, diffCalendarDays(dueDate, today));
-  const dueDatePenaltyBase = Math.max(0, totalExpectedCollected + dailyPenalty - totalPaid);
-  const dueDatePenalty = supplierBacked
-    ? dueDatePenaltyBase * (SBC_FEES.penaltyDailyPct / 100) * rawDaysPastDue
-    : compoundedPenalty(dueDatePenaltyBase, SBC_FEES.defaultPenaltyPct, rawDaysPastDue);
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
-  const totalPenalty = Math.max(0, dailyPenalty + dueDatePenalty - penaltyWaivedAmount);
-  const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - totalPaid);
+  const ledger = buildLoanDailyLedger({
+    startDate: loan.startDate,
+    termDays: summary.termDays,
+    dailyInstallment: dailyExpected,
+    totalExpected: totalExpectedCollected,
+    asOfDate: today,
+    payments,
+    fallbackPaid: totalPaid,
+    penaltyPct: SBC_FEES.penaltyDailyPct,
+  });
+  const totalPenalty = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
+  const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - ledger.totalPaid);
 
   return {
     ...summary,
     totalExpectedCollected,
-    totalPaid,
+    totalPaid: ledger.totalPaid,
     dailyExpected,
-    dailyUnpaidBalance,
-    dailyPenalty,
-    skippedPaymentDays,
-    daysPastDue: rawDaysPastDue,
-    dueDatePenaltyBase,
-    dueDatePenalty,
+    dailyUnpaidBalance: ledger.currentDailyBalance,
+    dailyPenalty: ledger.automaticPenaltyAmount,
+    skippedPaymentDays: ledger.penaltyDays,
+    daysPastDue: ledger.daysPastDue,
+    dueDatePenaltyBase: ledger.currentDailyBalance,
+    dueDatePenalty: 0,
     penaltyWaivedAmount,
     totalPenalty,
     totalOwedNow,
+    defaultedAmount: ledger.defaultedAmount,
+    repaymentLedger: ledger.rows,
   };
 }
 

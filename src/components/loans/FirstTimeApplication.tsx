@@ -21,6 +21,7 @@ import { Input, Select, Row, inputCss } from "./atoms";
 import {
   FuelJobCardFields,
   blankFuelJobCardRows,
+  resizeFuelJobCardRows,
   summarizeFuelJobCardRows,
 } from "./FuelJobCardFields";
 import { useEffect, useMemo, useState } from "react";
@@ -92,6 +93,7 @@ export function FirstTimeApplication({
     fuelCharge: 0,
     fuelWeekStarting: "",
     fuelWeekEnding: "",
+    fuelEntryCount: 1,
     fuelJobCardRows: blankFuelJobCardRows(1),
     stockItem: "",
     stockQuantity: 0,
@@ -124,7 +126,7 @@ export function FirstTimeApplication({
   const stockComputedTotal = f.stockQuantity * f.stockUnitPrice;
   const requestedLoanAmount =
     f.loanKind === "fuel"
-      ? fuelJobCardSummary.totalCost || fuelFallbackTotal || f.loanAmount
+      ? fuelJobCardSummary.totalCost
       : f.loanKind === "stock"
         ? stockComputedTotal || f.loanAmount
         : f.loanAmount;
@@ -302,6 +304,9 @@ export function FirstTimeApplication({
     }
     if (f.loanKind === "fuel" && !resolvedVehiclePlate) {
       return toast.error("Enter the locomotive vehicle plate on the first fuel application.");
+    }
+    if (f.loanKind === "fuel" && requestedLoanAmount <= 0) {
+      return toast.error("Enter at least one fuel refill entry.");
     }
     try {
       let mid = members.find((x) => x.phone === phone)?.id;
@@ -575,24 +580,28 @@ export function FirstTimeApplication({
             }}
             options={loanKindOptions}
           />
-          <Input
-            type="number"
-            label={f.loanKind === "fuel" ? "Fallback Fuel Amount (KSh)" : "Amount Requested (KSh)"}
-            value={String(f.loanAmount)}
-            onChange={(v) => set("loanAmount", Number(v))}
-          />
-          <Input
-            type="number"
-            label="Override Interest %"
-            value={String(f.overrideRatePct)}
-            onChange={(v) => set("overrideRatePct", Math.max(0, Number(v)))}
-          />
-          <Select
-            label="Purpose"
-            value={f.purpose}
-            onChange={(v) => set("purpose", v)}
-            options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
-          />
+          {f.loanKind !== "fuel" ? (
+            <>
+              <Input
+                type="number"
+                label="Amount Requested (KSh)"
+                value={String(f.loanAmount)}
+                onChange={(v) => set("loanAmount", Number(v))}
+              />
+              <Input
+                type="number"
+                label="Override Interest %"
+                value={String(f.overrideRatePct)}
+                onChange={(v) => set("overrideRatePct", Math.max(0, Number(v)))}
+              />
+              <Select
+                label="Purpose"
+                value={f.purpose}
+                onChange={(v) => set("purpose", v)}
+                options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
+              />
+            </>
+          ) : null}
           {f.loanKind === "fuel" && (
             <>
               {existing?.vehiclePlate ? (
@@ -609,6 +618,19 @@ export function FirstTimeApplication({
                   onChange={(v) => set("vehiclePlate", v.toUpperCase())}
                 />
               )}
+              <Input
+                type="number"
+                label="Fuel Entries"
+                value={String(f.fuelEntryCount)}
+                onChange={(v) => {
+                  const count = Math.max(1, Math.floor(Number(v) || 1));
+                  setF((prev) => ({
+                    ...prev,
+                    fuelEntryCount: count,
+                    fuelJobCardRows: resizeFuelJobCardRows(prev.fuelJobCardRows, count),
+                  }));
+                }}
+              />
               <FuelJobCardFields
                 rows={f.fuelJobCardRows}
                 onChange={(rows) => set("fuelJobCardRows", rows)}
@@ -645,7 +667,7 @@ export function FirstTimeApplication({
               onChange={(v) => set("serviceType", v)}
             />
           )}
-          {f.loanKind !== "financial" && (
+          {f.loanKind !== "financial" && f.loanKind !== "fuel" && (
             <label className="block md:col-span-2 lg:col-span-3">
               <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
                 Supplier Notes
@@ -658,52 +680,51 @@ export function FirstTimeApplication({
               />
             </label>
           )}
-          <Select
-            label="Repayment Plan"
-            value={f.repaymentPlan}
-            onChange={(v) => set("repaymentPlan", v as "Daily" | "Weekly" | "Monthly")}
-            options={["Daily", "Weekly", "Monthly"]}
-          />
-          <Input
-            type="number"
-            label={f.loanKind === "fuel" ? "Repayment Hours / Days" : "Repayment Days"}
-            value={String(f.repaymentDays)}
-            onChange={(v) =>
-              set("repaymentDays", f.loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))
-            }
-          />
-          {f.loanKind === "fuel" ? (
-            <Input label="Repayment Term" value="24 hours" onChange={() => {}} />
-          ) : (
-            <Select
-              label="Repayment Term Band"
-              value={String(calc.termDays)}
-              onChange={(v) => set("repaymentDays", Number(v))}
-              options={repaymentOptions.map((d) => String(d))}
-            />
-          )}
-          <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
-            Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
-            at {calc.ratePct}%. Enter an override above to use a custom percentage for this loan.
-          </div>
-          <Select
-            label="Daily Compliance Contribution Plan"
-            value={f.dailyCompliancePlan}
-            onChange={(v) => set("dailyCompliancePlan", v as "50" | "100")}
-            options={["50", "100"]}
-          />
-          <Select
-            label="Processing Fee"
-            value={f.processingFeeMode}
-            onChange={(v) => set("processingFeeMode", v as LoanChargeMode)}
-            options={["financed", "upfront"]}
-          />
-          <Select
-            label="Insurance Fee"
-            value={f.insuranceFeeMode}
-            onChange={(v) => set("insuranceFeeMode", v as LoanChargeMode)}
-            options={["financed", "upfront"]}
-          />
+          {f.loanKind !== "fuel" ? (
+            <>
+              <Select
+                label="Repayment Plan"
+                value={f.repaymentPlan}
+                onChange={(v) => set("repaymentPlan", v as "Daily" | "Weekly" | "Monthly")}
+                options={["Daily", "Weekly", "Monthly"]}
+              />
+              <Input
+                type="number"
+                label="Repayment Days"
+                value={String(f.repaymentDays)}
+                onChange={(v) => set("repaymentDays", Math.max(1, Number(v) || 0))}
+              />
+              <Select
+                label="Repayment Term Band"
+                value={String(calc.termDays)}
+                onChange={(v) => set("repaymentDays", Number(v))}
+                options={repaymentOptions.map((d) => String(d))}
+              />
+              <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
+                Manual {f.repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest
+                band at {calc.ratePct}%. Enter an override above to use a custom percentage for this
+                loan.
+              </div>
+              <Select
+                label="Daily Compliance Contribution Plan"
+                value={f.dailyCompliancePlan}
+                onChange={(v) => set("dailyCompliancePlan", v as "50" | "100")}
+                options={["50", "100"]}
+              />
+              <Select
+                label="Processing Fee"
+                value={f.processingFeeMode}
+                onChange={(v) => set("processingFeeMode", v as LoanChargeMode)}
+                options={["financed", "upfront"]}
+              />
+              <Select
+                label="Insurance Fee"
+                value={f.insuranceFeeMode}
+                onChange={(v) => set("insuranceFeeMode", v as LoanChargeMode)}
+                options={["financed", "upfront"]}
+              />
+            </>
+          ) : null}
           <Select
             label={`Registration Fee (${fmtKES(membershipFeeDue)})`}
             value={f.registrationFeeMode}
@@ -960,66 +981,81 @@ export function FirstTimeApplication({
       </Section>
 
       <Section title="8. Disbursement Computation (Official Use)">
-        <div className="p-5 grid md:grid-cols-2 gap-6">
-          <div className="space-y-2">
-            <Row label="Loan Amount Applied" value={fmtKES(requestedLoanAmount)} />
-            <Row label="Interest" value={fmtKES(calc.interest)} />
-            <Row
-              label={`Processing (${SBC_FEES.processingPct}%)`}
-              value={fmtKES(calc.ded.processing)}
-            />
-            <Row
-              label={`Insurance (${SBC_FEES.insurancePct}%)`}
-              value={fmtKES(calc.ded.insurance)}
-            />
-            <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
-            <Row label="Fixed Fees Financed" value={fmtKES(calc.fixedFeesFinanced)} />
-            <Row label="Total Financed Charges" value={fmtKES(calc.totalFinancedCharges)} bold />
+        {f.loanKind === "fuel" ? (
+          <div className="p-5 grid md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <Row label="Fuel Total" value={fmtKES(requestedLoanAmount)} />
+              <Row label="Fuel Charge" value={fmtKES(fuelChargeTotal)} />
+              <Row label="Liters" value={`${fuelJobCardSummary.totalLiters.toFixed(2)} L`} />
+            </div>
+            <div className="space-y-2">
+              <Row label="Total Due" value={fmtKES(calc.total)} bold />
+              <Row label="Entries" value={String(f.fuelJobCardRows.length)} />
+              <Row label="Repayment Period" value="24 hours" />
+            </div>
           </div>
-          <div className="space-y-2">
-            <Row label="Net Disbursable" value={fmtKES(calc.netDisbursed)} bold />
-            <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
-            <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
-            <Row label="Daily repayment (daily installment)" value={fmtKES(calc.dailyPay)} />
-            <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
-            <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
-            <Row label="Repayment Period" value={`${calc.termDays} days`} />
-            {calc.totalUpfrontNow > 0 && (
-              <div className="bg-muted/50 rounded-md p-3 text-xs">
-                <div className="font-medium text-foreground">
-                  {calc.upfrontBase.tier
-                    ? `Upfront for ${calc.upfrontBase.tier.range}:`
-                    : "First-time upfront:"}
-                </div>
-                {calc.upfrontBase.tier ? (
-                  <div>
-                    Remaining shares: {fmtKES(calc.upfront.minShares)} · Remaining savings:{" "}
-                    {fmtKES(calc.upfront.minSavings)}
+        ) : (
+          <div className="p-5 grid md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <Row label="Loan Amount Applied" value={fmtKES(requestedLoanAmount)} />
+              <Row label="Interest" value={fmtKES(calc.interest)} />
+              <Row
+                label={`Processing (${SBC_FEES.processingPct}%)`}
+                value={fmtKES(calc.ded.processing)}
+              />
+              <Row
+                label={`Insurance (${SBC_FEES.insurancePct}%)`}
+                value={fmtKES(calc.ded.insurance)}
+              />
+              <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
+              <Row label="Fixed Fees Financed" value={fmtKES(calc.fixedFeesFinanced)} />
+              <Row label="Total Financed Charges" value={fmtKES(calc.totalFinancedCharges)} bold />
+            </div>
+            <div className="space-y-2">
+              <Row label="Net Disbursable" value={fmtKES(calc.netDisbursed)} bold />
+              <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
+              <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
+              <Row label="Daily repayment (daily installment)" value={fmtKES(calc.dailyPay)} />
+              <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
+              <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
+              <Row label="Repayment Period" value={`${calc.termDays} days`} />
+              {calc.totalUpfrontNow > 0 && (
+                <div className="bg-muted/50 rounded-md p-3 text-xs">
+                  <div className="font-medium text-foreground">
+                    {calc.upfrontBase.tier
+                      ? `Upfront for ${calc.upfrontBase.tier.range}:`
+                      : "First-time upfront:"}
                   </div>
-                ) : null}
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">Remaining upfront base</span>
-                  <span>{fmtKES(calc.upfrontBase.total)}</span>
+                  {calc.upfrontBase.tier ? (
+                    <div>
+                      Remaining shares: {fmtKES(calc.upfront.minShares)} · Remaining savings:{" "}
+                      {fmtKES(calc.upfront.minSavings)}
+                    </div>
+                  ) : null}
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">Remaining upfront base</span>
+                    <span>{fmtKES(calc.upfrontBase.total)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">Fixed fees due upfront</span>
+                    <span>{fmtKES(calc.fixedFeesUpfront)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
+                    <span>Total upfront now</span>
+                    <span>{fmtKES(calc.totalUpfrontNow)}</span>
+                  </div>
+                  <div className="mt-1 text-muted-foreground">
+                    Processing upfront {fmtKES(calc.ded.processingUpfront)} · Insurance upfront{" "}
+                    {fmtKES(calc.ded.insuranceUpfront)}
+                  </div>
+                  <div className="mt-2 text-muted-foreground">
+                    Sticker fee is only added when the business setup is marked permanent.
+                  </div>
                 </div>
-                <div className="mt-1 flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">Fixed fees due upfront</span>
-                  <span>{fmtKES(calc.fixedFeesUpfront)}</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between gap-3 font-medium text-foreground">
-                  <span>Total upfront now</span>
-                  <span>{fmtKES(calc.totalUpfrontNow)}</span>
-                </div>
-                <div className="mt-1 text-muted-foreground">
-                  Processing upfront {fmtKES(calc.ded.processingUpfront)} · Insurance upfront{" "}
-                  {fmtKES(calc.ded.insuranceUpfront)}
-                </div>
-                <div className="mt-2 text-muted-foreground">
-                  Sticker fee is only added when the business setup is marked permanent.
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </Section>
 
       <div className="flex justify-end">

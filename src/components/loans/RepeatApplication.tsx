@@ -15,6 +15,7 @@ import { Input, Select, Snap, Row, inputCss } from "./atoms";
 import {
   FuelJobCardFields,
   blankFuelJobCardRows,
+  resizeFuelJobCardRows,
   summarizeFuelJobCardRows,
 } from "./FuelJobCardFields";
 import { useEffect, useMemo, useState } from "react";
@@ -53,6 +54,7 @@ export function RepeatApplication({
   const [fuelLitres, setFuelLitres] = useState(0);
   const [fuelUnitPrice, setFuelUnitPrice] = useState(0);
   const [fuelCharge, setFuelCharge] = useState(0);
+  const [fuelEntryCount, setFuelEntryCount] = useState(1);
   const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
   const [stockItem, setStockItem] = useState("");
   const [stockQuantity, setStockQuantity] = useState(0);
@@ -80,7 +82,7 @@ export function RepeatApplication({
   const stockComputedTotal = stockQuantity * stockUnitPrice;
   const requestedLoanAmount =
     loanKind === "fuel"
-      ? fuelJobCardSummary.totalCost || fuelFallbackTotal || loanAmount
+      ? fuelJobCardSummary.totalCost
       : loanKind === "stock"
         ? stockComputedTotal || loanAmount
         : loanAmount;
@@ -145,7 +147,12 @@ export function RepeatApplication({
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
       return toast.error("Confirm all KYC details first.");
     if (loanKind === "fuel" && !resolvedVehiclePlate) {
-      return toast.error("Add the locomotive vehicle plate on the member profile before repeat fuel.");
+      return toast.error(
+        "Add the locomotive vehicle plate on the member profile before repeat fuel.",
+      );
+    }
+    if (loanKind === "fuel" && requestedLoanAmount <= 0) {
+      return toast.error("Enter at least one fuel refill entry.");
     }
     try {
       const applicationPayload = {
@@ -302,30 +309,34 @@ export function RepeatApplication({
             }}
             options={loanKindOptions}
           />
-          <Input
-            type="number"
-            label={loanKind === "fuel" ? "Fallback Fuel Amount (KSh)" : "Amount Requested (KSh)"}
-            value={String(loanAmount)}
-            onChange={(v) => {
-              const nextAmount = Number(v);
-              setLoanAmount(nextAmount);
-              setLoanCategory(
-                loanProductTypeForAmount(nextAmount) === "premium" ? "Premium" : "Normal",
-              );
-            }}
-          />
-          <Input
-            type="number"
-            label="Override Interest %"
-            value={String(overrideRatePct)}
-            onChange={(v) => setOverrideRatePct(Math.max(0, Number(v)))}
-          />
-          <Select
-            label="Purpose"
-            value={purpose}
-            onChange={setPurpose}
-            options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
-          />
+          {loanKind !== "fuel" ? (
+            <>
+              <Input
+                type="number"
+                label="Amount Requested (KSh)"
+                value={String(loanAmount)}
+                onChange={(v) => {
+                  const nextAmount = Number(v);
+                  setLoanAmount(nextAmount);
+                  setLoanCategory(
+                    loanProductTypeForAmount(nextAmount) === "premium" ? "Premium" : "Normal",
+                  );
+                }}
+              />
+              <Input
+                type="number"
+                label="Override Interest %"
+                value={String(overrideRatePct)}
+                onChange={(v) => setOverrideRatePct(Math.max(0, Number(v)))}
+              />
+              <Select
+                label="Purpose"
+                value={purpose}
+                onChange={setPurpose}
+                options={["Fuel Credit", "Spare Parts", "Stock/Goods", "Emergencies", "Other"]}
+              />
+            </>
+          ) : null}
           {loanKind === "fuel" && (
             <>
               {member.vehiclePlate ? (
@@ -342,6 +353,16 @@ export function RepeatApplication({
                   onChange={(value) => setVehiclePlate(value.toUpperCase())}
                 />
               )}
+              <Input
+                type="number"
+                label="Fuel Entries"
+                value={String(fuelEntryCount)}
+                onChange={(value) => {
+                  const count = Math.max(1, Math.floor(Number(value) || 1));
+                  setFuelEntryCount(count);
+                  setFuelJobCardRows((current) => resizeFuelJobCardRows(current, count));
+                }}
+              />
               <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
             </>
           )}
@@ -371,7 +392,7 @@ export function RepeatApplication({
           {loanKind === "service" && (
             <Input label="Service Type" value={serviceType} onChange={setServiceType} />
           )}
-          {loanKind !== "financial" && (
+          {loanKind !== "financial" && loanKind !== "fuel" && (
             <label className="block md:col-span-2 lg:col-span-3">
               <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
                 Supplier Notes
@@ -384,81 +405,95 @@ export function RepeatApplication({
               />
             </label>
           )}
-          <Select
-            label="Repayment Plan"
-            value={repaymentPlan}
-            onChange={(v) => setRepaymentPlan(v as "Daily" | "Weekly" | "Monthly")}
-            options={["Daily", "Weekly", "Monthly"]}
-          />
-          <Input
-            type="number"
-            label={loanKind === "fuel" ? "Repayment Hours / Days" : "Repayment Days"}
-            value={String(repaymentDays)}
-            onChange={(v) =>
-              setRepaymentDays(loanKind === "fuel" ? 1 : Math.max(1, Number(v) || 0))
-            }
-          />
-          {loanKind === "fuel" ? (
-            <Input label="Repayment Term" value="24 hours" onChange={() => {}} />
-          ) : (
-            <Select
-              label="Repayment Term Band"
-              value={String(calc.termDays)}
-              onChange={(v) => setRepaymentDays(Number(v))}
-              options={repaymentOptions.map((d) => String(d))}
-            />
-          )}
-          <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
-            Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest band
-            at {calc.ratePct}%. Enter an override above to use a custom percentage for this loan.
-          </div>
-          <Select
-            label="Daily Compliance Contribution Plan"
-            value={compliancePlan}
-            onChange={(v) => setCompliancePlan(v as "50" | "100")}
-            options={["50", "100"]}
-          />
-          <Select
-            label="Processing Fee"
-            value={processingFeeMode}
-            onChange={(v) => setProcessingFeeMode(v as LoanChargeMode)}
-            options={["financed", "upfront"]}
-          />
-          <Select
-            label="Insurance Fee"
-            value={insuranceFeeMode}
-            onChange={(v) => setInsuranceFeeMode(v as LoanChargeMode)}
-            options={["financed", "upfront"]}
-          />
+          {loanKind !== "fuel" ? (
+            <>
+              <Select
+                label="Repayment Plan"
+                value={repaymentPlan}
+                onChange={(v) => setRepaymentPlan(v as "Daily" | "Weekly" | "Monthly")}
+                options={["Daily", "Weekly", "Monthly"]}
+              />
+              <Input
+                type="number"
+                label="Repayment Days"
+                value={String(repaymentDays)}
+                onChange={(v) => setRepaymentDays(Math.max(1, Number(v) || 0))}
+              />
+              <Select
+                label="Repayment Term Band"
+                value={String(calc.termDays)}
+                onChange={(v) => setRepaymentDays(Number(v))}
+                options={repaymentOptions.map((d) => String(d))}
+              />
+              <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
+                Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest
+                band at {calc.ratePct}%. Enter an override above to use a custom percentage for this
+                loan.
+              </div>
+              <Select
+                label="Daily Compliance Contribution Plan"
+                value={compliancePlan}
+                onChange={(v) => setCompliancePlan(v as "50" | "100")}
+                options={["50", "100"]}
+              />
+              <Select
+                label="Processing Fee"
+                value={processingFeeMode}
+                onChange={(v) => setProcessingFeeMode(v as LoanChargeMode)}
+                options={["financed", "upfront"]}
+              />
+              <Select
+                label="Insurance Fee"
+                value={insuranceFeeMode}
+                onChange={(v) => setInsuranceFeeMode(v as LoanChargeMode)}
+                options={["financed", "upfront"]}
+              />
+            </>
+          ) : null}
         </div>
       </Section>
 
       <Section title="Disbursement Computation">
-        <div className="p-5 grid md:grid-cols-2 gap-6">
-          <div className="space-y-2">
-            <Row label="Loan Amount" value={fmtKES(requestedLoanAmount)} />
-            <Row label="Interest" value={fmtKES(calc.interest)} />
-            <Row
-              label={`Processing (${SBC_FEES.processingPct}%)`}
-              value={fmtKES(calc.ded.processing)}
-            />
-            <Row
-              label={`Insurance (${SBC_FEES.insurancePct}%)`}
-              value={fmtKES(calc.ded.insurance)}
-            />
-            <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
-            <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
+        {loanKind === "fuel" ? (
+          <div className="p-5 grid md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <Row label="Fuel Total" value={fmtKES(requestedLoanAmount)} />
+              <Row label="Fuel Charge" value={fmtKES(fuelChargeTotal)} />
+              <Row label="Liters" value={`${fuelJobCardSummary.totalLiters.toFixed(2)} L`} />
+            </div>
+            <div className="space-y-2">
+              <Row label="Total Due" value={fmtKES(calc.total)} bold />
+              <Row label="Entries" value={String(fuelJobCardRows.length)} />
+              <Row label="Repayment Period" value="24 hours" />
+            </div>
           </div>
-          <div className="space-y-2">
-            <Row label="Net Disbursable" value={fmtKES(calc.net)} bold />
-            <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
-            <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
-            <Row label="Daily repayment (daily installment)" value={fmtKES(calc.daily)} />
-            <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
-            <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
-            <Row label="Period" value={`${calc.termDays} days`} />
+        ) : (
+          <div className="p-5 grid md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <Row label="Loan Amount" value={fmtKES(requestedLoanAmount)} />
+              <Row label="Interest" value={fmtKES(calc.interest)} />
+              <Row
+                label={`Processing (${SBC_FEES.processingPct}%)`}
+                value={fmtKES(calc.ded.processing)}
+              />
+              <Row
+                label={`Insurance (${SBC_FEES.insurancePct}%)`}
+                value={fmtKES(calc.ded.insurance)}
+              />
+              <Row label="Fixed Transaction Fee" value={fmtKES(calc.ded.transactionCost)} />
+              <Row label="Total Deductions" value={fmtKES(calc.ded.total)} bold />
+            </div>
+            <div className="space-y-2">
+              <Row label="Net Disbursable" value={fmtKES(calc.net)} bold />
+              <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
+              <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
+              <Row label="Daily repayment (daily installment)" value={fmtKES(calc.daily)} />
+              <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
+              <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
+              <Row label="Period" value={`${calc.termDays} days`} />
+            </div>
           </div>
-        </div>
+        )}
       </Section>
 
       <div className="flex justify-end">

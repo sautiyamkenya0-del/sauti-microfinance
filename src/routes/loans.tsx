@@ -20,10 +20,17 @@ import { RepeatApplication } from "@/components/loans/RepeatApplication";
 import { Simulator } from "@/components/loans/Simulator";
 import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
-import { type LegacyCarryoverLoan } from "@/lib/legacy-finance";
+import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
 import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
-import { fmtKES, hasMemberTag, isMemberCategory, useStore, type LoanKind } from "@/lib/store";
+import {
+  fmtKES,
+  hasMemberTag,
+  isMemberCategory,
+  loanSummary,
+  useStore,
+  type LoanKind,
+} from "@/lib/store";
 import { toast } from "sonner";
 
 type Tab =
@@ -76,13 +83,19 @@ function loanKindLabel(kind?: LoanKind) {
   return "Financial";
 }
 
+function openLoanStatusLabel(status: string) {
+  if (status === "pending") return "pending";
+  if (status === "defaulted") return "defaulted";
+  return "active";
+}
+
 export const Route = createFileRoute("/loans")({
   head: () => ({ meta: [{ title: "Loans - Sauti Microfinance" }] }),
   component: LoansHub,
 });
 
 function LoansHub() {
-  const { currentUser, memberLoanCount, members, loans } = useStore();
+  const { currentUser, memberLoanCount, members, loans, policySettings } = useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const [tab, setTab] = useState<Tab>("book");
@@ -130,6 +143,41 @@ function LoansHub() {
     () => memberAccounts.filter((member) => memberMatchesLoanKind(member, selectedLoanKind)),
     [memberAccounts, selectedLoanKind],
   );
+  const openLoanBlocker = useCallback(
+    (memberId: string, loanKind: LoanKind) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const live = loans.find((loan) => {
+        if (loan.memberId !== memberId) return false;
+        if ((loan.loanKind ?? "financial") !== loanKind) return false;
+        if (loan.status === "rejected") return false;
+        if (loan.status === "pending") return true;
+        const summary = loanSummary(loan);
+        const balance = summary.balance;
+        if (balance <= 0) return false;
+        return loan.status === "active" || loan.status === "defaulted" || summary.dueDate < today;
+      });
+      if (live)
+        return `${openLoanStatusLabel(live.status)} ${loanKindLabel(loanKind)} loan ${live.id}`;
+
+      const carryover = carryoverLoans.find((loan) => {
+        if (loan.memberId !== memberId) return false;
+        if ((loan.loanKind ?? "financial") !== loanKind) return false;
+        const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+        return loan.status !== "closed" && !summary.isFinished && summary.totalOwedNow > 0;
+      });
+      if (carryover) {
+        const summary = summarizeLegacyCarryoverLoan(carryover, policySettings);
+        const status = summary.dueDate < today ? "defaulted" : "active";
+        return `${status} ${loanKindLabel(loanKind)} carryover ${carryover.id}`;
+      }
+
+      return "";
+    },
+    [carryoverLoans, loans, policySettings],
+  );
+  const selectedOpenLoanBlocker = selectedMemberId
+    ? openLoanBlocker(selectedMemberId, selectedLoanKind)
+    : "";
   const filteredMemberAccounts = useMemo(() => {
     const query = memberQuery.trim().toLowerCase();
     if (!query) return eligibleMemberAccounts;
@@ -266,9 +314,16 @@ function LoansHub() {
                   >
                     <option value="">- New / Walk-in (capture full details) -</option>
                     {filteredMemberAccounts.map((member) => (
-                      <option key={member.id} value={member.id}>
+                      <option
+                        key={member.id}
+                        value={member.id}
+                        disabled={!!openLoanBlocker(member.id, selectedLoanKind)}
+                      >
                         {member.id} - {member.name} - {member.phone} - ({totalLoanCount(member.id)}{" "}
                         loans)
+                        {openLoanBlocker(member.id, selectedLoanKind)
+                          ? ` - blocked: ${openLoanBlocker(member.id, selectedLoanKind)}`
+                          : ""}
                       </option>
                     ))}
                   </select>
@@ -288,7 +343,15 @@ function LoansHub() {
               )}
             </div>
 
-            {!selectedMemberId || isFirstTime ? (
+            {selectedOpenLoanBlocker ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
+                <div className="font-semibold text-destructive">Loan category already open</div>
+                <div className="mt-1 text-muted-foreground">
+                  This member already has {selectedOpenLoanBlocker}. Close or clear that record
+                  before creating another {loanKindLabel(selectedLoanKind).toLowerCase()} loan.
+                </div>
+              </div>
+            ) : !selectedMemberId || isFirstTime ? (
               <FirstTimeApplication
                 memberId={selectedMemberId || undefined}
                 initialLoanKind={selectedLoanKind}
@@ -316,6 +379,9 @@ function LoansHub() {
           <CarryoverEntry
             members={memberAccounts}
             initialLoanKind={selectedLoanKind === "financial" ? "fuel" : selectedLoanKind}
+            loans={loans}
+            carryoverLoans={carryoverLoans}
+            policySettings={policySettings}
             saveCarryoverLoan={(args) => saveCarryoverLoan({ data: args.data as never })}
             onSaved={refreshCarryoverLoans}
           />
@@ -351,11 +417,17 @@ function LoansHub() {
 function CarryoverEntry({
   members,
   initialLoanKind,
+  loans,
+  carryoverLoans,
+  policySettings,
   saveCarryoverLoan,
   onSaved,
 }: {
   members: ReturnType<typeof useStore>["members"];
   initialLoanKind: LoanKind;
+  loans: ReturnType<typeof useStore>["loans"];
+  carryoverLoans: LegacyCarryoverLoan[];
+  policySettings: ReturnType<typeof useStore>["policySettings"];
   saveCarryoverLoan: (args: { data: unknown }) => Promise<unknown>;
   onSaved: () => Promise<unknown>;
 }) {
@@ -375,7 +447,7 @@ function CarryoverEntry({
   const [ratePct, setRatePct] = useState(0);
   const [termDays, setTermDays] = useState(loanKind === "fuel" ? 1 : 30);
   const [paidToDate, setPaidToDate] = useState(0);
-  const [status, setStatus] = useState<"active" | "defaulted" | "closed">("active");
+  const [priorPenaltyAmount, setPriorPenaltyAmount] = useState(0);
   const [vehiclePlate, setVehiclePlate] = useState("");
   const [fuelEntryCount, setFuelEntryCount] = useState(1);
   const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
@@ -389,6 +461,7 @@ function CarryoverEntry({
   }, [eligibleMembers, memberId]);
 
   useEffect(() => {
+    if (loanKind === "fuel" && termDays !== 1) setTermDays(1);
     if (loanKind === "stock" && termDays < 1) setTermDays(14);
   }, [loanKind, termDays]);
 
@@ -398,15 +471,49 @@ function CarryoverEntry({
     [fuelJobCardRows],
   );
   const selectedVehiclePlate = selectedMember?.vehiclePlate || vehiclePlate.trim().toUpperCase();
-  const fuelAmount = fuelJobCardSummary.totalCost || amount;
-  const fuelCharge = fuelJobCardSummary.totalFuelCharge || charge;
+  const fuelAmount = fuelJobCardSummary.totalCost;
+  const fuelCharge = fuelJobCardSummary.totalFuelCharge;
   const effectiveAmount = loanKind === "fuel" ? fuelAmount : amount;
   const effectiveCharge = loanKind === "fuel" ? fuelCharge : charge;
   const totalOpeningBalance = effectiveAmount + effectiveCharge;
+  const carryoverBlocker = useMemo(() => {
+    if (!memberId) return "";
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const live = loans.find((loan) => {
+      if (loan.memberId !== memberId) return false;
+      if ((loan.loanKind ?? "financial") !== loanKind) return false;
+      if (loan.status === "pending") return true;
+      if (loan.status === "rejected") return false;
+      const summary = loanSummary(loan);
+      return summary.balance > 0 && (loan.status !== "closed" || summary.dueDate < todayIso);
+    });
+    if (live)
+      return `${openLoanStatusLabel(live.status)} ${loanKindLabel(loanKind)} loan ${live.id}`;
+    const existingCarryover = carryoverLoans.find((loan) => {
+      if (loan.memberId !== memberId) return false;
+      if ((loan.loanKind ?? "financial") !== loanKind) return false;
+      const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+      return loan.status !== "closed" && !summary.isFinished && summary.totalOwedNow > 0;
+    });
+    if (!existingCarryover) return "";
+    const summary = summarizeLegacyCarryoverLoan(existingCarryover, policySettings);
+    return `${summary.dueDate < todayIso ? "defaulted" : "active"} ${loanKindLabel(loanKind)} carryover ${existingCarryover.id}`;
+  }, [carryoverLoans, loanKind, loans, memberId, policySettings]);
 
   async function saveDraft() {
     if (!memberId) return toast.error("Select a member first.");
-    if (effectiveAmount <= 0) return toast.error("Enter the carryover amount.");
+    if (carryoverBlocker) {
+      return toast.error(
+        `This member already has ${carryoverBlocker}. Clear it before adding another ${loanKindLabel(loanKind).toLowerCase()} carryover.`,
+      );
+    }
+    if (effectiveAmount <= 0) {
+      return toast.error(
+        loanKind === "fuel"
+          ? "Enter at least one fuel refill entry."
+          : "Enter the carryover amount.",
+      );
+    }
     if (loanKind === "fuel" && !selectedVehiclePlate) {
       return toast.error("Add a vehicle plate to this locomotive profile or this carryover entry.");
     }
@@ -431,8 +538,7 @@ function CarryoverEntry({
           : loanKind === "stock"
             ? { stockItem: stockItem.trim(), stockAmount: effectiveAmount, stockCharge: charge }
             : {};
-      const savedPaidToDate =
-        status === "closed" && paidToDate <= 0 ? totalOpeningBalance : paidToDate;
+      const savedPaidToDate = paidToDate;
       await saveCarryoverLoan({
         data: {
           memberId,
@@ -450,11 +556,12 @@ function CarryoverEntry({
           dailySavingsAmount: 0,
           startDate: date,
           paidToDate: savedPaidToDate,
-          status,
-          finished: status === "closed",
+          status: "active",
+          finished: false,
           penaltyWaivedAmount: 0,
           feeBreakdown: {
             processingFeeAmount: effectiveCharge,
+            priorPenaltyAmount,
             productMeta,
           },
           notes: `${loanKindLabel(loanKind)} carryover entered from Lending page. Opening balance ${totalOpeningBalance}.`,
@@ -465,7 +572,7 @@ function CarryoverEntry({
       setAmount(0);
       setCharge(0);
       setPaidToDate(0);
-      setStatus("active");
+      setPriorPenaltyAmount(0);
       setVehiclePlate("");
       setFuelEntryCount(1);
       setFuelJobCardRows(blankFuelJobCardRows(1));
@@ -518,20 +625,11 @@ function CarryoverEntry({
               className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
             />
           </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Carryover Status
-            </span>
-            <select
-              value={status}
-              onChange={(event) => setStatus(event.target.value as "active" | "defaulted" | "closed")}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            >
-              <option value="active">Active</option>
-              <option value="defaulted">Defaulted</option>
-              <option value="closed">Finished</option>
-            </select>
-          </label>
+          {carryoverBlocker ? (
+            <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              Existing open record: {carryoverBlocker}
+            </div>
+          ) : null}
           {loanKind === "fuel" ? (
             <>
               {selectedMember?.vehiclePlate ? (
@@ -576,40 +674,39 @@ function CarryoverEntry({
               />
             </label>
           ) : null}
-          <NumberInput
-            label={
-              loanKind === "fuel"
-                ? "Fallback Fuel Amount"
-                : loanKind === "stock"
-                  ? "Stock Amount"
-                  : "Amount"
-            }
-            value={amount}
-            onChange={setAmount}
-          />
-          <NumberInput
-            label={
-              loanKind === "fuel"
-                ? "Fallback Fuel Charge"
-                : loanKind === "stock"
-                  ? "Stock Charge"
-                  : "Charge"
-            }
-            value={charge}
-            onChange={setCharge}
-          />
-          <NumberInput label="Override %" value={ratePct} onChange={setRatePct} />
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Term</span>
-            <input
-              type="number"
-              min={1}
-              value={termDays}
-              onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            />
-          </label>
+          {loanKind !== "fuel" ? (
+            <>
+              <NumberInput
+                label={loanKind === "stock" ? "Stock Amount" : "Amount"}
+                value={amount}
+                onChange={setAmount}
+              />
+              <NumberInput
+                label={loanKind === "stock" ? "Stock Charge" : "Charge"}
+                value={charge}
+                onChange={setCharge}
+              />
+              <NumberInput label="Override %" value={ratePct} onChange={setRatePct} />
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Term
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={termDays}
+                  onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
+                  className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                />
+              </label>
+            </>
+          ) : null}
           <NumberInput label="Paid To Date" value={paidToDate} onChange={setPaidToDate} />
+          <NumberInput
+            label="Total Penalties Before This Loan"
+            value={priorPenaltyAmount}
+            onChange={setPriorPenaltyAmount}
+          />
           {loanKind === "fuel" ? (
             <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
           ) : null}

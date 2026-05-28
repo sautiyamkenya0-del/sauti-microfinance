@@ -108,7 +108,10 @@ export function normalizeFuelJobCardRows(value: unknown, fallbackCount = 1): Fue
 export function resizeFuelJobCardRows(rows: FuelJobCardRow[], countValue: number) {
   const count = Math.max(1, Math.floor(Number(countValue) || 1));
   const normalized = normalizeFuelJobCardRows(rows, count);
-  return Array.from({ length: count }, (_, index) => normalized[index] ?? blankFuelJobCardRow(index));
+  return Array.from(
+    { length: count },
+    (_, index) => normalized[index] ?? blankFuelJobCardRow(index),
+  );
 }
 
 export function fuelEntryDayLabel(row: Pick<FuelJobCardRow, "date" | "day">, index = 0) {
@@ -149,7 +152,6 @@ export function FuelJobCardFields({
   rows: FuelJobCardRow[];
   onChange: (rows: FuelJobCardRow[]) => void;
 }) {
-  const summary = summarizeFuelJobCardRows(rows);
   const updateRow = <K extends keyof FuelJobCardRow>(
     index: number,
     key: K,
@@ -178,34 +180,7 @@ export function FuelJobCardFields({
 
   return (
     <div className="md:col-span-2 lg:col-span-3 rounded-lg border border-border bg-muted/20 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold">Fuel refill entries</div>
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            Date, fuel type, litres, price, charge, attendant, and odometer reading
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-          <div className="rounded-md border border-border bg-background/50 p-2">
-            <div className="text-[10px] uppercase text-muted-foreground">Liters</div>
-            <div className="font-semibold">{summary.totalLiters.toFixed(2)}</div>
-          </div>
-          <div className="rounded-md border border-border bg-background/50 p-2">
-            <div className="text-[10px] uppercase text-muted-foreground">Cost</div>
-            <div className="font-semibold">KSh {summary.totalCost.toFixed(0)}</div>
-          </div>
-          <div className="rounded-md border border-border bg-background/50 p-2">
-            <div className="text-[10px] uppercase text-muted-foreground">Fuel Charge</div>
-            <div className="font-semibold">KSh {summary.totalFuelCharge.toFixed(0)}</div>
-          </div>
-          <div className="rounded-md border border-border bg-background/50 p-2">
-            <div className="text-[10px] uppercase text-muted-foreground">Odometer</div>
-            <div className="font-semibold">{summary.latestOdometer.toFixed(0)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 overflow-x-auto">
+      <div className="overflow-x-auto">
         <table className="min-w-[1120px] w-full text-xs">
           <thead className="text-muted-foreground">
             <tr>
@@ -283,9 +258,7 @@ export function FuelJobCardFields({
                     type="number"
                     min={0}
                     value={row.fuelCharge}
-                    onChange={(event) =>
-                      updateRow(index, "fuelCharge", Number(event.target.value))
-                    }
+                    onChange={(event) => updateRow(index, "fuelCharge", Number(event.target.value))}
                     className="loan-input text-right"
                   />
                 </td>
