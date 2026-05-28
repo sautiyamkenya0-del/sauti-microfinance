@@ -6,6 +6,7 @@ import {
   fmtKES,
   isMemberCategory,
   loanPricingPreview,
+  memberNeedsSticker,
   normalizeLoanTermDaysForType,
   upfrontRequirementForMemberAmount,
   useStore,
@@ -86,8 +87,9 @@ export function Simulator() {
   }, [memberAccounts, memberQuery]);
   const selectedMember = memberAccounts.find((member) => member.id === selectedMemberId);
   const requestedTermBucket = normalizeLoanTermDaysForType(requestedDays, loanType);
-  const stickerApplicable =
-    (selectedMember?.businessPermanence ?? walkInBusinessPermanence) === "permanent";
+  const stickerApplicable = selectedMember
+    ? memberNeedsSticker(selectedMember)
+    : walkInBusinessPermanence === "permanent";
   const previewMember = useMemo(
     () => ({
       id: selectedMember?.id ?? "SIM-WALK-IN",

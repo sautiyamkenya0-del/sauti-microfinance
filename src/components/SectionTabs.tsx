@@ -20,6 +20,7 @@ import {
   HandCoins,
   Landmark,
 } from "lucide-react";
+import { navForUser, useStore } from "@/lib/store";
 
 export type Tab = { to: string; label: string; icon: ComponentType<{ className?: string }> };
 
@@ -54,6 +55,16 @@ export const SECTION_TABS: Record<string, Tab[]> = {
   ],
 };
 
+const TAB_REQUIREMENTS: Record<string, string> = {
+  "/staff-mgmt": "staffmgmt",
+  "/payroll": "payroll",
+  "/fees-policy": "fees",
+  "/attendance": "attendance",
+  "/reports": "reports",
+  "/policies": "policies",
+  "/investors": "investors",
+};
+
 export function sectionForPath(path: string): string | null {
   for (const [id, tabs] of Object.entries(SECTION_TABS)) {
     if (tabs.some((t) => path === t.to || path.startsWith(t.to + "/"))) return id;
@@ -62,8 +73,13 @@ export function sectionForPath(path: string): string | null {
 }
 
 export function SectionTabs({ section }: { section: keyof typeof SECTION_TABS }) {
+  const { currentUser } = useStore();
   const path = useRouterState({ select: (r) => r.location.pathname });
-  const tabs = SECTION_TABS[section];
+  const allowed = new Set(navForUser(currentUser));
+  const tabs = SECTION_TABS[section]?.filter((tab) => {
+    const required = TAB_REQUIREMENTS[tab.to];
+    return !required || allowed.has(required);
+  });
   if (!tabs) return null;
   return (
     <div className="mb-4 flex flex-wrap gap-1 border-b border-border">

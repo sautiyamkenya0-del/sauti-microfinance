@@ -50,6 +50,8 @@ export type LegacyCarryoverLoanFeeBreakdown = {
   monthlySubscriptionAmount?: number;
   subscriptionMonths?: number;
   subscriptionWaived?: boolean;
+  manualPenaltyAmount?: number;
+  carriedForwardPenaltyAmount?: number;
   priorPenaltyAmount?: number;
   totalPenaltiesBeforeLastLoan?: number;
   dailyPenaltyDays?: number;
@@ -158,6 +160,15 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
 ): LegacyCarryoverLoanFeeBreakdown {
   const source = value && typeof value === "object" ? value : {};
   const isFirstLoan = Math.max(1, Math.floor(Number(loanCycleNumber || 1))) === 1;
+  const manualPenaltyAmount = moneyValue(source.manualPenaltyAmount);
+  const carriedForwardPenaltyAmount = moneyValue(source.carriedForwardPenaltyAmount);
+  const legacyPriorPenaltyAmount = moneyValue(
+    source.priorPenaltyAmount ?? source.totalPenaltiesBeforeLastLoan,
+  );
+  const priorPenaltyAmount =
+    manualPenaltyAmount > 0 || carriedForwardPenaltyAmount > 0
+      ? manualPenaltyAmount + carriedForwardPenaltyAmount
+      : legacyPriorPenaltyAmount;
   return {
     membershipFeeAmount: isFirstLoan ? moneyValue(source.membershipFeeAmount) : 0,
     cardFeeAmount: isFirstLoan ? moneyValue(source.cardFeeAmount) : 0,
@@ -168,9 +179,9 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
     monthlySubscriptionAmount: moneyValue(source.monthlySubscriptionAmount),
     subscriptionMonths: Math.max(0, Math.floor(Number(source.subscriptionMonths ?? 0))),
     subscriptionWaived: source.subscriptionWaived === true,
-    priorPenaltyAmount: moneyValue(
-      source.priorPenaltyAmount ?? source.totalPenaltiesBeforeLastLoan,
-    ),
+    manualPenaltyAmount,
+    carriedForwardPenaltyAmount,
+    priorPenaltyAmount,
     dailyPenaltyDays: wholeDaysValue(source.dailyPenaltyDays),
     dailyPenaltyAmount: moneyValue(source.dailyPenaltyAmount),
     dueDatePenaltyDays: wholeDaysValue(source.dueDatePenaltyDays),

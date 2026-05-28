@@ -169,8 +169,8 @@ function AttendancePage() {
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">{row?.checkIn ?? "-"}</td>
                     <td className="px-5 py-3 text-muted-foreground">{row?.checkOut ?? "-"}</td>
-                    {(member.id === currentUser.id || canMarkOthers) && (
-                      <td className="px-5 py-3">
+                    <td className="px-5 py-3">
+                      {member.id === currentUser.id || canMarkOthers ? (
                         <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() => applyStatus(member.id, "present", "in")}
@@ -191,8 +191,10 @@ function AttendancePage() {
                             Asked for permission
                           </button>
                         </div>
-                      </td>
-                    )}
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No access</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

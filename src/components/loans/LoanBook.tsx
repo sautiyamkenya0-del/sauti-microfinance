@@ -2,14 +2,18 @@ import { Section, Badge } from "@/components/ui-bits";
 import {
   useStore,
   fmtKES,
+  loanProductChargeAmount,
   loanDailySavingsAmount,
+  loanManualPenaltyAmount,
   loanPenaltySummary,
   loanSummary,
   loanTermDaysOf,
   type Loan,
   type LoanKind,
 } from "@/lib/store";
+import { updateLoanRecord, upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
+import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -182,7 +186,10 @@ function vehiclePlateForFuelLoan(
   return textValue(loan.feeBreakdown?.productMeta?.vehiclePlate) || member?.vehiclePlate || "";
 }
 
-function fuelRecordsForLiveLoan(loan: Loan, member?: { id: string; name: string; vehiclePlate?: string }) {
+function fuelRecordsForLiveLoan(
+  loan: Loan,
+  member?: { id: string; name: string; vehiclePlate?: string },
+) {
   if ((loan.loanKind ?? "financial") !== "fuel") return [];
   return fuelRowsFromLiveLoan(loan).map<FuelRecordRow>((entry, entryIndex) => ({
     loanId: loan.id,
@@ -754,9 +761,7 @@ function FuelRecordsPanel({ records }: { records: FuelRecordRow[] }) {
                 <td className="px-3 py-2 font-mono">{record.vehiclePlate || "-"}</td>
                 <td className="px-3 py-2">
                   {record.loanId}
-                  <div className="text-[10px] uppercase text-muted-foreground">
-                    {record.source}
-                  </div>
+                  <div className="text-[10px] uppercase text-muted-foreground">{record.source}</div>
                 </td>
                 <td className="px-3 py-2">
                   <Badge tone={record.status === "defaulted" ? "destructive" : "muted"}>
@@ -793,17 +798,83 @@ function FuelRecordsPanel({ records }: { records: FuelRecordRow[] }) {
   );
 }
 
+type LoanEditDraft = {
+  principal: number;
+  approvedAmount: number;
+  rate: number;
+  termDays: number;
+  startDate: string;
+  paid: number;
+  status: "pending" | "active" | "closed" | "defaulted" | "rejected";
+  purpose: string;
+  productChargeAmount: number;
+  manualPenaltyAmount: number;
+  penaltyWaivedAmount: number;
+  dailySavingsAmount: number;
+};
+
+function payloadPenaltyPart(payload: Record<string, unknown> | undefined, key: string) {
+  const value = Number(payload?.[key] ?? 0);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function ownManualPenaltyAmount(payload: Record<string, unknown> | undefined) {
+  const manual = payloadPenaltyPart(payload, "manualPenaltyAmount");
+  if (manual > 0) return manual;
+  if (payloadPenaltyPart(payload, "carriedForwardPenaltyAmount") > 0) return 0;
+  return payloadPenaltyPart(payload, "priorPenaltyAmount");
+}
+
+function liveLoanEditDraft(loan: Loan, transactions: ReturnType<typeof useStore>["transactions"]) {
+  const summary = loanPenaltySummary(loan, transactions);
+  return {
+    principal: loan.principal,
+    approvedAmount: summary.approved,
+    rate: loan.rate,
+    termDays: summary.termDays,
+    startDate: loan.startDate,
+    paid: summary.totalPaid,
+    status: loan.status,
+    purpose: loan.purpose ?? "",
+    productChargeAmount: loanProductChargeAmount(loan),
+    manualPenaltyAmount: ownManualPenaltyAmount(loan.supplierPayload),
+    penaltyWaivedAmount: loan.penaltyWaivedAmount ?? 0,
+    dailySavingsAmount: loanDailySavingsAmount(summary.approved),
+  } satisfies LoanEditDraft;
+}
+
+function carryoverLoanEditDraft(loan: LegacyCarryoverLoan) {
+  return {
+    principal: loan.principal,
+    approvedAmount: loan.principal,
+    rate: loan.interestRatePct,
+    termDays: loan.termDays,
+    startDate: loan.startDate,
+    paid: loan.paidToDate,
+    status: loan.status,
+    purpose: loan.label,
+    productChargeAmount: Number(loan.feeBreakdown?.processingFeeAmount ?? 0),
+    manualPenaltyAmount: ownManualPenaltyAmount(loan.feeBreakdown),
+    penaltyWaivedAmount: loan.penaltyWaivedAmount,
+    dailySavingsAmount: loan.dailySavingsAmount,
+  } satisfies LoanEditDraft;
+}
+
 export function MemberLoanHistory({
   memberId,
   carryoverLoans = [],
   onClose,
   onNewLoan,
+  onCarryoverChanged,
 }: {
   memberId: string;
   carryoverLoans?: LegacyCarryoverLoan[];
   onClose: () => void;
   onNewLoan: (memberId: string, isFirstTime: boolean) => void;
+  onCarryoverChanged?: () => Promise<unknown>;
 }) {
+  const updateLiveLoan = useServerFn(updateLoanRecord);
+  const updateCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const {
     members,
     loans,
@@ -815,7 +886,11 @@ export function MemberLoanHistory({
     settlePenaltyFromPool,
     currentUser,
     policySettings,
+    reloadAppData,
   } = useStore();
+  const [editing, setEditing] = useState<{ source: "live" | "carryover"; id: string } | null>(null);
+  const [editDraft, setEditDraft] = useState<LoanEditDraft | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const member = members.find((m) => m.id === memberId);
   if (!member) return null;
   const memberLoans = loans.filter((l) => l.memberId === memberId);
@@ -831,6 +906,87 @@ export function MemberLoanHistory({
   const outstandingPen = memberPenalties.filter((p) => p.status === "outstanding");
   const totalLoanHistoryCount = memberLoans.length + memberCarryoverLoans.length;
   const isFirstTime = totalLoanHistoryCount === 0;
+  const canEditLoans = currentUser.role === "director";
+
+  function startLiveLoanEdit(loan: Loan) {
+    setEditing({ source: "live", id: loan.id });
+    setEditDraft(liveLoanEditDraft(loan, transactions));
+  }
+
+  function startCarryoverLoanEdit(loan: LegacyCarryoverLoan) {
+    setEditing({ source: "carryover", id: loan.id });
+    setEditDraft(carryoverLoanEditDraft(loan));
+  }
+
+  async function saveLoanEdit() {
+    if (!editing || !editDraft) return;
+    setSavingEdit(true);
+    try {
+      if (editing.source === "live") {
+        await updateLiveLoan({
+          data: {
+            loanId: editing.id,
+            principal: editDraft.principal,
+            approvedAmount: editDraft.approvedAmount,
+            rate: editDraft.rate,
+            termDays: editDraft.termDays,
+            startDate: editDraft.startDate,
+            paid: editDraft.paid,
+            status: editDraft.status,
+            purpose: editDraft.purpose,
+            productChargeAmount: editDraft.productChargeAmount,
+            manualPenaltyAmount: editDraft.manualPenaltyAmount,
+            penaltyWaivedAmount: editDraft.penaltyWaivedAmount,
+          },
+        });
+        await reloadAppData();
+      } else {
+        const loan = memberCarryoverLoans.find((item) => item.id === editing.id);
+        if (!loan) throw new Error("Carryover loan not found.");
+        await updateCarryoverLoan({
+          data: {
+            id: loan.id,
+            memberId: loan.memberId,
+            label: editDraft.purpose || loan.label,
+            loanKind: loan.loanKind ?? "financial",
+            loanCycleNumber: loan.loanCycleNumber,
+            principal: editDraft.principal,
+            interestRatePct: editDraft.rate,
+            termDays: editDraft.termDays,
+            dailySavingsAmount: editDraft.dailySavingsAmount,
+            startDate: editDraft.startDate,
+            paidToDate: editDraft.paid,
+            status:
+              editDraft.status === "closed"
+                ? "closed"
+                : editDraft.status === "defaulted"
+                  ? "defaulted"
+                  : "active",
+            finished: editDraft.status === "closed",
+            penaltyWaivedAmount: editDraft.penaltyWaivedAmount,
+            feeBreakdown: {
+              ...(loan.feeBreakdown ?? {}),
+              processingFeeAmount: editDraft.productChargeAmount,
+              manualPenaltyAmount: editDraft.manualPenaltyAmount,
+              priorPenaltyAmount:
+                editDraft.manualPenaltyAmount +
+                Number(loan.feeBreakdown?.carriedForwardPenaltyAmount ?? 0),
+            },
+            notes: loan.notes,
+          },
+        });
+        await onCarryoverChanged?.();
+        await reloadAppData();
+      }
+      toast.success("Loan details updated");
+      setEditing(null);
+      setEditDraft(null);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to update loan.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex justify-end" onClick={onClose}>
@@ -913,22 +1069,63 @@ export function MemberLoanHistory({
             {memberCarryoverLoans.map((l) => {
               const summary = summarizeLegacyCarryoverLoan(l, policySettings);
               const pct = Math.min(100, Math.round(summary.paidPct));
+              const isEditing = editing?.source === "carryover" && editing.id === l.id;
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
                   <div className="flex justify-between items-center">
                     <div className="text-sm font-medium">
-                      {l.id} Â· {fmtKES(l.principal)}
+                      {l.id} · {fmtKES(l.principal)}
                     </div>
                     <Badge tone={summary.isFinished ? "success" : "default"}>
-                      {summary.isFinished ? "closed" : l.status} Â· carryover
+                      {summary.isFinished ? "closed" : l.status} · carryover
                     </Badge>
                   </div>
+                  {canEditLoans && (
+                    <button
+                      type="button"
+                      onClick={() => startCarryoverLoanEdit(l)}
+                      className="mt-2 rounded-md border border-primary/40 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/5"
+                    >
+                      Edit details
+                    </button>
+                  )}
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {l.startDate} Â· {summary.termDays} days Â· {l.label}
+                    {l.startDate} · {summary.termDays} days · {l.label}
                   </div>
                   <div className="text-xs mt-1">
                     Paid {fmtKES(l.paidToDate)} / {fmtKES(summary.totalRepayment)}
                   </div>
+                  <LoanDetails
+                    rows={[
+                      ["Day given", l.startDate],
+                      ["Amount", fmtKES(l.principal)],
+                      ["Interest / charge", fmtKES(summary.interestAmount)],
+                      [
+                        "Manual penalties",
+                        fmtKES(
+                          Number(l.feeBreakdown?.priorPenaltyAmount ?? 0) ||
+                            ownManualPenaltyAmount(l.feeBreakdown),
+                        ),
+                      ],
+                      ["Penalty waived", fmtKES(l.penaltyWaivedAmount)],
+                      ["Daily compliance", fmtKES(l.dailySavingsAmount)],
+                      ["Amount collected", fmtKES(l.paidToDate)],
+                      ["Defaulted balance", fmtKES(summary.defaultedAmount)],
+                    ]}
+                  />
+                  {isEditing && editDraft ? (
+                    <LoanEditPanel
+                      draft={editDraft}
+                      source="carryover"
+                      saving={savingEdit}
+                      onChange={setEditDraft}
+                      onCancel={() => {
+                        setEditing(null);
+                        setEditDraft(null);
+                      }}
+                      onSave={() => void saveLoanEdit()}
+                    />
+                  ) : null}
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                   </div>
@@ -942,6 +1139,7 @@ export function MemberLoanHistory({
                 100,
                 Math.round((summary.totalPaid / summary.totalExpectedCollected) * 100),
               );
+              const isEditing = editing?.source === "live" && editing.id === l.id;
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
                   <div className="flex justify-between items-center">
@@ -962,12 +1160,49 @@ export function MemberLoanHistory({
                       {l.status}
                     </Badge>
                   </div>
+                  {canEditLoans && (
+                    <button
+                      type="button"
+                      onClick={() => startLiveLoanEdit(l)}
+                      className="mt-2 rounded-md border border-primary/40 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/5"
+                    >
+                      Edit details
+                    </button>
+                  )}
                   <div className="text-xs text-muted-foreground mt-0.5">
                     {l.startDate} · {summary.termDays} days · purpose: {l.purpose ?? "—"}
                   </div>
                   <div className="text-xs mt-1">
                     Paid {fmtKES(summary.totalPaid)} / {fmtKES(summary.totalExpectedCollected)}
                   </div>
+                  <LoanDetails
+                    rows={[
+                      ["Day given", l.startDate],
+                      ["Amount", fmtKES(summary.approved)],
+                      [
+                        "Interest / charges",
+                        fmtKES(summary.interestAmount + loanProductChargeAmount(l)),
+                      ],
+                      ["Manual penalties", fmtKES(loanManualPenaltyAmount(l))],
+                      ["Penalty waived", fmtKES(l.penaltyWaivedAmount ?? 0)],
+                      ["Daily compliance", fmtKES(loanDailySavingsAmount(summary.approved))],
+                      ["Amount collected", fmtKES(summary.totalPaid)],
+                      ["Defaulted balance", fmtKES(summary.defaultedAmount)],
+                    ]}
+                  />
+                  {isEditing && editDraft ? (
+                    <LoanEditPanel
+                      draft={editDraft}
+                      source="live"
+                      saving={savingEdit}
+                      onChange={setEditDraft}
+                      onCancel={() => {
+                        setEditing(null);
+                        setEditDraft(null);
+                      }}
+                      onSave={() => void saveLoanEdit()}
+                    />
+                  ) : null}
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                   </div>
@@ -1062,6 +1297,154 @@ export function MemberLoanHistory({
         )}
       </div>
     </div>
+  );
+}
+
+function LoanDetails({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex justify-between gap-3 rounded-md bg-muted/35 px-2 py-1.5">
+          <span className="text-muted-foreground">{label}</span>
+          <span className="text-right font-medium">{value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LoanEditPanel({
+  draft,
+  source,
+  saving,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  draft: LoanEditDraft;
+  source: "live" | "carryover";
+  saving: boolean;
+  onChange: (draft: LoanEditDraft) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const set = <K extends keyof LoanEditDraft>(key: K, value: LoanEditDraft[K]) =>
+    onChange({ ...draft, [key]: value });
+  return (
+    <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <EditNumber
+          label="Amount given"
+          value={draft.principal}
+          onChange={(v) => set("principal", v)}
+        />
+        {source === "live" && (
+          <EditNumber
+            label="Approved amount"
+            value={draft.approvedAmount}
+            onChange={(v) => set("approvedAmount", v)}
+          />
+        )}
+        <EditNumber label="Interest %" value={draft.rate} onChange={(v) => set("rate", v)} />
+        <EditNumber label="Term days" value={draft.termDays} onChange={(v) => set("termDays", v)} />
+        <label className="block">
+          <span className="text-[10px] uppercase text-muted-foreground">Day given</span>
+          <input
+            type="date"
+            value={draft.startDate}
+            onChange={(event) => set("startDate", event.target.value)}
+            className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+          />
+        </label>
+        <EditNumber label="Amount collected" value={draft.paid} onChange={(v) => set("paid", v)} />
+        <EditNumber
+          label="Manual penalties"
+          value={draft.manualPenaltyAmount}
+          onChange={(v) => set("manualPenaltyAmount", v)}
+        />
+        <EditNumber
+          label="Penalty waived"
+          value={draft.penaltyWaivedAmount}
+          onChange={(v) => set("penaltyWaivedAmount", v)}
+        />
+        <EditNumber
+          label={source === "live" ? "Product charge" : "Processing / charge"}
+          value={draft.productChargeAmount}
+          onChange={(v) => set("productChargeAmount", v)}
+        />
+        {source === "carryover" && (
+          <EditNumber
+            label="Daily compliance"
+            value={draft.dailySavingsAmount}
+            onChange={(v) => set("dailySavingsAmount", v)}
+          />
+        )}
+        <label className="block">
+          <span className="text-[10px] uppercase text-muted-foreground">Status</span>
+          <select
+            value={draft.status}
+            onChange={(event) => set("status", event.target.value as LoanEditDraft["status"])}
+            className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+          >
+            {["active", "defaulted", "closed", "pending", "rejected"].map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="text-[10px] uppercase text-muted-foreground">
+            {source === "live" ? "Purpose" : "Label"}
+          </span>
+          <input
+            value={draft.purpose}
+            onChange={(event) => set("purpose", event.target.value)}
+            className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save changes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EditNumber({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase text-muted-foreground">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+      />
+    </label>
   );
 }
 

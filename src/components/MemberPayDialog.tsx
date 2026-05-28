@@ -2,9 +2,11 @@ import { useMemo, useState } from "react";
 import {
   useStore,
   businessPermanenceLabel,
+  FUEL_BUFFER_TARGET,
   fmtKES,
   formatMembershipNumber,
   isInvestorOnlyCategory,
+  memberIsFuelMember,
   memberNeedsSticker,
   upfrontTotalsForAmount,
   type Member,
@@ -23,14 +25,28 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
 export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
-  const { loans, feePolicies } = useStore();
+  const { loans, transactions, feePolicies } = useStore();
   const activeLoan = loans.find(
     (l) => l.memberId === member.id && (l.status === "active" || l.status === "defaulted"),
   );
   const [busy, setBusy] = useState(false);
 
+  const fuelMember = memberIsFuelMember(member);
   const [legacyStickerOn, setLegacyStickerOn] = useState(member.fees.hasShop || false);
-  const stickerOn = member.businessPermanence ? memberNeedsSticker(member) : legacyStickerOn;
+  const stickerOn = fuelMember
+    ? false
+    : member.businessPermanence
+      ? memberNeedsSticker(member)
+      : legacyStickerOn;
+  const fuelBufferPaid = transactions
+    .filter(
+      (transaction) =>
+        transaction.memberId === member.id &&
+        transaction.type === "deposit" &&
+        String(transaction.note ?? "").startsWith("Locomotive fuel buffer"),
+    )
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const fuelBufferDue = fuelMember ? Math.max(0, FUEL_BUFFER_TARGET - fuelBufferPaid) : 0;
   const fees = member.fees;
   const membershipPolicy = feePolicies.find((fee) => fee.key === "membership");
   const cardPolicy = feePolicies.find((fee) => fee.key === "card");
@@ -124,12 +140,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const previewAmount = useMemo(() => {
     if (mode === "officer") {
-      if (purpose === "upfront") return upfrontTotals.totalUpfrontNow;
-      if (purpose === "fees") return feesDue;
+      if (purpose === "upfront") return upfrontTotals.totalUpfrontNow + fuelBufferDue;
+      if (purpose === "fees") return feesDue + fuelBufferDue;
       return 0;
     }
     return Math.max(0, Math.floor(amount || 0));
-  }, [amount, feesDue, mode, purpose, upfrontTotals.totalUpfrontNow]);
+  }, [amount, feesDue, fuelBufferDue, mode, purpose, upfrontTotals.totalUpfrontNow]);
 
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
@@ -279,7 +295,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 Mandatory fees only
               </button>
             </div>
-            {member.businessPermanence ? (
+            {fuelMember ? (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Locomotive fuel member: sticker fee is skipped. Fuel buffer due:{" "}
+                <span className="font-medium text-foreground">{fmtKES(fuelBufferDue)}</span>.
+              </div>
+            ) : member.businessPermanence ? (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 Business setup:{" "}
                 <span className="font-medium text-foreground">
@@ -334,10 +355,16 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                   <span>{fmtKES(upfrontTotals.mandatoryFeesTotal)}</span>
                 </div>
               )}
+              {fuelBufferDue > 0 && (
+                <div className="mt-1 flex justify-between border-t border-border pt-1">
+                  <span>Fuel buffer due</span>
+                  <span>{fmtKES(fuelBufferDue)}</span>
+                </div>
+              )}
               {purpose === "upfront" && (
                 <div className="mt-1 flex justify-between border-t border-border pt-1 font-medium">
                   <span>Total upfront now</span>
-                  <span>{fmtKES(upfrontTotals.totalUpfrontNow)}</span>
+                  <span>{fmtKES(upfrontTotals.totalUpfrontNow + fuelBufferDue)}</span>
                 </div>
               )}
               {purpose === "upfront" && upfrontTotals.tier && (

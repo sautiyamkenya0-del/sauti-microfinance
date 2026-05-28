@@ -91,7 +91,7 @@ const ENTRIES: Entry[] = [
     label: "Administration",
     icon: ShieldCheck,
     section: "admin",
-    requires: ["staffmgmt"],
+    requires: ["staffmgmt", "attendance", "policies", "reports", "fees", "payroll"],
   },
 ];
 
@@ -362,13 +362,15 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
                 {entries.map((entry) => {
                   const Icon = entry.icon;
+                  const entryTo =
+                    entry.id === "admin" && !allowed.has("staffmgmt") ? "/attendance" : entry.to;
                   const active = entry.section
                     ? activeSection === entry.section
-                    : path === entry.to || (entry.to !== "/" && path.startsWith(entry.to + "/"));
+                    : path === entryTo || (entryTo !== "/" && path.startsWith(entryTo + "/"));
                   return (
                     <Link
                       key={entry.id}
-                      to={entry.to}
+                      to={entryTo}
                       onClick={() => setMobileNavOpen(false)}
                       className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm ${active ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium" : "text-sidebar-foreground/85 hover:bg-sidebar-accent"}`}
                     >

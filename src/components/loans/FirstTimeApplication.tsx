@@ -4,8 +4,10 @@ import {
   useStore,
   formatMembershipNumber,
   fmtKES,
+  FUEL_BUFFER_TARGET,
   loanPricingPreview,
   loanProductTypeForAmount,
+  memberIsFuelMember,
   nextMembershipNumber,
   normalizeMembershipNumber,
   SBC_FEES,
@@ -41,7 +43,8 @@ export function FirstTimeApplication({
   initialLoanKind?: LoanKind;
   onSubmitted?: (loanId: string, memberId: string) => void;
 }) {
-  const { members, currentUser, addLoan, addMember, feePolicies } = useStore();
+  const { members, transactions, currentUser, addLoan, addMember, updateMember, feePolicies } =
+    useStore();
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const nextMemberNo = useMemo(
     () =>
@@ -171,7 +174,26 @@ export function FirstTimeApplication({
     () => normalizeMembershipNumber(f.membershipNo) || existing?.id || nextMemberNo,
     [existing?.id, f.membershipNo, nextMemberNo],
   );
-  const stickerApplicable = (existing?.businessPermanence ?? f.businessPermanence) === "permanent";
+  const isFuelApplication = f.loanKind === "fuel";
+  const existingFuelBufferPaid = useMemo(
+    () =>
+      existing
+        ? transactions
+            .filter(
+              (transaction) =>
+                transaction.memberId === existing.id &&
+                transaction.type === "deposit" &&
+                String(transaction.note ?? "").startsWith("Locomotive fuel buffer"),
+            )
+            .reduce((sum, transaction) => sum + transaction.amount, 0)
+        : 0,
+    [existing, transactions],
+  );
+  const fuelBufferDue = isFuelApplication
+    ? Math.max(0, FUEL_BUFFER_TARGET - existingFuelBufferPaid)
+    : 0;
+  const stickerApplicable =
+    !isFuelApplication && (existing?.businessPermanence ?? f.businessPermanence) === "permanent";
   const previewMember = useMemo(
     () => ({
       id: previewMemberId,
@@ -309,7 +331,53 @@ export function FirstTimeApplication({
       return toast.error("Enter at least one fuel refill entry.");
     }
     try {
-      let mid = members.find((x) => x.phone === phone)?.id;
+      let mid = existing?.id ?? members.find((x) => x.phone === phone)?.id;
+      const existingMemberForUpdate = existing ?? members.find((x) => x.id === mid);
+      if (existingMemberForUpdate && f.loanKind === "fuel") {
+        const memberTags = Array.from(
+          new Set([...(existingMemberForUpdate.memberTags ?? []), "member", "locomotive"]),
+        ) as typeof existingMemberForUpdate.memberTags;
+        const nextCategory =
+          existingMemberForUpdate.category === "member"
+            ? "locomotive"
+            : existingMemberForUpdate.category;
+        const nextVehiclePlate =
+          resolvedVehiclePlate || existingMemberForUpdate.vehiclePlate || undefined;
+        if (
+          nextVehiclePlate !== existingMemberForUpdate.vehiclePlate ||
+          nextCategory !== existingMemberForUpdate.category ||
+          !memberIsFuelMember(existingMemberForUpdate)
+        ) {
+          await updateMember({
+            memberId: existingMemberForUpdate.id,
+            name: existingMemberForUpdate.name,
+            phone: existingMemberForUpdate.phone,
+            status: existingMemberForUpdate.status,
+            shares: existingMemberForUpdate.shares,
+            savingsBalance: existingMemberForUpdate.savingsBalance,
+            category: nextCategory,
+            memberTags,
+            firstName: existingMemberForUpdate.firstName,
+            secondName: existingMemberForUpdate.secondName,
+            thirdName: existingMemberForUpdate.thirdName,
+            dob: existingMemberForUpdate.dob,
+            gender: existingMemberForUpdate.gender,
+            email: existingMemberForUpdate.email,
+            address: existingMemberForUpdate.address,
+            city: existingMemberForUpdate.city,
+            county: existingMemberForUpdate.county,
+            village: existingMemberForUpdate.village,
+            oldSystemId: existingMemberForUpdate.oldSystemId,
+            businessName: existingMemberForUpdate.businessName || f.tradingName || undefined,
+            businessType: existingMemberForUpdate.businessType || f.businessType || undefined,
+            businessPermanence,
+            businessAddress:
+              existingMemberForUpdate.businessAddress || f.businessLocation || undefined,
+            vehiclePlate: nextVehiclePlate,
+            fieldOfficerId: existingMemberForUpdate.fieldOfficerId,
+          });
+        }
+      }
       if (!mid) {
         const inferredCategory =
           existing?.category ??
@@ -743,9 +811,20 @@ export function FirstTimeApplication({
             label={`Sticker Fee (${fmtKES(stickerFeeDue)})`}
             value={f.stickerFeeMode}
             onChange={(v) => set("stickerFeeMode", v as LoanChargeMode)}
-            disabled={stickerFeeDue <= 0}
+            disabled={stickerFeeDue <= 0 || isFuelApplication}
             options={["upfront", "financed"]}
           />
+          {isFuelApplication ? (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Fuel Buffer
+              </div>
+              <div className="mt-1 font-semibold">{fmtKES(fuelBufferDue)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Locomotive fuel members do not pay sticker fees.
+              </div>
+            </div>
+          ) : null}
         </div>
       </Section>
 
@@ -991,6 +1070,7 @@ export function FirstTimeApplication({
             <div className="space-y-2">
               <Row label="Total Due" value={fmtKES(calc.total)} bold />
               <Row label="Entries" value={String(f.fuelJobCardRows.length)} />
+              <Row label="Fuel Buffer" value={fmtKES(fuelBufferDue)} />
               <Row label="Repayment Period" value="24 hours" />
             </div>
           </div>
@@ -1049,7 +1129,8 @@ export function FirstTimeApplication({
                     {fmtKES(calc.ded.insuranceUpfront)}
                   </div>
                   <div className="mt-2 text-muted-foreground">
-                    Sticker fee is only added when the business setup is marked permanent.
+                    Sticker fee is only added when the business setup is marked permanent and the
+                    member is not a locomotive fuel member.
                   </div>
                 </div>
               )}

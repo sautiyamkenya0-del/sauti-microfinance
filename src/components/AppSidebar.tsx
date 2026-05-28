@@ -86,7 +86,7 @@ const ENTRIES: Entry[] = [
     label: "Administration",
     icon: ShieldCheck,
     section: "admin",
-    requires: ["staffmgmt"],
+    requires: ["staffmgmt", "attendance", "policies", "reports", "fees", "payroll"],
   },
 ];
 
@@ -147,16 +147,18 @@ export function AppSidebar() {
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {entries.map((entry) => {
           const Icon = entry.icon;
+          const entryTo =
+            entry.id === "admin" && !allowed.has("staffmgmt") ? "/attendance" : entry.to;
           const active = entry.section
             ? activeSection === entry.section
-            : path === entry.to || (entry.to !== "/" && path.startsWith(entry.to + "/"));
+            : path === entryTo || (entryTo !== "/" && path.startsWith(entryTo + "/"));
           const showChatBadge = entry.id === "comms" && unreadComms > 0;
           const showApprovalBadge = entry.id === "lending" && pendingCount > 0;
 
           return (
             <Link
               key={entry.id}
-              to={entry.to}
+              to={entryTo}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
                 active
                   ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium"

@@ -216,9 +216,7 @@ function PolicyCenterPage() {
   const [hasCarryoverProfile, setHasCarryoverProfile] = useState(false);
   const [carryoverMemberMode, setCarryoverMemberMode] = useState<CarryoverMemberMode>("none");
   const [guidedLoanKind, setGuidedLoanKind] = useState<LoanKind>("financial");
-  const [guidedClosedLoans, setGuidedClosedLoans] = useState<LegacyCarryoverLoan[]>([]);
-  const [guidedDefaultedLoans, setGuidedDefaultedLoans] = useState<LegacyCarryoverLoan[]>([]);
-  const [guidedActiveLoans, setGuidedActiveLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [guidedLoanEntries, setGuidedLoanEntries] = useState<LegacyCarryoverLoan[]>([]);
   const [waiverNote, setWaiverNote] = useState("");
   const [waiverAmounts, setWaiverAmounts] = useState<Record<string, number>>({});
   const [isRedistributing, setIsRedistributing] = useState(false);
@@ -260,9 +258,7 @@ function PolicyCenterPage() {
       setHasCarryoverProfile(false);
       setCarryoverMemberMode("none");
       setGuidedLoanKind("financial");
-      setGuidedClosedLoans([]);
-      setGuidedDefaultedLoans([]);
-      setGuidedActiveLoans([]);
+      setGuidedLoanEntries([]);
       return;
     }
 
@@ -290,15 +286,7 @@ function PolicyCenterPage() {
         setCarryoverLoanDraft(blankCarryoverLoan(clientId, typedResult.loans.length + 1));
         setCarryoverMemberMode(typedResult.loans.length > 0 ? "loan" : "none");
         setGuidedLoanKind(normalizeGuidedLoanKind(typedResult.loans[0]?.loanKind));
-        setGuidedClosedLoans(
-          typedResult.loans.filter((loan) => loan.status === "closed" || loan.finished),
-        );
-        setGuidedDefaultedLoans(
-          typedResult.loans.filter((loan) => loan.status === "defaulted" && !loan.finished),
-        );
-        setGuidedActiveLoans(
-          typedResult.loans.filter((loan) => loan.status === "active" && !loan.finished),
-        );
+        setGuidedLoanEntries(typedResult.loans);
       })
       .catch((error: any) => {
         if (!active) return;
@@ -313,6 +301,7 @@ function PolicyCenterPage() {
     };
   }, [clientId, loadCarryover, memberAccounts]);
 
+  const todayIso = new Date().toISOString().slice(0, 10);
   const selectedClient = memberAccounts.find((member) => member.id === clientId) ?? null;
   const selectedClientLoans = loans.filter((loan) => loan.memberId === clientId);
   const selectedClientPenalties = penalties.filter((penalty) => penalty.memberId === clientId);
@@ -371,7 +360,7 @@ function PolicyCenterPage() {
   );
   const carryoverLoanDraftFuelRows = carryoverFuelRows(carryoverLoanDraft);
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
-  const carryoverLoanInputs = [...guidedClosedLoans, ...guidedDefaultedLoans, ...guidedActiveLoans];
+  const carryoverLoanInputs = guidedLoanEntries;
   const carryoverHasDraftData =
     hasCarryoverProfile ||
     carryoverLoans.length > 0 ||
@@ -402,37 +391,17 @@ function PolicyCenterPage() {
     (sum, value) => sum + value,
     0,
   );
-  const guidedClosedLoanSummaries = guidedClosedLoans.map((loan) => ({
-    loan,
-    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
-  }));
-  const guidedOpenPaymentSeed = Math.max(
-    0,
-    lifetimeNetAvailableForCarryover -
-      guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalExpectedCollected, 0),
-  );
-  const derivedGuidedDefaultedLoans = applyDerivedCarryoverPayments(
-    guidedDefaultedLoans,
-    guidedOpenPaymentSeed,
+  const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
+    guidedLoanEntries,
+    lifetimeNetAvailableForCarryover,
     policySettings,
+    todayIso,
   );
-  const derivedGuidedActiveLoans = applyDerivedCarryoverPayments(
-    guidedActiveLoans,
-    Math.max(
-      0,
-      guidedOpenPaymentSeed -
-        derivedGuidedDefaultedLoans.reduce((sum, loan) => sum + loan.paidToDate, 0),
-    ),
-    policySettings,
+  const guidedClosedLoanSummaries = derivedGuidedLoanRows.filter((row) => row.status === "closed");
+  const guidedDefaultedLoanSummaries = derivedGuidedLoanRows.filter(
+    (row) => row.status === "defaulted",
   );
-  const guidedDefaultedLoanSummaries = derivedGuidedDefaultedLoans.map((loan) => ({
-    loan,
-    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
-  }));
-  const guidedActiveLoanSummaries = derivedGuidedActiveLoans.map((loan) => ({
-    loan,
-    summary: summarizeLegacyCarryoverLoan(loan, policySettings),
-  }));
+  const guidedActiveLoanSummaries = derivedGuidedLoanRows.filter((row) => row.status === "active");
   const guidedOpenLoanSummaries = [...guidedDefaultedLoanSummaries, ...guidedActiveLoanSummaries];
   const completedLoanComplianceTotal = guidedClosedLoanSummaries.reduce(
     (sum, row) => sum + row.summary.totalSavingsAccrued,
@@ -453,7 +422,7 @@ function PolicyCenterPage() {
   const carryoverLoanRepaymentsRecorded =
     hasClosedCarryoverLoanRecords ||
     openCarryoverLoanSummaries.length > 0 ||
-    guidedClosedLoans.length > 0 ||
+    guidedLoanEntries.length > 0 ||
     guidedOpenLoanSummaries.length > 0
       ? guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalRepayment, 0) +
         guidedOpenLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
@@ -481,8 +450,8 @@ function PolicyCenterPage() {
   const carryoverUndistributedBalance =
     derivedCarryoverTotalCollected - derivedCarryoverAllocatedTotal;
   const carryoverCompletedCycles =
-    hasClosedCarryoverLoanRecords || guidedClosedLoans.length > 0
-      ? guidedClosedLoans.length
+    hasClosedCarryoverLoanRecords || guidedClosedLoanSummaries.length > 0
+      ? guidedClosedLoanSummaries.length
       : carryoverProfile.completedLoanCycles;
 
   useEffect(() => {
@@ -622,7 +591,6 @@ function PolicyCenterPage() {
   const portfolioRemainingCollections =
     openLiveLoanSummaries.reduce((sum, row) => sum + row.summary.balance, 0) +
     openCarryoverPortfolio.reduce((sum, row) => sum + row.summary.totalOwedNow, 0);
-  const todayIso = new Date().toISOString().slice(0, 10);
   const systemTargetRows = useMemo(
     () =>
       [
@@ -752,48 +720,24 @@ function PolicyCenterPage() {
     setCarryoverLoanDraft(blankCarryoverLoan(nextMemberId, result.loans.length + 1));
     setCarryoverMemberMode(result.loans.length > 0 ? "loan" : "none");
     setGuidedLoanKind(normalizeGuidedLoanKind(result.loans[0]?.loanKind));
-    setGuidedClosedLoans(result.loans.filter((loan) => loan.status === "closed" || loan.finished));
-    setGuidedDefaultedLoans(
-      result.loans.filter((loan) => loan.status === "defaulted" && !loan.finished),
-    );
-    setGuidedActiveLoans(result.loans.filter((loan) => loan.status === "active" && !loan.finished));
+    setGuidedLoanEntries(result.loans);
   }
 
   async function saveCarryoverProfileDraft() {
     if (!selectedClient || carryoverSaving) return;
-    const nextClosedLoans = guidedClosedLoans.map((loan, index) => {
-      const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
-      return {
-        ...loan,
-        memberId: selectedClient.id,
-        label: loan.label || `Completed loan ${index + 1}`,
-        paidToDate: summary.totalExpectedCollected,
-        dueDate: loan.dueDate ?? summary.dueDate,
-        closedOn: loan.closedOn ?? summary.dueDate,
-        status: "closed" as const,
-        finished: true,
-      };
-    });
-    const nextDefaultedLoans = derivedGuidedDefaultedLoans.map((loan, index) => ({
+    const nextGuidedLoans = derivedGuidedLoanRows.map(({ loan, summary, status }, index) => ({
       ...loan,
       memberId: selectedClient.id,
-      label: loan.label || `Defaulted loan ${index + 1}`,
-      status: "defaulted" as const,
-      finished: false,
+      label:
+        loan.label || `${guidedLoanKindLabel(loan.loanKind ?? guidedLoanKind)} loan ${index + 1}`,
+      dueDate: loan.dueDate ?? summary.dueDate,
+      closedOn: status === "closed" ? (loan.closedOn ?? summary.dueDate) : undefined,
+      status,
+      finished: status === "closed",
+      loanCycleNumber: index + 1,
     }));
-    const nextActiveLoans = derivedGuidedActiveLoans.map((loan, index) => ({
-      ...loan,
-      memberId: selectedClient.id,
-      label: loan.label || `Active loan ${index + 1}`,
-      status: "active" as const,
-      finished: false,
-    }));
-    const nextGuidedLoans = [...nextClosedLoans, ...nextDefaultedLoans, ...nextActiveLoans].map(
-      (loan, index) => ({
-        ...loan,
-        loanCycleNumber: index + 1,
-      }),
-    );
+    const nextClosedLoans = nextGuidedLoans.filter((loan) => loan.status === "closed");
+    const nextOpenLoans = nextGuidedLoans.filter((loan) => loan.status !== "closed");
 
     const incompleteLoan = nextGuidedLoans.find((loan) => loan.principal <= 0);
     if (incompleteLoan) {
@@ -801,14 +745,33 @@ function PolicyCenterPage() {
       return;
     }
 
+    const duplicateOpenKind = nextOpenLoans.find((loan, index) =>
+      nextOpenLoans.some(
+        (otherLoan, otherIndex) =>
+          otherIndex !== index &&
+          (otherLoan.loanKind ?? "financial") === (loan.loanKind ?? "financial"),
+      ),
+    );
+    if (duplicateOpenKind) {
+      toast.error(
+        `Only one ${guidedLoanKindLabel(duplicateOpenKind.loanKind ?? "financial").toLowerCase()} carryover loan can remain active/defaulted.`,
+      );
+      return;
+    }
+
+    const savedGuidedLoans = nextGuidedLoans.map((loan, index) => ({
+      ...loan,
+      loanCycleNumber: index + 1,
+    }));
+
     setCarryoverSaving(true);
     try {
-      for (const loan of nextGuidedLoans) {
+      for (const loan of savedGuidedLoans) {
         await saveCarryoverLoan({ data: loan });
       }
 
       const keptGuidedLoanIds = new Set(
-        nextGuidedLoans
+        savedGuidedLoans
           .map((loan) => loan.id)
           .filter((loanId): loanId is string => Boolean(loanId)),
       );
@@ -837,7 +800,7 @@ function PolicyCenterPage() {
           feesPaidTotal: carryoverFeeTotal,
           loanRepaymentsTotal: carryoverLoanRepaymentsRecorded,
           totalCollected: recordedTotalDeposits,
-          pendingBalance: [...nextDefaultedLoans, ...nextActiveLoans].reduce(
+          pendingBalance: nextOpenLoans.reduce(
             (sum, loan) => sum + summarizeLegacyCarryoverLoan(loan, policySettings).totalOwedNow,
             0,
           ),
@@ -906,13 +869,7 @@ function PolicyCenterPage() {
   function changeGuidedLoanKind(nextKind: LoanKind) {
     const normalized = normalizeGuidedLoanKind(nextKind);
     setGuidedLoanKind(normalized);
-    setGuidedClosedLoans((current) =>
-      current.map((loan) => applyGuidedCarryoverLoanKind(loan, normalized)),
-    );
-    setGuidedDefaultedLoans((current) =>
-      current.map((loan) => applyGuidedCarryoverLoanKind(loan, normalized)),
-    );
-    setGuidedActiveLoans((current) =>
+    setGuidedLoanEntries((current) =>
       current.map((loan) => applyGuidedCarryoverLoanKind(loan, normalized)),
     );
   }
@@ -2151,40 +2108,10 @@ function PolicyCenterPage() {
                         <div className="space-y-4">
                           <div className="grid gap-3 md:grid-cols-3">
                             <NumberField
-                              label="Finished loans"
-                              value={guidedClosedLoans.length}
+                              label="Loan entries"
+                              value={guidedLoanEntries.length}
                               onChange={(value) =>
-                                setGuidedClosedLoans((current) =>
-                                  resizeGuidedCarryoverLoans(
-                                    current,
-                                    value,
-                                    selectedClient.id,
-                                    "closed",
-                                    guidedLoanKind,
-                                  ),
-                                )
-                              }
-                            />
-                            <NumberField
-                              label="Defaulted loans"
-                              value={guidedDefaultedLoans.length}
-                              onChange={(value) =>
-                                setGuidedDefaultedLoans((current) =>
-                                  resizeGuidedCarryoverLoans(
-                                    current,
-                                    value,
-                                    selectedClient.id,
-                                    "defaulted",
-                                    guidedLoanKind,
-                                  ),
-                                )
-                              }
-                            />
-                            <NumberField
-                              label="Active loans"
-                              value={guidedActiveLoans.length}
-                              onChange={(value) =>
-                                setGuidedActiveLoans((current) =>
+                                setGuidedLoanEntries((current) =>
                                   resizeGuidedCarryoverLoans(
                                     current,
                                     value,
@@ -2195,6 +2122,11 @@ function PolicyCenterPage() {
                                 )
                               }
                             />
+                            <MetricCard
+                              label="Finished"
+                              value={`${guidedClosedLoanSummaries.length}`}
+                            />
+                            <MetricCard label="Open" value={`${guidedOpenLoanSummaries.length}`} />
                           </div>
                           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             <MetricCard
@@ -2217,56 +2149,15 @@ function PolicyCenterPage() {
                             />
                           </div>
                           <div className="grid gap-4 xl:grid-cols-2">
-                            {guidedClosedLoans.map((loan, index) => (
+                            {derivedGuidedLoanRows.map(({ loan, summary, status }, index) => (
                               <GuidedCarryoverLoanCard
-                                key={loan.id || `closed-${index}`}
-                                status="closed"
+                                key={loan.id || `loan-entry-${index}`}
+                                status={status}
                                 index={index}
                                 loan={loan}
-                                summary={
-                                  guidedClosedLoanSummaries[index]?.summary ??
-                                  summarizeLegacyCarryoverLoan(loan, policySettings)
-                                }
+                                summary={summary}
                                 onChange={(nextLoan) =>
-                                  setGuidedClosedLoans((current) =>
-                                    current.map((item, itemIndex) =>
-                                      itemIndex === index ? nextLoan : item,
-                                    ),
-                                  )
-                                }
-                              />
-                            ))}
-                            {guidedDefaultedLoans.map((loan, index) => (
-                              <GuidedCarryoverLoanCard
-                                key={loan.id || `defaulted-${index}`}
-                                status="defaulted"
-                                index={index}
-                                loan={loan}
-                                summary={
-                                  guidedDefaultedLoanSummaries[index]?.summary ??
-                                  summarizeLegacyCarryoverLoan(loan, policySettings)
-                                }
-                                onChange={(nextLoan) =>
-                                  setGuidedDefaultedLoans((current) =>
-                                    current.map((item, itemIndex) =>
-                                      itemIndex === index ? nextLoan : item,
-                                    ),
-                                  )
-                                }
-                              />
-                            ))}
-                            {guidedActiveLoans.map((loan, index) => (
-                              <GuidedCarryoverLoanCard
-                                key={loan.id || `active-${index}`}
-                                status="active"
-                                index={index}
-                                loan={loan}
-                                summary={
-                                  guidedActiveLoanSummaries[index]?.summary ??
-                                  summarizeLegacyCarryoverLoan(loan, policySettings)
-                                }
-                                onChange={(nextLoan) =>
-                                  setGuidedActiveLoans((current) =>
+                                  setGuidedLoanEntries((current) =>
                                     current.map((item, itemIndex) =>
                                       itemIndex === index ? nextLoan : item,
                                     ),
@@ -3525,6 +3416,14 @@ function carryoverFuelRows(loan: LegacyCarryoverLoan, fallbackCount = 1) {
   );
 }
 
+function firstFuelEntryDate(rows: Array<{ date?: string }>, fallback: string) {
+  const firstDate = rows
+    .map((row) => String(row.date ?? "").slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort((left, right) => left.localeCompare(right))[0];
+  return firstDate ?? fallback;
+}
+
 function withCarryoverFuelRows(
   loan: LegacyCarryoverLoan,
   rows: ReturnType<typeof carryoverFuelRows>,
@@ -3542,6 +3441,7 @@ function withCarryoverFuelRows(
   return {
     ...loan,
     principal: fuelAmount,
+    startDate: firstFuelEntryDate(rows, loan.startDate),
     feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
       {
         ...feeBreakdown,
@@ -3624,17 +3524,79 @@ function applyDerivedCarryoverPayments(
   let remaining = Math.max(0, Number(availableCollected) || 0);
   return loans.map((loan) => {
     const summary = summarizeLegacyCarryoverLoan({ ...loan, paidToDate: 0 }, policySettings);
-    const paidToDate =
-      loan.status === "closed" || loan.finished
-        ? summary.totalExpectedCollected
-        : Math.min(remaining, summary.totalExpectedCollected);
-    if (loan.status !== "closed" && !loan.finished) {
-      remaining = Math.max(0, remaining - paidToDate);
-    }
+    const paidToDate = Math.min(remaining, summary.totalExpectedCollected);
+    remaining = Math.max(0, remaining - paidToDate);
     return {
       ...loan,
       paidToDate,
     };
+  });
+}
+
+function deriveGuidedCarryoverLoanRows(
+  loans: LegacyCarryoverLoan[],
+  availableCollected: number,
+  policySettings: Parameters<typeof summarizeLegacyCarryoverLoan>[1],
+  asOfDate: string,
+) {
+  const derived = new Map<
+    number,
+    {
+      loan: LegacyCarryoverLoan;
+      summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+      status: "closed" | "defaulted" | "active";
+    }
+  >();
+  let remaining = Math.max(0, Number(availableCollected) || 0);
+  const sortedLoans = loans
+    .map((loan, index) => ({ loan, index }))
+    .sort((left, right) => {
+      const byDate = String(left.loan.startDate ?? "").localeCompare(
+        String(right.loan.startDate ?? ""),
+      );
+      if (byDate !== 0) return byDate;
+      return left.index - right.index;
+    });
+
+  sortedLoans.forEach(({ loan, index }) => {
+    const unpaidSummary = summarizeLegacyCarryoverLoan(
+      { ...loan, paidToDate: 0 },
+      policySettings,
+      asOfDate,
+    );
+    const paidToDate = Math.min(remaining, unpaidSummary.totalExpectedCollected);
+    remaining = Math.max(0, remaining - paidToDate);
+    const paidLoan = { ...loan, paidToDate };
+    const summary = summarizeLegacyCarryoverLoan(paidLoan, policySettings, asOfDate);
+    const status =
+      summary.totalOwedNow <= 0
+        ? "closed"
+        : summary.dueDate < asOfDate || paidLoan.status === "defaulted"
+          ? "defaulted"
+          : "active";
+    derived.set(index, {
+      loan: {
+        ...paidLoan,
+        status,
+        finished: status === "closed",
+        closedOn: status === "closed" ? (paidLoan.closedOn ?? summary.dueDate) : undefined,
+      },
+      summary,
+      status,
+    });
+  });
+
+  return loans.map((loan, index) => {
+    const row = derived.get(index);
+    if (row) return row;
+    const summary = summarizeLegacyCarryoverLoan(loan, policySettings, asOfDate);
+    const status =
+      summary.totalOwedNow <= 0
+        ? "closed"
+        : summary.dueDate < asOfDate || loan.status === "defaulted"
+          ? "defaulted"
+          : "active";
+    return { loan: { ...loan, status, finished: status === "closed" }, summary, status };
   });
 }
 

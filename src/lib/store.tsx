@@ -38,6 +38,7 @@ import {
   isMemberCategory,
   isInvestorOnlyCategory,
   isSpecialMemberCategory,
+  hasMemberTag,
   nextMembershipNumber,
   membershipIdCandidates,
   membershipSequenceValue,
@@ -186,6 +187,21 @@ export function loanProductChargeAmount(loan: {
   return 0;
 }
 
+export function loanManualPenaltyAmount(loan: { supplierPayload?: Record<string, unknown> }) {
+  const payload =
+    loan.supplierPayload && typeof loan.supplierPayload === "object" ? loan.supplierPayload : {};
+  const manual = Number(payload.manualPenaltyAmount ?? 0);
+  const carried = Number(payload.carriedForwardPenaltyAmount ?? 0);
+  const legacyPrior = Number(payload.priorPenaltyAmount ?? 0);
+  if ((Number.isFinite(manual) && manual > 0) || (Number.isFinite(carried) && carried > 0)) {
+    return Math.max(
+      0,
+      (Number.isFinite(manual) ? manual : 0) + (Number.isFinite(carried) ? carried : 0),
+    );
+  }
+  return Number.isFinite(legacyPrior) ? Math.max(0, legacyPrior) : 0;
+}
+
 export type Transaction = {
   id: string;
   date: string;
@@ -307,7 +323,18 @@ export function businessPermanenceLabel(value?: BusinessPermanence) {
   return "";
 }
 
-export function memberNeedsSticker(member: Pick<Member, "businessPermanence" | "fees">) {
+export function memberIsFuelMember(
+  member: Partial<Pick<Member, "category" | "memberTags">> | null | undefined,
+) {
+  if (!member) return false;
+  return hasMemberTag(member.memberTags, "locomotive", member.category);
+}
+
+export function memberNeedsSticker(
+  member: Pick<Member, "businessPermanence" | "fees"> &
+    Partial<Pick<Member, "category" | "memberTags">>,
+) {
+  if (memberIsFuelMember(member)) return false;
   if (member.businessPermanence) return member.businessPermanence === "permanent";
   return !!member.fees.hasShop;
 }
@@ -403,6 +430,7 @@ export type MpesaAllocation = {
 };
 
 const SHARE_PRICE = 100;
+export const FUEL_BUFFER_TARGET = 3000;
 export const STANDARD_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
 export const PREMIUM_LOAN_TERMS: LoanTermDays[] = [14, 30, 60, 90];
 export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30, 60, 90];
@@ -1095,7 +1123,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           id: result.user.id,
           name: result.user.name,
           role: result.user.role,
-          canMarkAttendance: result.user.role === "director",
+          canMarkAttendance: result.user.role === "director" || result.user.canMarkAttendance,
         } satisfies Staff;
         setIsAuthenticated(true);
         setAuthMode("staff");
@@ -1558,6 +1586,7 @@ export function loanPenaltySummary(
     fallbackPaid: totalPaid,
     penaltyPct: SBC_FEES.penaltyDailyPct,
     defaultPenaltyPct: SBC_FEES.defaultPenaltyPct,
+    priorPenaltyAmount: loanManualPenaltyAmount(loan),
     defaultedAmountCap: DEFAULT_DEFAULTED_AMOUNT_STOP_CAP,
   });
   const totalPenalty = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
@@ -1574,6 +1603,7 @@ export function loanPenaltySummary(
     dailyExpected,
     dailyUnpaidBalance: ledger.currentDailyBalance,
     dailyPenalty: ledger.dailyPenaltyAmount,
+    manualPenaltyAmount: loanManualPenaltyAmount(loan),
     skippedPaymentDays: ledger.penaltyDays,
     daysPastDue: ledger.daysPastDue,
     dueDatePenaltyBase: ledger.currentDailyBalance,
@@ -1855,9 +1885,10 @@ const DIRECTOR_ONLY = new Set(["staffmgmt", "investors", "fees"]);
 
 /** Filter ROLE_NAV based on role-only restrictions. Staff chat remains visible to every staff member. */
 export function navForUser(user: Staff): string[] {
-  const base = ROLE_NAV[user.role] ?? [];
-  if (user.role === "director") return base;
-  return base.filter((k) => !DIRECTOR_ONLY.has(k));
+  const base = new Set(ROLE_NAV[user.role] ?? []);
+  if (user.canMarkAttendance) base.add("attendance");
+  if (user.role === "director") return Array.from(base);
+  return Array.from(base).filter((k) => !DIRECTOR_ONLY.has(k));
 }
 
 export function scoreLoan(inputs: {

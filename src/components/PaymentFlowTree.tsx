@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { fmtKES } from "@/lib/store";
+import { FUEL_BUFFER_TARGET, fmtKES } from "@/lib/store";
 
 type PaymentFlowTreeProps = {
   membershipFeeAmount: number;
@@ -162,8 +162,9 @@ function FeeGate({
         <TinyNode title="Membership card" detail={fmtKES(cardFeeAmount)} />
         <TinyNode
           title="Sticker fee"
-          detail={`${fmtKES(stickerFeeAmount)} if business is permanent`}
+          detail={`${fmtKES(stickerFeeAmount)} for permanent non-fuel businesses`}
         />
+        <TinyNode title="Fuel buffer" detail={`${fmtKES(FUEL_BUFFER_TARGET)} for fuel members`} />
       </div>
     </div>
   );

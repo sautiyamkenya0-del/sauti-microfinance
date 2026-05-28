@@ -11,6 +11,7 @@ import { FollowUps } from "@/components/loans/FollowUps";
 import {
   FuelJobCardFields,
   blankFuelJobCardRows,
+  normalizeFuelJobCardRows,
   resizeFuelJobCardRows,
   summarizeFuelJobCardRows,
 } from "@/components/loans/FuelJobCardFields";
@@ -27,8 +28,10 @@ import {
   fmtKES,
   hasMemberTag,
   isMemberCategory,
+  memberIsFuelMember,
   loanSummary,
   useStore,
+  type BusinessPermanence,
   type LoanKind,
 } from "@/lib/store";
 import { toast } from "sonner";
@@ -57,7 +60,10 @@ function memberMatchesLoanKind(
   if (loanKind === "financial") return true;
   if (loanKind === "fuel")
     return (
-      hasMemberTag(member.memberTags, "locomotive", member.category as never) || !member.category
+      hasMemberTag(member.memberTags, "locomotive", member.category as never) ||
+      hasMemberTag(member.memberTags, "member", member.category as never) ||
+      isMemberCategory(member.category as never) ||
+      !member.category
     );
   if (loanKind === "stock")
     return hasMemberTag(member.memberTags, "stock", member.category as never) || !member.category;
@@ -87,6 +93,32 @@ function openLoanStatusLabel(status: string) {
   if (status === "pending") return "pending";
   if (status === "defaulted") return "defaulted";
   return "active";
+}
+
+function firstFuelEntryDate(rows: Array<{ date?: string }>, fallback: string) {
+  const firstDate = rows
+    .map((row) => String(row.date ?? "").slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort((left, right) => left.localeCompare(right))[0];
+  return firstDate ?? fallback;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function moneyValue(value: unknown) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? Math.max(0, amount) : 0;
+}
+
+function fuelRowsFromCarryoverLoan(loan?: LegacyCarryoverLoan) {
+  if (!loan) return blankFuelJobCardRows(1);
+  const productMeta = objectRecord(loan.feeBreakdown?.productMeta);
+  const jobCard = objectRecord(productMeta.jobCard);
+  return normalizeFuelJobCardRows(productMeta.fuelEntries ?? jobCard.rows, 1);
 }
 
 export const Route = createFileRoute("/loans")({
@@ -402,6 +434,7 @@ function LoansHub() {
             memberId={historyMemberId}
             carryoverLoans={carryoverLoans}
             onClose={() => setHistoryMemberId(null)}
+            onCarryoverChanged={refreshCarryoverLoans}
             onNewLoan={(id) => {
               setSelectedMemberId(id);
               setHistoryMemberId(null);
@@ -431,6 +464,7 @@ function CarryoverEntry({
   saveCarryoverLoan: (args: { data: unknown }) => Promise<unknown>;
   onSaved: () => Promise<unknown>;
 }) {
+  const { updateMember } = useStore();
   const today = new Date().toISOString().slice(0, 10);
   const defaultKind = initialLoanKind === "service" ? "fuel" : initialLoanKind;
   const [loanKind, setLoanKind] = useState<LoanKind>(
@@ -441,18 +475,27 @@ function CarryoverEntry({
     [loanKind, members],
   );
   const [memberId, setMemberId] = useState(eligibleMembers[0]?.id ?? "");
+  const selectedMember = members.find((member) => member.id === memberId);
+  const [fuelProfile, setFuelProfile] = useState(() => ({
+    name: selectedMember?.name ?? "",
+    phone: selectedMember?.phone ?? "",
+    businessName: selectedMember?.businessName ?? "",
+    businessType: selectedMember?.businessType ?? "",
+    businessPermanence: (selectedMember?.businessPermanence ?? "") as "" | BusinessPermanence,
+    businessAddress: selectedMember?.businessAddress ?? "",
+    vehiclePlate: selectedMember?.vehiclePlate ?? "",
+  }));
   const [date, setDate] = useState(today);
   const [amount, setAmount] = useState(0);
   const [charge, setCharge] = useState(0);
   const [ratePct, setRatePct] = useState(0);
   const [termDays, setTermDays] = useState(loanKind === "fuel" ? 1 : 30);
-  const [paidToDate, setPaidToDate] = useState(0);
   const [priorPenaltyAmount, setPriorPenaltyAmount] = useState(0);
-  const [vehiclePlate, setVehiclePlate] = useState("");
   const [fuelEntryCount, setFuelEntryCount] = useState(1);
   const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
   const [stockItem, setStockItem] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadedFuelCarryoverId, setLoadedFuelCarryoverId] = useState("");
 
   useEffect(() => {
     if (!eligibleMembers.some((member) => member.id === memberId)) {
@@ -461,21 +504,63 @@ function CarryoverEntry({
   }, [eligibleMembers, memberId]);
 
   useEffect(() => {
+    setFuelProfile({
+      name: selectedMember?.name ?? "",
+      phone: selectedMember?.phone ?? "",
+      businessName: selectedMember?.businessName ?? "",
+      businessType: selectedMember?.businessType ?? "",
+      businessPermanence: (selectedMember?.businessPermanence ?? "") as "" | BusinessPermanence,
+      businessAddress: selectedMember?.businessAddress ?? "",
+      vehiclePlate: selectedMember?.vehiclePlate ?? "",
+    });
+    setLoadedFuelCarryoverId("");
+  }, [selectedMember?.id]);
+
+  useEffect(() => {
     if (loanKind === "fuel" && termDays !== 1) setTermDays(1);
     if (loanKind === "stock" && termDays < 1) setTermDays(14);
   }, [loanKind, termDays]);
 
-  const selectedMember = members.find((member) => member.id === memberId);
   const fuelJobCardSummary = useMemo(
     () => summarizeFuelJobCardRows(fuelJobCardRows),
     [fuelJobCardRows],
   );
-  const selectedVehiclePlate = selectedMember?.vehiclePlate || vehiclePlate.trim().toUpperCase();
+  const selectedVehiclePlate = (fuelProfile.vehiclePlate || selectedMember?.vehiclePlate || "")
+    .trim()
+    .toUpperCase();
   const fuelAmount = fuelJobCardSummary.totalCost;
   const fuelCharge = fuelJobCardSummary.totalFuelCharge;
   const effectiveAmount = loanKind === "fuel" ? fuelAmount : amount;
   const effectiveCharge = loanKind === "fuel" ? fuelCharge : charge;
   const totalOpeningBalance = effectiveAmount + effectiveCharge;
+  const selectedIsFuelMember = memberIsFuelMember(selectedMember);
+  const needsFuelProfile = loanKind === "fuel" && !!selectedMember && !selectedIsFuelMember;
+  const editableFuelCarryover = useMemo(() => {
+    if (loanKind !== "fuel" || !memberId) return undefined;
+    return carryoverLoans.find((loan) => {
+      if (loan.memberId !== memberId) return false;
+      if ((loan.loanKind ?? "financial") !== "fuel") return false;
+      const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+      return loan.status !== "closed" && !summary.isFinished && summary.totalOwedNow > 0;
+    });
+  }, [carryoverLoans, loanKind, memberId, policySettings]);
+
+  useEffect(() => {
+    if (loanKind !== "fuel" || !editableFuelCarryover) {
+      setLoadedFuelCarryoverId("");
+      return;
+    }
+    if (loadedFuelCarryoverId === editableFuelCarryover.id) return;
+    const rows = fuelRowsFromCarryoverLoan(editableFuelCarryover);
+    setFuelJobCardRows(rows);
+    setFuelEntryCount(rows.length);
+    setRatePct(editableFuelCarryover.interestRatePct);
+    setTermDays(editableFuelCarryover.termDays || 1);
+    setDate(editableFuelCarryover.startDate);
+    setPriorPenaltyAmount(editableFuelCarryover.feeBreakdown?.priorPenaltyAmount ?? 0);
+    setLoadedFuelCarryoverId(editableFuelCarryover.id);
+  }, [editableFuelCarryover, loadedFuelCarryoverId, loanKind]);
+
   const carryoverBlocker = useMemo(() => {
     if (!memberId) return "";
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -496,9 +581,10 @@ function CarryoverEntry({
       return loan.status !== "closed" && !summary.isFinished && summary.totalOwedNow > 0;
     });
     if (!existingCarryover) return "";
+    if (loanKind === "fuel" && existingCarryover.id === editableFuelCarryover?.id) return "";
     const summary = summarizeLegacyCarryoverLoan(existingCarryover, policySettings);
     return `${summary.dueDate < todayIso ? "defaulted" : "active"} ${loanKindLabel(loanKind)} carryover ${existingCarryover.id}`;
-  }, [carryoverLoans, loanKind, loans, memberId, policySettings]);
+  }, [carryoverLoans, editableFuelCarryover?.id, loanKind, loans, memberId, policySettings]);
 
   async function saveDraft() {
     if (!memberId) return toast.error("Select a member first.");
@@ -514,19 +600,84 @@ function CarryoverEntry({
           : "Enter the carryover amount.",
       );
     }
-    if (loanKind === "fuel" && !selectedVehiclePlate) {
-      return toast.error("Add a vehicle plate to this locomotive profile or this carryover entry.");
-    }
     if (loanKind === "stock" && !stockItem.trim()) {
       return toast.error("Enter the stock item.");
+    }
+    if (loanKind === "fuel" && !selectedVehiclePlate) {
+      return toast.error("Enter the locomotive vehicle plate before saving fuel carryover.");
+    }
+    if (needsFuelProfile) {
+      if (!fuelProfile.name.trim() || !fuelProfile.phone.trim()) {
+        return toast.error("Confirm the member name and phone on the fuel profile first.");
+      }
+      if (!fuelProfile.businessPermanence) {
+        return toast.error("Select permanent or semi-permanent for the fuel profile.");
+      }
     }
 
     setSaving(true);
     try {
+      if (loanKind === "fuel" && selectedMember) {
+        const memberTags = Array.from(
+          new Set([...(selectedMember.memberTags ?? []), "member", "locomotive"]),
+        ) as any;
+        const nextCategory =
+          selectedMember.category === "member" ? "locomotive" : selectedMember.category;
+        const nextName = fuelProfile.name.trim() || selectedMember.name;
+        const nextPhone = fuelProfile.phone.trim() || selectedMember.phone;
+        const nextBusinessName =
+          fuelProfile.businessName.trim() || selectedMember.businessName || undefined;
+        const nextBusinessType =
+          fuelProfile.businessType.trim() || selectedMember.businessType || undefined;
+        const nextBusinessAddress =
+          fuelProfile.businessAddress.trim() || selectedMember.businessAddress || undefined;
+        const nextBusinessPermanence =
+          fuelProfile.businessPermanence || selectedMember.businessPermanence;
+        const shouldUpdateFuelProfile =
+          needsFuelProfile ||
+          selectedVehiclePlate !== (selectedMember.vehiclePlate ?? "").trim().toUpperCase() ||
+          nextName !== selectedMember.name ||
+          nextPhone !== selectedMember.phone ||
+          nextBusinessName !== selectedMember.businessName ||
+          nextBusinessType !== selectedMember.businessType ||
+          nextBusinessAddress !== selectedMember.businessAddress ||
+          nextBusinessPermanence !== selectedMember.businessPermanence;
+
+        if (shouldUpdateFuelProfile) {
+          await updateMember({
+            memberId: selectedMember.id,
+            name: nextName,
+            phone: nextPhone,
+            status: selectedMember.status,
+            shares: selectedMember.shares,
+            savingsBalance: selectedMember.savingsBalance,
+            category: nextCategory,
+            memberTags,
+            firstName: selectedMember.firstName,
+            secondName: selectedMember.secondName,
+            thirdName: selectedMember.thirdName,
+            dob: selectedMember.dob,
+            gender: selectedMember.gender,
+            email: selectedMember.email,
+            address: selectedMember.address,
+            city: selectedMember.city,
+            county: selectedMember.county,
+            village: selectedMember.village,
+            oldSystemId: selectedMember.oldSystemId,
+            businessName: nextBusinessName,
+            businessType: nextBusinessType,
+            businessPermanence: nextBusinessPermanence,
+            businessAddress: nextBusinessAddress,
+            vehiclePlate: selectedVehiclePlate,
+            fieldOfficerId: selectedMember.fieldOfficerId,
+          });
+        }
+      }
+
       const productMeta =
         loanKind === "fuel"
           ? {
-              vehiclePlate: selectedVehiclePlate,
+              ...(selectedVehiclePlate ? { vehiclePlate: selectedVehiclePlate } : {}),
               fuelAmount: effectiveAmount,
               fuelCharge: effectiveCharge,
               fuelEntries: fuelJobCardRows,
@@ -538,45 +689,56 @@ function CarryoverEntry({
           : loanKind === "stock"
             ? { stockItem: stockItem.trim(), stockAmount: effectiveAmount, stockCharge: charge }
             : {};
-      const savedPaidToDate = paidToDate;
+      const startDate = loanKind === "fuel" ? firstFuelEntryDate(fuelJobCardRows, date) : date;
       await saveCarryoverLoan({
         data: {
+          id: editableFuelCarryover?.id,
           memberId,
           label:
             loanKind === "fuel"
-              ? `Fuel carryover - ${selectedVehiclePlate}`
+              ? editableFuelCarryover?.label ||
+                `Fuel carryover${selectedVehiclePlate ? ` - ${selectedVehiclePlate}` : ""}`
               : loanKind === "stock"
                 ? `Stock carryover - ${stockItem.trim()}`
                 : "Financial carryover",
           loanKind,
-          loanCycleNumber: 1,
+          loanCycleNumber: editableFuelCarryover?.loanCycleNumber ?? 1,
           principal: effectiveAmount,
           interestRatePct: ratePct,
           termDays: Math.max(1, Math.floor(termDays)),
           dailySavingsAmount: 0,
-          startDate: date,
-          paidToDate: savedPaidToDate,
-          status: "active",
-          finished: false,
-          penaltyWaivedAmount: 0,
+          startDate,
+          paidToDate: editableFuelCarryover?.paidToDate ?? 0,
+          status: editableFuelCarryover?.status ?? "active",
+          finished: editableFuelCarryover?.finished ?? false,
+          penaltyWaivedAmount: editableFuelCarryover?.penaltyWaivedAmount ?? 0,
           feeBreakdown: {
             processingFeeAmount: effectiveCharge,
             priorPenaltyAmount,
             productMeta,
           },
-          notes: `${loanKindLabel(loanKind)} carryover entered from Lending page. Opening balance ${totalOpeningBalance}.`,
+          notes: [
+            editableFuelCarryover?.notes,
+            `${loanKindLabel(loanKind)} carryover ${editableFuelCarryover ? "updated" : "entered"} from Lending page. Opening balance ${totalOpeningBalance}.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
         },
       });
       await onSaved();
-      toast.success("Carryover loan saved and added to the loan book.");
-      setAmount(0);
-      setCharge(0);
-      setPaidToDate(0);
-      setPriorPenaltyAmount(0);
-      setVehiclePlate("");
-      setFuelEntryCount(1);
-      setFuelJobCardRows(blankFuelJobCardRows(1));
-      setStockItem("");
+      toast.success(
+        editableFuelCarryover
+          ? "Fuel carryover entries updated in the loan book."
+          : "Carryover loan saved and added to the loan book.",
+      );
+      if (!editableFuelCarryover) {
+        setAmount(0);
+        setCharge(0);
+        setPriorPenaltyAmount(0);
+        setFuelEntryCount(1);
+        setFuelJobCardRows(blankFuelJobCardRows(1));
+        setStockItem("");
+      }
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to save carryover loan.");
     } finally {
@@ -616,15 +778,95 @@ function CarryoverEntry({
               />
             </div>
           </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Date</span>
-            <input
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            />
-          </label>
+          {loanKind === "fuel" && editableFuelCarryover ? (
+            <div className="md:col-span-2 xl:col-span-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+              Updating existing open fuel carryover {editableFuelCarryover.id}. Increase the fuel
+              entry count to append more refill rows, then save.
+            </div>
+          ) : null}
+          {needsFuelProfile ? (
+            <div className="md:col-span-2 xl:col-span-3 grid gap-3 rounded-md border border-border bg-muted/30 p-3 md:grid-cols-2 xl:grid-cols-3">
+              <div className="md:col-span-2 xl:col-span-3 text-sm font-semibold">
+                First fuel application setup
+              </div>
+              <TextInput
+                label="Member Name"
+                value={fuelProfile.name}
+                onChange={(value) => setFuelProfile((current) => ({ ...current, name: value }))}
+              />
+              <TextInput
+                label="Phone"
+                value={fuelProfile.phone}
+                onChange={(value) => setFuelProfile((current) => ({ ...current, phone: value }))}
+              />
+              <TextInput
+                label="Vehicle Plate"
+                value={fuelProfile.vehiclePlate}
+                onChange={(value) =>
+                  setFuelProfile((current) => ({ ...current, vehiclePlate: value.toUpperCase() }))
+                }
+              />
+              <TextInput
+                label="Business Name"
+                value={fuelProfile.businessName}
+                onChange={(value) =>
+                  setFuelProfile((current) => ({ ...current, businessName: value }))
+                }
+              />
+              <TextInput
+                label="Business Type"
+                value={fuelProfile.businessType}
+                onChange={(value) =>
+                  setFuelProfile((current) => ({ ...current, businessType: value }))
+                }
+              />
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  Business Setup
+                </span>
+                <select
+                  value={fuelProfile.businessPermanence}
+                  onChange={(event) =>
+                    setFuelProfile((current) => ({
+                      ...current,
+                      businessPermanence: event.target.value as BusinessPermanence,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                >
+                  <option value="">Select setup</option>
+                  <option value="permanent">Permanent</option>
+                  <option value="semi">Semi-permanent</option>
+                </select>
+              </label>
+              <div className="md:col-span-2 xl:col-span-3">
+                <TextInput
+                  label="Business Location"
+                  value={fuelProfile.businessAddress}
+                  onChange={(value) =>
+                    setFuelProfile((current) => ({ ...current, businessAddress: value }))
+                  }
+                />
+              </div>
+              <div className="md:col-span-2 xl:col-span-3 text-xs text-muted-foreground">
+                Saving this fuel carryover will register the member as a locomotive fuel member and
+                skip sticker fees. Fuel members pay the {fmtKES(3000)} fuel buffer instead.
+              </div>
+            </div>
+          ) : null}
+          {loanKind !== "fuel" ? (
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Date
+              </span>
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            </label>
+          ) : null}
           {carryoverBlocker ? (
             <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
               Existing open record: {carryoverBlocker}
@@ -632,25 +874,14 @@ function CarryoverEntry({
           ) : null}
           {loanKind === "fuel" ? (
             <>
-              {selectedMember?.vehiclePlate ? (
+              {selectedVehiclePlate ? (
                 <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
                   <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     Vehicle Plate
                   </div>
-                  <div className="mt-1 font-mono font-semibold">{selectedMember.vehiclePlate}</div>
+                  <div className="mt-1 font-mono font-semibold">{selectedVehiclePlate}</div>
                 </div>
-              ) : (
-                <label className="block">
-                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    Vehicle Plate
-                  </span>
-                  <input
-                    value={vehiclePlate}
-                    onChange={(event) => setVehiclePlate(event.target.value.toUpperCase())}
-                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                  />
-                </label>
-              )}
+              ) : null}
               <NumberInput
                 label="Fuel Entries"
                 value={fuelEntryCount}
@@ -701,15 +932,22 @@ function CarryoverEntry({
               </label>
             </>
           ) : null}
-          <NumberInput label="Paid To Date" value={paidToDate} onChange={setPaidToDate} />
-          <NumberInput
-            label="Total Penalties Before This Loan"
-            value={priorPenaltyAmount}
-            onChange={setPriorPenaltyAmount}
-          />
           {loanKind === "fuel" ? (
-            <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
-          ) : null}
+            <>
+              <FuelJobCardFields rows={fuelJobCardRows} onChange={setFuelJobCardRows} />
+              <NumberInput
+                label="Total Penalties Before Last Loan"
+                value={priorPenaltyAmount}
+                onChange={setPriorPenaltyAmount}
+              />
+            </>
+          ) : (
+            <NumberInput
+              label="Total Penalties Before Last Loan"
+              value={priorPenaltyAmount}
+              onChange={setPriorPenaltyAmount}
+            />
+          )}
         </div>
         <div className="mt-5 flex justify-end">
           <button
