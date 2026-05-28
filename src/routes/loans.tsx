@@ -12,7 +12,6 @@ import {
   FuelJobCardFields,
   blankFuelJobCardRows,
   normalizeFuelJobCardRows,
-  resizeFuelJobCardRows,
   summarizeFuelJobCardRows,
 } from "@/components/loans/FuelJobCardFields";
 import { LoanBook, MemberLoanHistory } from "@/components/loans/LoanBook";
@@ -491,7 +490,6 @@ function CarryoverEntry({
   const [ratePct, setRatePct] = useState(0);
   const [termDays, setTermDays] = useState(loanKind === "fuel" ? 1 : 30);
   const [priorPenaltyAmount, setPriorPenaltyAmount] = useState(0);
-  const [fuelEntryCount, setFuelEntryCount] = useState(1);
   const [fuelJobCardRows, setFuelJobCardRows] = useState(() => blankFuelJobCardRows(1));
   const [stockItem, setStockItem] = useState("");
   const [saving, setSaving] = useState(false);
@@ -553,7 +551,6 @@ function CarryoverEntry({
     if (loadedFuelCarryoverId === editableFuelCarryover.id) return;
     const rows = fuelRowsFromCarryoverLoan(editableFuelCarryover);
     setFuelJobCardRows(rows);
-    setFuelEntryCount(rows.length);
     setRatePct(editableFuelCarryover.interestRatePct);
     setTermDays(editableFuelCarryover.termDays || 1);
     setDate(editableFuelCarryover.startDate);
@@ -735,7 +732,6 @@ function CarryoverEntry({
         setAmount(0);
         setCharge(0);
         setPriorPenaltyAmount(0);
-        setFuelEntryCount(1);
         setFuelJobCardRows(blankFuelJobCardRows(1));
         setStockItem("");
       }
@@ -746,8 +742,10 @@ function CarryoverEntry({
     }
   }
 
+  const isFuelCarryover = loanKind === "fuel";
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+    <div className={`grid gap-4 ${isFuelCarryover ? "" : "lg:grid-cols-[1fr_280px]"}`}>
       <section className="rounded-lg border border-border bg-card p-5">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <label className="block">
@@ -781,7 +779,7 @@ function CarryoverEntry({
           {loanKind === "fuel" && editableFuelCarryover ? (
             <div className="md:col-span-2 xl:col-span-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
               Updating existing open fuel carryover {editableFuelCarryover.id}. Increase the fuel
-              entry count to append more refill rows, then save.
+              row count with the table buttons to append more refill rows, then save.
             </div>
           ) : null}
           {needsFuelProfile ? (
@@ -872,26 +870,10 @@ function CarryoverEntry({
               Existing open record: {carryoverBlocker}
             </div>
           ) : null}
-          {loanKind === "fuel" ? (
-            <>
-              {selectedVehiclePlate ? (
-                <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
-                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    Vehicle Plate
-                  </div>
-                  <div className="mt-1 font-mono font-semibold">{selectedVehiclePlate}</div>
-                </div>
-              ) : null}
-              <NumberInput
-                label="Fuel Entries"
-                value={fuelEntryCount}
-                onChange={(value) => {
-                  const count = Math.max(1, Math.floor(Number(value) || 1));
-                  setFuelEntryCount(count);
-                  setFuelJobCardRows((current) => resizeFuelJobCardRows(current, count));
-                }}
-              />
-            </>
+          {loanKind === "fuel" && selectedVehiclePlate ? (
+            <div className="md:col-span-2 xl:col-span-3 text-xs text-muted-foreground">
+              Vehicle plate: <span className="font-mono font-medium">{selectedVehiclePlate}</span>
+            </div>
           ) : null}
           {loanKind === "stock" ? (
             <label className="block">
@@ -960,27 +942,29 @@ function CarryoverEntry({
           </button>
         </div>
       </section>
-      <aside className="rounded-lg border border-border bg-card p-5 text-sm">
-        <div className="font-semibold">Opening Summary</div>
-        <div className="mt-3 space-y-2 text-xs">
-          <div className="flex justify-between gap-3">
-            <span className="text-muted-foreground">Client</span>
-            <span className="text-right font-medium">{selectedMember?.name ?? "-"}</span>
+      {!isFuelCarryover ? (
+        <aside className="rounded-lg border border-border bg-card p-5 text-sm">
+          <div className="font-semibold">Opening Summary</div>
+          <div className="mt-3 space-y-2 text-xs">
+            <div className="flex justify-between gap-3">
+              <span className="text-muted-foreground">Client</span>
+              <span className="text-right font-medium">{selectedMember?.name ?? "-"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span>{fmtKES(effectiveAmount)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Charge</span>
+              <span>{fmtKES(effectiveCharge)}</span>
+            </div>
+            <div className="flex justify-between border-t border-border pt-2 font-semibold">
+              <span>Total opening balance</span>
+              <span>{fmtKES(totalOpeningBalance)}</span>
+            </div>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Amount</span>
-            <span>{fmtKES(effectiveAmount)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Charge</span>
-            <span>{fmtKES(effectiveCharge)}</span>
-          </div>
-          <div className="flex justify-between border-t border-border pt-2 font-semibold">
-            <span>Total opening balance</span>
-            <span>{fmtKES(totalOpeningBalance)}</span>
-          </div>
-        </div>
-      </aside>
+        </aside>
+      ) : null}
     </div>
   );
 }

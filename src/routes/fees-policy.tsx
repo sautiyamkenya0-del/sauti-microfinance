@@ -28,7 +28,6 @@ import { AppHeader } from "@/components/AppHeader";
 import {
   FuelJobCardFields,
   normalizeFuelJobCardRows,
-  resizeFuelJobCardRows,
   summarizeFuelJobCardRows,
 } from "@/components/loans/FuelJobCardFields";
 import { PaymentFlowTree } from "@/components/PaymentFlowTree";
@@ -2497,18 +2496,6 @@ function PolicyCenterPage() {
                               className="input"
                             />
                           </Field>
-                          <NumberField
-                            label="Fuel entries"
-                            value={carryoverLoanDraftFuelRows.length}
-                            onChange={(value) =>
-                              setCarryoverLoanDraft((current) =>
-                                withCarryoverFuelRows(
-                                  current,
-                                  resizeFuelJobCardRows(carryoverFuelRows(current), value),
-                                ),
-                              )
-                            }
-                          />
                           <div className="md:col-span-2 xl:col-span-4">
                             <FuelJobCardFields
                               rows={carryoverLoanDraftFuelRows}
@@ -2519,6 +2506,22 @@ function PolicyCenterPage() {
                               }
                             />
                           </div>
+                          <NumberField
+                            label="Total Penalties Before Last Loan"
+                            value={Number(carryoverLoanDraft.feeBreakdown?.priorPenaltyAmount ?? 0)}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    priorPenaltyAmount: Math.max(0, value),
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
                         </>
                       )}
                       {carryoverLoanDraft.loanKind === "stock" && (
@@ -2594,268 +2597,273 @@ function PolicyCenterPage() {
                           />
                         </>
                       )}
-                      <NumberField
-                        label="Loan cycle #"
-                        value={carryoverLoanDraft.loanCycleNumber}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            loanCycleNumber: Math.max(1, Math.floor(value)),
-                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                              current.feeBreakdown,
-                              Math.max(1, Math.floor(value)),
-                            ),
-                          }))
-                        }
-                      />
-                      <NumberField
-                        label="Principal"
-                        value={carryoverLoanDraft.principal}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({ ...current, principal: value }))
-                        }
-                      />
-                      <Field label="Term days">
-                        {carryoverLoanDraft.loanKind !== "financial" ? (
-                          <input
-                            type="number"
-                            min={1}
-                            value={carryoverLoanDraft.termDays}
-                            onChange={(event) =>
+                      {carryoverLoanDraft.loanKind !== "fuel" && (
+                        <>
+                          <NumberField
+                            label="Loan cycle #"
+                            value={carryoverLoanDraft.loanCycleNumber}
+                            onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
-                                termDays: Math.max(1, Number(event.target.value) || 1),
-                              }))
-                            }
-                            className="input"
-                          />
-                        ) : (
-                          <select
-                            value={carryoverLoanDraft.termDays}
-                            onChange={(event) =>
-                              setCarryoverLoanDraft((current) => ({
-                                ...current,
-                                termDays: Number(event.target.value),
-                              }))
-                            }
-                            className="input"
-                          >
-                            {[7, 14, 30, 60, 90].map((days) => (
-                              <option key={days} value={days}>
-                                {days} days
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </Field>
-                      <NumberField
-                        label="Daily penalty missed days"
-                        value={carryoverLoanDraftSummary.dailyPenaltyDays}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                              {
-                                ...current.feeBreakdown,
-                                dailyPenaltyDays: Math.max(0, Math.floor(value)),
-                              },
-                              current.loanCycleNumber,
-                            ),
-                          }))
-                        }
-                      />
-                      <NumberField
-                        label="Daily penalty amount"
-                        value={carryoverLoanDraftSummary.dailyPenaltyAmount}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                              {
-                                ...current.feeBreakdown,
-                                dailyPenaltyAmount: Math.max(0, value),
-                              },
-                              current.loanCycleNumber,
-                            ),
-                          }))
-                        }
-                      />
-                      <NumberField
-                        label="Daily compliance contribution amount"
-                        value={carryoverLoanDraft.dailySavingsAmount}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            dailySavingsAmount: value,
-                          }))
-                        }
-                      />
-                      <CarryoverLoanFeeFields
-                        loan={carryoverLoanDraft}
-                        summary={carryoverLoanDraftSummary}
-                        onChange={setCarryoverLoanDraft}
-                      />
-                      <Field label="Start date">
-                        <input
-                          type="date"
-                          value={carryoverLoanDraft.startDate}
-                          onChange={(event) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              startDate: event.target.value,
-                            }))
-                          }
-                          className="input"
-                        />
-                      </Field>
-                      <Field label="Due date override">
-                        <input
-                          type="date"
-                          value={carryoverLoanDraft.dueDate ?? ""}
-                          onChange={(event) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              dueDate: event.target.value || undefined,
-                            }))
-                          }
-                          className="input"
-                        />
-                      </Field>
-                      <NumberField
-                        label="Penalty waived"
-                        value={carryoverLoanDraft.penaltyWaivedAmount}
-                        onChange={(value) =>
-                          setCarryoverLoanDraft((current) => ({
-                            ...current,
-                            penaltyWaivedAmount: value,
-                          }))
-                        }
-                      />
-                      <Field label="Status">
-                        <select
-                          value={carryoverLoanDraft.status}
-                          onChange={(event) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              status: event.target.value as "active" | "closed" | "defaulted",
-                            }))
-                          }
-                          className="input"
-                        >
-                          <option value="active">Active</option>
-                          <option value="closed">Closed</option>
-                          <option value="defaulted">Defaulted</option>
-                        </select>
-                      </Field>
-                      {carryoverLoanDraft.status === "closed" || carryoverLoanDraft.finished ? (
-                        <NumberField
-                          label="Days after due date"
-                          value={carryoverLoanDraftSummary.dueDatePenaltyDays}
-                          onChange={(value) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
-                                {
-                                  ...current.feeBreakdown,
-                                  dueDatePenaltyDays: Math.max(0, Math.floor(value)),
-                                },
-                                current.loanCycleNumber,
-                              ),
-                            }))
-                          }
-                        />
-                      ) : carryoverLoanDraft.status === "defaulted" ? (
-                        <MetricCard
-                          label="Due-date days to today"
-                          value={`${carryoverLoanDraftSummary.daysPastDue}`}
-                        />
-                      ) : null}
-                      <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={carryoverLoanDraft.finished}
-                            onChange={(event) =>
-                              setCarryoverLoanDraft((current) => ({
-                                ...current,
-                                finished: event.target.checked,
-                                status: event.target.checked ? "closed" : current.status,
+                                loanCycleNumber: Math.max(1, Math.floor(value)),
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  current.feeBreakdown,
+                                  Math.max(1, Math.floor(value)),
+                                ),
                               }))
                             }
                           />
-                          Mark this legacy loan as finished
-                        </label>
-                        <Field label="Closed on">
-                          <input
-                            type="date"
-                            value={carryoverLoanDraft.closedOn ?? ""}
-                            onChange={(event) =>
+                          <NumberField
+                            label="Principal"
+                            value={carryoverLoanDraft.principal}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({ ...current, principal: value }))
+                            }
+                          />
+                          <Field label="Term days">
+                            {carryoverLoanDraft.loanKind !== "financial" ? (
+                              <input
+                                type="number"
+                                min={1}
+                                value={carryoverLoanDraft.termDays}
+                                onChange={(event) =>
+                                  setCarryoverLoanDraft((current) => ({
+                                    ...current,
+                                    termDays: Math.max(1, Number(event.target.value) || 1),
+                                  }))
+                                }
+                                className="input"
+                              />
+                            ) : (
+                              <select
+                                value={carryoverLoanDraft.termDays}
+                                onChange={(event) =>
+                                  setCarryoverLoanDraft((current) => ({
+                                    ...current,
+                                    termDays: Number(event.target.value),
+                                  }))
+                                }
+                                className="input"
+                              >
+                                {[7, 14, 30, 60, 90].map((days) => (
+                                  <option key={days} value={days}>
+                                    {days} days
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </Field>
+                          <NumberField
+                            label="Daily penalty missed days"
+                            value={carryoverLoanDraftSummary.dailyPenaltyDays}
+                            onChange={(value) =>
                               setCarryoverLoanDraft((current) => ({
                                 ...current,
-                                closedOn: event.target.value || undefined,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    dailyPenaltyDays: Math.max(0, Math.floor(value)),
+                                  },
+                                  current.loanCycleNumber,
+                                ),
                               }))
                             }
-                            className="input"
                           />
-                        </Field>
-                      </div>
-                      <Field label="Notes" className="md:col-span-2 xl:col-span-4">
-                        <textarea
-                          rows={3}
-                          value={carryoverLoanDraft.notes ?? ""}
-                          onChange={(event) =>
-                            setCarryoverLoanDraft((current) => ({
-                              ...current,
-                              notes: event.target.value,
-                            }))
-                          }
-                          className="input"
-                        />
-                      </Field>
-                      <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                        <MetricCard
-                          label="Rate used"
-                          value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
-                        />
-                        <MetricCard
-                          label="Auto due date"
-                          value={carryoverLoanDraftSummary.dueDate}
-                        />
-                        <MetricCard
-                          label="Repayment total"
-                          value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
-                        />
-                        <MetricCard
-                          label="Daily installment"
-                          value={fmtKES(carryoverLoanDraftSummary.dailyInclusive)}
-                        />
-                        <MetricCard
-                          label="Grand total collected"
-                          value={fmtKES(carryoverLoanDraftSummary.totalExpectedCollected)}
-                        />
-                        <MetricCard
-                          label="Round-off basket"
-                          value={fmtKES(
-                            carryoverLoanDraftSummary.roundOff * carryoverLoanDraftSummary.termDays,
-                          )}
-                        />
-                        <MetricCard
-                          label="Fees and subscriptions"
-                          value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
-                        />
-                        <MetricCard
-                          label="Daily penalty"
-                          value={fmtKES(carryoverLoanDraftSummary.arrearsPenalty)}
-                        />
-                        <MetricCard
-                          label="Due-date penalty"
-                          value={fmtKES(carryoverLoanDraftSummary.overduePenalty)}
-                        />
-                        <MetricCard
-                          label="Owed now"
-                          value={fmtKES(carryoverLoanDraftSummary.totalOwedNow)}
-                        />
-                      </div>
+                          <NumberField
+                            label="Daily penalty amount"
+                            value={carryoverLoanDraftSummary.dailyPenaltyAmount}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                  {
+                                    ...current.feeBreakdown,
+                                    dailyPenaltyAmount: Math.max(0, value),
+                                  },
+                                  current.loanCycleNumber,
+                                ),
+                              }))
+                            }
+                          />
+                          <NumberField
+                            label="Daily compliance contribution amount"
+                            value={carryoverLoanDraft.dailySavingsAmount}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                dailySavingsAmount: value,
+                              }))
+                            }
+                          />
+                          <CarryoverLoanFeeFields
+                            loan={carryoverLoanDraft}
+                            summary={carryoverLoanDraftSummary}
+                            onChange={setCarryoverLoanDraft}
+                          />
+                          <Field label="Start date">
+                            <input
+                              type="date"
+                              value={carryoverLoanDraft.startDate}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  startDate: event.target.value,
+                                }))
+                              }
+                              className="input"
+                            />
+                          </Field>
+                          <Field label="Due date override">
+                            <input
+                              type="date"
+                              value={carryoverLoanDraft.dueDate ?? ""}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  dueDate: event.target.value || undefined,
+                                }))
+                              }
+                              className="input"
+                            />
+                          </Field>
+                          <NumberField
+                            label="Penalty waived"
+                            value={carryoverLoanDraft.penaltyWaivedAmount}
+                            onChange={(value) =>
+                              setCarryoverLoanDraft((current) => ({
+                                ...current,
+                                penaltyWaivedAmount: value,
+                              }))
+                            }
+                          />
+                          <Field label="Status">
+                            <select
+                              value={carryoverLoanDraft.status}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  status: event.target.value as "active" | "closed" | "defaulted",
+                                }))
+                              }
+                              className="input"
+                            >
+                              <option value="active">Active</option>
+                              <option value="closed">Closed</option>
+                              <option value="defaulted">Defaulted</option>
+                            </select>
+                          </Field>
+                          {carryoverLoanDraft.status === "closed" || carryoverLoanDraft.finished ? (
+                            <NumberField
+                              label="Days after due date"
+                              value={carryoverLoanDraftSummary.dueDatePenaltyDays}
+                              onChange={(value) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+                                    {
+                                      ...current.feeBreakdown,
+                                      dueDatePenaltyDays: Math.max(0, Math.floor(value)),
+                                    },
+                                    current.loanCycleNumber,
+                                  ),
+                                }))
+                              }
+                            />
+                          ) : carryoverLoanDraft.status === "defaulted" ? (
+                            <MetricCard
+                              label="Due-date days to today"
+                              value={`${carryoverLoanDraftSummary.daysPastDue}`}
+                            />
+                          ) : null}
+                          <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={carryoverLoanDraft.finished}
+                                onChange={(event) =>
+                                  setCarryoverLoanDraft((current) => ({
+                                    ...current,
+                                    finished: event.target.checked,
+                                    status: event.target.checked ? "closed" : current.status,
+                                  }))
+                                }
+                              />
+                              Mark this legacy loan as finished
+                            </label>
+                            <Field label="Closed on">
+                              <input
+                                type="date"
+                                value={carryoverLoanDraft.closedOn ?? ""}
+                                onChange={(event) =>
+                                  setCarryoverLoanDraft((current) => ({
+                                    ...current,
+                                    closedOn: event.target.value || undefined,
+                                  }))
+                                }
+                                className="input"
+                              />
+                            </Field>
+                          </div>
+                          <Field label="Notes" className="md:col-span-2 xl:col-span-4">
+                            <textarea
+                              rows={3}
+                              value={carryoverLoanDraft.notes ?? ""}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  notes: event.target.value,
+                                }))
+                              }
+                              className="input"
+                            />
+                          </Field>
+                          <div className="md:col-span-2 xl:col-span-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <MetricCard
+                              label="Rate used"
+                              value={`${carryoverLoanDraftSummary.ratePct.toFixed(1)}%`}
+                            />
+                            <MetricCard
+                              label="Auto due date"
+                              value={carryoverLoanDraftSummary.dueDate}
+                            />
+                            <MetricCard
+                              label="Repayment total"
+                              value={fmtKES(carryoverLoanDraftSummary.totalRepayment)}
+                            />
+                            <MetricCard
+                              label="Daily installment"
+                              value={fmtKES(carryoverLoanDraftSummary.dailyInclusive)}
+                            />
+                            <MetricCard
+                              label="Grand total collected"
+                              value={fmtKES(carryoverLoanDraftSummary.totalExpectedCollected)}
+                            />
+                            <MetricCard
+                              label="Round-off basket"
+                              value={fmtKES(
+                                carryoverLoanDraftSummary.roundOff *
+                                  carryoverLoanDraftSummary.termDays,
+                              )}
+                            />
+                            <MetricCard
+                              label="Fees and subscriptions"
+                              value={fmtKES(carryoverLoanDraftSummary.feeChargesTotal)}
+                            />
+                            <MetricCard
+                              label="Daily penalty"
+                              value={fmtKES(carryoverLoanDraftSummary.arrearsPenalty)}
+                            />
+                            <MetricCard
+                              label="Due-date penalty"
+                              value={fmtKES(carryoverLoanDraftSummary.overduePenalty)}
+                            />
+                            <MetricCard
+                              label="Owed now"
+                              value={fmtKES(carryoverLoanDraftSummary.totalOwedNow)}
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
                       Start with principal, term, daily compliance contribution, start date, and
@@ -4096,13 +4104,6 @@ function GuidedCarryoverLoanCard({
                 className="input"
               />
             </Field>
-            <NumberField
-              label="Fuel entries"
-              value={fuelRows.length}
-              onChange={(value) =>
-                onChange(withCarryoverFuelRows(loan, resizeFuelJobCardRows(fuelRows, value)))
-              }
-            />
             <div className="md:col-span-2">
               <FuelJobCardFields
                 rows={fuelRows}

@@ -1,3 +1,5 @@
+import { Minus, Plus } from "lucide-react";
+
 const FUEL_JOB_DAYS = [
   "Monday",
   "Tuesday",
@@ -178,8 +180,38 @@ export function FuelJobCardFields({
     );
   };
 
+  const addRow = () => {
+    onChange([...rows, blankFuelJobCardRow(rows.length)]);
+  };
+
+  const removeRow = () => {
+    if (rows.length <= 1) return;
+    onChange(rows.slice(0, -1));
+  };
+
   return (
     <div className="md:col-span-2 lg:col-span-3 rounded-lg border border-border bg-muted/20 p-4">
+      <div className="mb-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={addRow}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted"
+          title="Add fuel row"
+          aria-label="Add fuel row"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={removeRow}
+          disabled={rows.length <= 1}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          title="Remove fuel row"
+          aria-label="Remove fuel row"
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="min-w-[1120px] w-full text-xs">
           <thead className="text-muted-foreground">

@@ -138,6 +138,118 @@ function SuppliersPage() {
     return totals;
   }, [outflows]);
 
+  const stockRequests = useMemo(
+    () =>
+      requests.filter(
+        (request: any) => request.kind === "stock" && String(request.supplier_id ?? ""),
+      ),
+    [requests],
+  );
+  const supplierPaymentRows = useMemo(
+    () =>
+      outflows.filter(
+        (payment: any) => payment.kind === "supplier_payment" && String(payment.supplier_id ?? ""),
+      ),
+    [outflows],
+  );
+  const stockLedgerRows = useMemo(() => {
+    const supplierNameById = new Map(
+      suppliers.map((supplier: any) => [String(supplier.id ?? ""), String(supplier.name ?? "")]),
+    );
+    const events = [
+      ...stockRequests.map((request: any) => {
+        const quantity = Number(request.quantity_requested ?? request.detail?.quantity ?? 0);
+        const amount = Number(request.amount ?? 0);
+        const unit = String(request.unit_of_measure ?? request.detail?.unit ?? "unit");
+        const item =
+          String(
+            request.commodity_name ?? request.detail?.item ?? request.detail?.commodityName ?? "",
+          ).trim() || "Stock request";
+        return {
+          type: "request" as const,
+          id: String(request.id ?? ""),
+          date: String(request.fulfilled_at ?? request.created_at ?? "").slice(0, 10),
+          supplierId: String(request.supplier_id ?? ""),
+          supplierName:
+            supplierNameById.get(String(request.supplier_id ?? "")) ||
+            String(request.supplier_id ?? ""),
+          item,
+          unit,
+          quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
+          expectedAt:
+            Number.isFinite(quantity) && quantity > 0
+              ? Math.max(0, amount / quantity)
+              : Number(request.detail?.unitPrice ?? 0),
+          amount: Math.max(0, amount),
+          payment: 0,
+          reference: String(request.loan_id ?? request.id ?? ""),
+        };
+      }),
+      ...supplierPaymentRows.map((payment: any) => {
+        const supplierId = String(payment.supplier_id ?? "");
+        return {
+          type: "payment" as const,
+          id: String(payment.id ?? ""),
+          date: String(payment.created_at ?? "").slice(0, 10),
+          supplierId,
+          supplierName: supplierNameById.get(supplierId) || supplierId,
+          item: String(payment.note ?? "Supplier payment"),
+          unit: "",
+          quantity: 0,
+          expectedAt: 0,
+          amount: 0,
+          payment: Math.max(0, Number(payment.amount ?? 0)),
+          reference: String(payment.transaction_id ?? payment.id ?? ""),
+        };
+      }),
+    ].sort((left, right) => {
+      const byDate = String(left.date ?? "").localeCompare(String(right.date ?? ""));
+      if (byDate !== 0) return byDate;
+      if (left.type !== right.type) return left.type === "request" ? -1 : 1;
+      return String(left.id ?? "").localeCompare(String(right.id ?? ""));
+    });
+
+    let cumulativeQuantity = 0;
+    let cumulativePaid = 0;
+    let cumulativeBalance = 0;
+
+    return events.map((row) => {
+      if (row.type === "request") {
+        cumulativeQuantity += row.quantity;
+        cumulativeBalance += row.amount;
+      } else {
+        cumulativePaid += row.payment;
+        cumulativeBalance -= row.payment;
+      }
+      return {
+        ...row,
+        cumulativeQuantity,
+        cumulativePaid,
+        cumulativeBalance: Math.max(0, cumulativeBalance),
+      };
+    });
+  }, [stockRequests, supplierPaymentRows, suppliers]);
+  const stockLedgerTotals = useMemo(
+    () =>
+      stockLedgerRows.reduce(
+        (
+          totals: { requested: number; paid: number; balance: number; quantity: number },
+          row: any,
+        ) => {
+          if (row.type === "request") {
+            totals.requested += Number(row.amount ?? 0);
+            totals.quantity += Number(row.quantity ?? 0);
+          } else {
+            totals.paid += Number(row.payment ?? 0);
+          }
+          totals.balance = Math.max(0, totals.requested - totals.paid);
+          return totals;
+        },
+        { requested: 0, paid: 0, balance: 0, quantity: 0 },
+      ),
+    [stockLedgerRows],
+  );
+
   const totalDebt = suppliers.reduce((sum: number, supplier: any) => {
     return (
       sum +
@@ -602,6 +714,82 @@ function SuppliersPage() {
             >
               Send request
             </button>
+          </div>
+        </Section>
+
+        <Section title="Stock purchase and payment ledger">
+          <div className="grid gap-4 p-5 md:grid-cols-3">
+            <StatCard label="Requested" value={fmtKES(stockLedgerTotals.requested)} />
+            <StatCard label="Paid" value={fmtKES(stockLedgerTotals.paid)} />
+            <StatCard label="Remaining" value={fmtKES(stockLedgerTotals.balance)} />
+          </div>
+          <div className="overflow-x-auto border-t border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Date</th>
+                  <th className="px-5 py-3 text-left">Supplier</th>
+                  <th className="px-5 py-3 text-left">Item</th>
+                  <th className="px-5 py-3 text-left">Unit</th>
+                  <th className="px-5 py-3 text-right">Qty</th>
+                  <th className="px-5 py-3 text-right">Expected @</th>
+                  <th className="px-5 py-3 text-right">Amount</th>
+                  <th className="px-5 py-3 text-right">Payment</th>
+                  <th className="px-5 py-3 text-right">Cum Qty</th>
+                  <th className="px-5 py-3 text-right">Cum Pay</th>
+                  <th className="px-5 py-3 text-right">Balance</th>
+                  <th className="px-5 py-3 text-left">Reference</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {stockLedgerRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="px-5 py-8 text-center text-muted-foreground">
+                      No stock requests or supplier payments yet.
+                    </td>
+                  </tr>
+                ) : null}
+                {stockLedgerRows.map((row: any) => (
+                  <tr key={`${row.type}-${row.id}`}>
+                    <td className="px-5 py-3">{row.date || "-"}</td>
+                    <td className="px-5 py-3">{row.supplierName || "-"}</td>
+                    <td className="px-5 py-3 font-medium">
+                      {row.item}
+                      {row.type === "request" ? (
+                        <div className="text-xs text-muted-foreground">Purchase row</div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">Payment row</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3">{row.unit || "-"}</td>
+                    <td className="px-5 py-3 text-right">
+                      {row.type === "request" ? Number(row.quantity ?? 0).toLocaleString() : "-"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {row.type === "request" ? fmtKES(Number(row.expectedAt ?? 0)) : "-"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {row.type === "request" ? fmtKES(Number(row.amount ?? 0)) : "-"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {row.type === "payment" ? fmtKES(Number(row.payment ?? 0)) : "-"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {Number(row.cumulativeQuantity ?? 0).toLocaleString()}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {fmtKES(Number(row.cumulativePaid ?? 0))}
+                    </td>
+                    <td className="px-5 py-3 text-right font-semibold">
+                      {fmtKES(Number(row.cumulativeBalance ?? 0))}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-muted-foreground">
+                      {row.reference || "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </Section>
 
