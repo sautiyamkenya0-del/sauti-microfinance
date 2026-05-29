@@ -254,8 +254,9 @@ function PolicyCenterPage() {
   const [countyScheduleRows, setCountyScheduleRows] = useState<any[]>([]);
   const [serviceApplicationRows, setServiceApplicationRows] = useState<any[]>([]);
   const [serviceDraft, setServiceDraft] = useState<ServiceDraft>(() => blankServiceDraft());
-  const [serviceApplicationDraft, setServiceApplicationDraft] =
-    useState<ServiceApplicationDraft>(() => blankServiceApplicationDraft(""));
+  const [serviceApplicationDraft, setServiceApplicationDraft] = useState<ServiceApplicationDraft>(
+    () => blankServiceApplicationDraft(""),
+  );
   const [serviceBusy, setServiceBusy] = useState(false);
   const [serviceApplicationBusy, setServiceApplicationBusy] = useState(false);
   const [percentagesDraft, setPercentagesDraft] = useState(policySettings.percentages);
@@ -1682,20 +1683,18 @@ function PolicyCenterPage() {
                             {fmtKES(Number(service.price ?? 0))}
                           </td>
                           <td className="px-5 py-3 capitalize">
-                            {String(service.billingFrequency ?? service.billing_frequency ?? "monthly").replace(
-                              /_/g,
-                              " ",
-                            )}
+                            {String(
+                              service.billingFrequency ?? service.billing_frequency ?? "monthly",
+                            ).replace(/_/g, " ")}
                           </td>
                           <td className="px-5 py-3 capitalize">
                             {String(service.scope ?? "all_members").replace(/_/g, " ")}
                             {selectedMemberIds.length ? ` (${selectedMemberIds.length})` : ""}
                           </td>
                           <td className="px-5 py-3 capitalize">
-                            {String(service.deductionMode ?? service.deduction_mode ?? "normal").replace(
-                              /_/g,
-                              " ",
-                            )}
+                            {String(
+                              service.deductionMode ?? service.deduction_mode ?? "normal",
+                            ).replace(/_/g, " ")}
                           </td>
                           <td className="px-5 py-3 text-right">
                             <button
@@ -1855,7 +1854,10 @@ function PolicyCenterPage() {
                   label="Penalty amount"
                   value={serviceDraft.penaltyAmount}
                   onChange={(value) =>
-                    setServiceDraft((current) => ({ ...current, penaltyAmount: Math.max(0, value) }))
+                    setServiceDraft((current) => ({
+                      ...current,
+                      penaltyAmount: Math.max(0, value),
+                    }))
                   }
                 />
                 <NumberField
@@ -2039,7 +2041,9 @@ function PolicyCenterPage() {
                       </div>
                       <div className="grid gap-2 sm:grid-cols-2">
                         {nonLoanServiceDeductionFees.map((fee) => {
-                          const overrides = parseServiceOverridesDraft(serviceDraft.feeOverridesText);
+                          const overrides = parseServiceOverridesDraft(
+                            serviceDraft.feeOverridesText,
+                          );
                           const deductions =
                             (overrides.deductions as Record<string, any> | undefined) ?? {};
                           const checked = deductions[fee.key] != null;
@@ -2437,7 +2441,7 @@ function PolicyCenterPage() {
 
         {tab === "interest" && (
           <Section
-            title="Fixed interest by loan category"
+            title="Interest by loan category and days"
             action={
               <button
                 onClick={() =>
@@ -2457,35 +2461,41 @@ function PolicyCenterPage() {
             <div className="grid gap-6 p-5 lg:grid-cols-2">
               <div className="space-y-3">
                 <div className="text-sm font-medium">Standard loans</div>
-                <NumberField
-                  label="Interest %"
-                  value={interestDraft.standard[7]}
-                  onChange={(value) =>
-                    setInterestDraft((current) => ({
-                      ...current,
-                      standard: { 7: value, 14: value, 30: value },
-                    }))
-                  }
-                />
+                {[7, 14, 30].map((term) => (
+                  <NumberField
+                    key={term}
+                    label={`${term} days interest %`}
+                    value={interestDraft.standard[term as 7 | 14 | 30]}
+                    onChange={(value) =>
+                      setInterestDraft((current) => ({
+                        ...current,
+                        standard: { ...current.standard, [term]: value },
+                      }))
+                    }
+                  />
+                ))}
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium">Premium loans</div>
-                <NumberField
-                  label="Interest %"
-                  value={interestDraft.premium[14]}
-                  onChange={(value) =>
-                    setInterestDraft((current) => ({
-                      ...current,
-                      premium: { 14: value, 30: value, 60: value, 90: value },
-                    }))
-                  }
-                />
+                {[14, 30, 60, 90].map((term) => (
+                  <NumberField
+                    key={term}
+                    label={`${term} days interest %`}
+                    value={interestDraft.premium[term as 14 | 30 | 60 | 90]}
+                    onChange={(value) =>
+                      setInterestDraft((current) => ({
+                        ...current,
+                        premium: { ...current.premium, [term]: value },
+                      }))
+                    }
+                  />
+                ))}
               </div>
             </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              New loan applications use these category rates as a percentage of net disbursed.
-              Repayment days only change the daily repayment. Existing loans keep the rate already
-              stored on the loan record.
+              New loan applications use the configured rate for the selected repayment-day bucket as
+              a percentage of net disbursed. Existing loans keep the rate already stored on the loan
+              record.
             </div>
           </Section>
         )}
@@ -4130,6 +4140,7 @@ function blankFee(): FeePolicy {
 function blankServiceDraft(): ServiceDraft {
   return {
     name: "",
+    serviceCategory: "",
     description: "",
     price: 0,
     billingFrequency: "monthly",
@@ -4137,7 +4148,52 @@ function blankServiceDraft(): ServiceDraft {
     selectedMemberIds: [],
     deductionMode: "normal",
     feeOverridesText: "{}",
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    expiryDate: "",
+    registrationFee: 0,
+    processingFee: 0,
+    serviceCharge: 0,
+    waiverAmount: 0,
+    penaltyAmount: 0,
+    customChargesText: "[]",
+    negotiatedDiscountAmount: 0,
+    normalDeductionsText: "{}",
+    gracePeriodDays: 0,
+    renewalRulesText: "{}",
     active: true,
+  };
+}
+
+function blankServiceApplicationDraft(memberId: string): ServiceApplicationDraft {
+  return {
+    memberId,
+    serviceId: "",
+    serviceType: "",
+    caseType: "normal",
+    priority: "normal",
+    problemReason: "",
+    notes: "",
+    county: "Kiambu",
+    subcounty: "",
+    ward: "",
+    town: "",
+    scheduleId: "",
+    invoiceReference: "",
+    invoiceNumber: "",
+    invoiceDate: "",
+    invoiceAmountCharged: 0,
+    issueDate: "",
+    expiryDate: "",
+    renewalWindowDays: 0,
+    gracePeriodDays: 0,
+    confiscationReference: "",
+    inventorySheetNumber: "",
+    confiscationDate: "",
+    paymentStatus: "pending",
+    workflowStage: "application_submitted",
+    manualCountyCharges: 0,
+    waiverAmount: 0,
+    penaltyAmount: 0,
   };
 }
 

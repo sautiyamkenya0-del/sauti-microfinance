@@ -348,26 +348,39 @@ function sanitizeInterestRates(value: unknown): PolicyInterestRates {
 
   const standardCandidate = isPlainObject(value.standard) ? value.standard : value;
   const premiumCandidate = isPlainObject(value.premium) ? value.premium : value;
-  const standardRate = toFiniteNumber(
-    standardCandidate["7"],
-    DEFAULT_POLICY_SETTINGS.interestRates.standard[7],
-  );
-  const premiumRate = toFiniteNumber(
-    premiumCandidate["14"],
-    DEFAULT_POLICY_SETTINGS.interestRates.premium[14],
-  );
 
   return {
     standard: {
-      7: standardRate,
-      14: standardRate,
-      30: standardRate,
+      7: Math.max(
+        0,
+        toFiniteNumber(standardCandidate["7"], DEFAULT_POLICY_SETTINGS.interestRates.standard[7]),
+      ),
+      14: Math.max(
+        0,
+        toFiniteNumber(standardCandidate["14"], DEFAULT_POLICY_SETTINGS.interestRates.standard[14]),
+      ),
+      30: Math.max(
+        0,
+        toFiniteNumber(standardCandidate["30"], DEFAULT_POLICY_SETTINGS.interestRates.standard[30]),
+      ),
     },
     premium: {
-      14: premiumRate,
-      30: premiumRate,
-      60: premiumRate,
-      90: premiumRate,
+      14: Math.max(
+        0,
+        toFiniteNumber(premiumCandidate["14"], DEFAULT_POLICY_SETTINGS.interestRates.premium[14]),
+      ),
+      30: Math.max(
+        0,
+        toFiniteNumber(premiumCandidate["30"], DEFAULT_POLICY_SETTINGS.interestRates.premium[30]),
+      ),
+      60: Math.max(
+        0,
+        toFiniteNumber(premiumCandidate["60"], DEFAULT_POLICY_SETTINGS.interestRates.premium[60]),
+      ),
+      90: Math.max(
+        0,
+        toFiniteNumber(premiumCandidate["90"], DEFAULT_POLICY_SETTINGS.interestRates.premium[90]),
+      ),
     },
   };
 }
@@ -593,9 +606,9 @@ export function policyInterestRateForTerm(
   loanType: PolicyLoanType,
   settings: PolicySettings = activePolicySettings,
 ) {
-  void termDays;
+  const bucket = normalizePolicyTermDays(termDays, loanType);
   if (loanType === "standard") {
-    return settings.interestRates.standard[7];
+    return settings.interestRates.standard[bucket as StandardPolicyLoanTerm];
   }
-  return settings.interestRates.premium[14];
+  return settings.interestRates.premium[bucket as PremiumPolicyLoanTerm];
 }

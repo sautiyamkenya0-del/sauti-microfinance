@@ -33,11 +33,13 @@ import {
   clonePolicySettings,
   mergePolicySettings,
   normalizePolicyTermDays,
+  policyInterestRateForTerm,
   policySettingsRowsFromConfig,
   transactionFeeForAmount,
   waterfallRuleForScenario,
   type PolicySettingKey,
   type PolicySettingRow,
+  type PolicySettings,
 } from "@/lib/policy-settings";
 import {
   normalizeLegacyCarryoverLoanFeeBreakdown,
@@ -545,14 +547,14 @@ function supplierPayloadManualPenaltyAmount(supplierPayload?: Record<string, unk
 
 function computeLoanPricing(args: {
   netAmount: number;
-  ratePct: number;
+  ratePct?: number;
   termDays?: number;
   termMonths?: number;
   processingFeeMode?: string | null;
   insuranceFeeMode?: string | null;
   loanKind?: string | null;
   supplierPayload?: Record<string, unknown> | null;
-  settings?: typeof DEFAULT_POLICY_SETTINGS;
+  settings?: PolicySettings;
 }) {
   const settings = args.settings ?? DEFAULT_POLICY_SETTINGS;
   const netAmount = Math.max(0, Number(args.netAmount ?? 0));
@@ -586,7 +588,13 @@ function computeLoanPricing(args: {
     (processing - processingUpfront) +
     (insurance - insuranceUpfront) +
     transactionFee;
-  const ratePct = supplierBacked ? 0 : Number(args.ratePct ?? 0);
+  const ratePct = resolveLoanInterestRate({
+    loanKind: args.loanKind,
+    netAmount,
+    termDays,
+    ratePct: args.ratePct,
+    settings,
+  });
   const schedule = supplierBacked
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
     : loanScheduleTotalFromNet(financedPrincipal, netAmount, ratePct, termMonths);
@@ -602,10 +610,34 @@ function computeLoanPricing(args: {
     processingUpfront,
     insuranceUpfront,
     financedPrincipal,
+    ratePct,
     interest: schedule.interest,
     totalRepayment: schedule.total,
     netDisbursedAmount: netAmount,
   };
+}
+
+function policyLoanTypeForAmount(amount: number) {
+  return Number(amount ?? 0) > 5000 ? "premium" : "standard";
+}
+
+function resolveLoanInterestRate(args: {
+  loanKind?: string | null;
+  netAmount: number;
+  termDays: number;
+  ratePct?: number | null;
+  settings: PolicySettings;
+}) {
+  if (args.loanKind === "fuel" || args.loanKind === "stock" || args.loanKind === "service") {
+    return 0;
+  }
+  const configured = Number(args.ratePct ?? 0);
+  if (configured > 0) return configured;
+  return policyInterestRateForTerm(
+    args.termDays,
+    policyLoanTypeForAmount(args.netAmount),
+    args.settings,
+  );
 }
 
 function loanBalanceSummary(loan: {
@@ -2807,10 +2839,7 @@ export async function applyMpesaPaymentToDatabase(args: {
               row.type === "deposit" && String(row.note ?? "").startsWith("Locomotive fuel buffer"),
           )
           .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
-        const bufferGap = Math.max(
-          0,
-          specialBufferTarget - existingBuffer - pendingBuffer,
-        );
+        const bufferGap = Math.max(0, specialBufferTarget - existingBuffer - pendingBuffer);
         const bufferApplied = Math.min(remaining, specialBufferTarget, bufferGap);
         if (bufferApplied > 0) {
           queueSavingsDeposit(bufferApplied, `${label} buffer:`, {
@@ -6441,7 +6470,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         data.status === "active"
           ? "paid"
           : ((data.disbursementStatus as string | undefined) ?? "not_requested"),
-      rate: supplierBacked ? 0 : data.rate,
+      rate: pricing.ratePct,
       term_months: termMonths,
       term_days: termDays,
       start_date: data.startDate,
@@ -7000,6 +7029,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         term_months: pricing.termMonths,
         processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
+        rate: pricing.ratePct,
         status: "active",
         disbursement_status: "requested",
         disbursement_requested_at: new Date().toISOString(),
@@ -7129,7 +7159,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       processing_fee_amount: supplierBacked ? 0 : pricing.processing,
       insurance_fee_amount: supplierBacked ? 0 : pricing.insurance,
       transaction_fee_amount: supplierBacked ? 0 : pricing.transactionFee,
-      rate: supplierBacked ? 0 : (data.rate ?? Number(existingLoan.rate ?? 0)),
+      rate: pricing.ratePct,
       term_days: termDays,
       term_months: termMonths,
       start_date: data.startDate ?? existingLoan.start_date,
@@ -9360,19 +9390,13 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
       schedule != null ? Math.max(0, Number(schedule.total_amount ?? 0)) : data.manualCountyCharges;
     const registrationFee = Math.max(0, Number(service?.registration_fee ?? 0));
     const processingFee = Math.max(0, Number(service?.processing_fee ?? 0));
-    const serviceFee = Math.max(
-      0,
-      Number(service?.service_charge ?? service?.price ?? 0),
-    );
+    const serviceFee = Math.max(0, Number(service?.service_charge ?? service?.price ?? 0));
     const penaltyAmount = Math.max(0, Number(service?.penalty_amount ?? 0), data.penaltyAmount);
     const waiverAmount = Math.max(0, Number(service?.waiver_amount ?? 0), data.waiverAmount);
     const discountAmount = Math.max(0, Number(service?.negotiated_discount_amount ?? 0));
     const expectedAmount =
       countyCharges + serviceFee + processingFee + registrationFee + serviceCustomCharges;
-    const finalAmount = Math.max(
-      0,
-      expectedAmount + penaltyAmount - waiverAmount - discountAmount,
-    );
+    const finalAmount = Math.max(0, expectedAmount + penaltyAmount - waiverAmount - discountAmount);
     const overchargeAmount = Math.max(0, data.invoiceAmountCharged - finalAmount);
     const calculatedCharges = {
       countyCharges,
@@ -12453,7 +12477,11 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       const [latest, ...olderLoans] = newestFirst;
       if (latest) allocationLoans.push(latest);
       for (const olderLoan of olderLoans) {
-        const summary = await liveLoanAccountingSummary(runtimeDb, olderLoan as any, policySettings);
+        const summary = await liveLoanAccountingSummary(
+          runtimeDb,
+          olderLoan as any,
+          policySettings,
+        );
         const { error } = await runtimeDb
           .from("loans")
           .update({
@@ -12480,10 +12508,15 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     for (const loan of sortedLoans) {
       const loanId = String(loan.id ?? "").trim();
       if (!loanId) continue;
-      const zeroPaidSummary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
-        payments: [],
-        overridePaid: 0,
-      });
+      const zeroPaidSummary = await liveLoanAccountingSummary(
+        runtimeDb,
+        loan as any,
+        policySettings,
+        {
+          payments: [],
+          overridePaid: 0,
+        },
+      );
       const applied = Math.min(lifetimeRemaining, zeroPaidSummary.totalExpectedCollected);
       lifetimeRemaining = roundMoney(lifetimeRemaining - applied);
       const summary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
