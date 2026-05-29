@@ -33,7 +33,6 @@ as $$
           + coalesce(nullif(loan_row.fee_breakdown ->> 'insuranceFeeAmount', '')::numeric, 0)
           + coalesce(nullif(loan_row.fee_breakdown ->> 'transactionFeeAmount', '')::numeric, 0)
           + (coalesce(loan_row.principal, 0) * coalesce(loan_row.interest_rate_pct, 0) / 100)
-            * greatest(1, ceiling(greatest(1, coalesce(loan_row.term_days, 1))::numeric / 30))
           + coalesce(loan_row.daily_savings_amount, 0) * greatest(1, coalesce(loan_row.term_days, 1))
       end
   );

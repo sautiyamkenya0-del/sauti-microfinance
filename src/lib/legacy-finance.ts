@@ -287,7 +287,7 @@ export function summarizeLegacyCarryoverLoan(
     : oneTimeFees + financedLoanServiceFees + subscriptionDeducted;
   const financedPrincipal = principal + feeChargesTotal;
   const periods = termPeriodsFromDays(termDays);
-  const interest = supplierBacked ? 0 : principal * (ratePct / 100) * periods;
+  const interest = supplierBacked ? 0 : principal * (ratePct / 100);
   const totalRepayment = financedPrincipal + interest;
   const dailyLoanInstallment = termDays > 0 ? totalRepayment / termDays : totalRepayment;
   const effectiveDailySavingsAmount = supplierBacked ? 0 : dailySavingsAmount;

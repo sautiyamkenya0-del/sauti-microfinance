@@ -43,6 +43,7 @@ import {
   upsertMemberCarryoverProfileRecord,
   upsertFeePolicyRecord,
   upsertPolicySettingRecord,
+  upsertServiceApplicationRecord,
   upsertServiceCatalogRecord,
   waivePenaltyRecord,
 } from "@/lib/app-data.functions";
@@ -69,8 +70,6 @@ import {
   type TargetPeriod,
 } from "@/lib/performance-targets";
 import {
-  PREMIUM_POLICY_TERMS,
-  STANDARD_POLICY_TERMS,
   WATERFALL_DESTINATION_LABELS,
   WATERFALL_SCENARIO_LABELS,
   waterfallOptionsForScenario,
@@ -80,6 +79,8 @@ import {
 } from "@/lib/policy-settings";
 import {
   listAllCarryoverLoans,
+  listCountyChargeSchedules,
+  listServiceApplications,
   listServiceCatalog,
   loadMemberCarryover,
 } from "@/lib/runtime-data.functions";
@@ -115,14 +116,68 @@ type TargetDraft = {
 type ServiceDraft = {
   id?: string;
   name: string;
+  serviceCategory: string;
   description: string;
   price: number;
-  billingFrequency: "one_time" | "daily" | "weekly" | "monthly" | "yearly";
-  scope: "all_members" | "service_members" | "selected_members";
+  billingFrequency:
+    | "one_time"
+    | "daily"
+    | "weekly"
+    | "monthly"
+    | "quarterly"
+    | "semi_annual"
+    | "annual"
+    | "yearly"
+    | "seasonal"
+    | "custom";
+  scope: "all_members" | "sbc_members" | "service_members" | "selected_members";
   selectedMemberIds: string[];
   deductionMode: "normal" | "override_all" | "amended_override";
   feeOverridesText: string;
+  effectiveDate: string;
+  expiryDate: string;
+  registrationFee: number;
+  processingFee: number;
+  serviceCharge: number;
+  waiverAmount: number;
+  penaltyAmount: number;
+  customChargesText: string;
+  negotiatedDiscountAmount: number;
+  normalDeductionsText: string;
+  gracePeriodDays: number;
+  renewalRulesText: string;
   active: boolean;
+};
+
+type ServiceApplicationDraft = {
+  memberId: string;
+  serviceId: string;
+  serviceType: string;
+  caseType: "normal" | "overcharged_invoice" | "invoice_with_penalty" | "confiscated_items";
+  priority: "low" | "normal" | "high" | "urgent";
+  problemReason: string;
+  notes: string;
+  county: string;
+  subcounty: string;
+  ward: string;
+  town: string;
+  scheduleId: string;
+  invoiceReference: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  invoiceAmountCharged: number;
+  issueDate: string;
+  expiryDate: string;
+  renewalWindowDays: number;
+  gracePeriodDays: number;
+  confiscationReference: string;
+  inventorySheetNumber: string;
+  confiscationDate: string;
+  paymentStatus: string;
+  workflowStage: string;
+  manualCountyCharges: number;
+  waiverAmount: number;
+  penaltyAmount: number;
 };
 
 type CarryoverFeeBuckets = {
@@ -174,7 +229,10 @@ function PolicyCenterPage() {
   const saveFee = useServerFn(upsertFeePolicyRecord);
   const deleteFee = useServerFn(deleteFeePolicyRecord);
   const loadServices = useServerFn(listServiceCatalog);
+  const loadCountySchedules = useServerFn(listCountyChargeSchedules);
+  const loadServiceApplications = useServerFn(listServiceApplications);
   const saveService = useServerFn(upsertServiceCatalogRecord);
+  const saveServiceApplication = useServerFn(upsertServiceApplicationRecord);
   const deleteService = useServerFn(deleteServiceCatalogRecord);
   const savePolicySetting = useServerFn(upsertPolicySettingRecord);
   const loadCarryover = useServerFn(loadMemberCarryover);
@@ -193,8 +251,13 @@ function PolicyCenterPage() {
   const [editingFee, setEditingFee] = useState<FeePolicy | null>(null);
   const [creatingFee, setCreatingFee] = useState(false);
   const [serviceRows, setServiceRows] = useState<any[]>([]);
+  const [countyScheduleRows, setCountyScheduleRows] = useState<any[]>([]);
+  const [serviceApplicationRows, setServiceApplicationRows] = useState<any[]>([]);
   const [serviceDraft, setServiceDraft] = useState<ServiceDraft>(() => blankServiceDraft());
+  const [serviceApplicationDraft, setServiceApplicationDraft] =
+    useState<ServiceApplicationDraft>(() => blankServiceApplicationDraft(""));
   const [serviceBusy, setServiceBusy] = useState(false);
+  const [serviceApplicationBusy, setServiceApplicationBusy] = useState(false);
   const [percentagesDraft, setPercentagesDraft] = useState(policySettings.percentages);
   const [interestDraft, setInterestDraft] = useState(policySettings.interestRates);
   const [waterfallDraft, setWaterfallDraft] = useState(policySettings.waterfallRules);
@@ -268,6 +331,14 @@ function PolicyCenterPage() {
   }, [clientId, memberAccounts]);
 
   useEffect(() => {
+    setServiceApplicationDraft((current) =>
+      current.memberId || !memberAccounts[0]?.id
+        ? current
+        : { ...current, memberId: memberAccounts[0].id },
+    );
+  }, [memberAccounts]);
+
+  useEffect(() => {
     setFeeMemberQuery("");
   }, [editingFee?.key]);
 
@@ -275,11 +346,26 @@ function PolicyCenterPage() {
     setServiceRows((await loadServices()) as any[]);
   }, [loadServices]);
 
+  const refreshServiceApplications = useCallback(async () => {
+    const [schedules, applications] = await Promise.all([
+      loadCountySchedules(),
+      loadServiceApplications(),
+    ]);
+    setCountyScheduleRows(schedules as any[]);
+    setServiceApplicationRows(applications as any[]);
+  }, [loadCountySchedules, loadServiceApplications]);
+
   useEffect(() => {
     refreshServices().catch((error: any) => {
       toast.error(error?.message ?? "Failed to load service catalog.");
     });
   }, [refreshServices]);
+
+  useEffect(() => {
+    refreshServiceApplications().catch((error: any) => {
+      toast.error(error?.message ?? "Failed to load service applications.");
+    });
+  }, [refreshServiceApplications]);
 
   const refreshAllCarryoverLoans = useCallback(async () => {
     setAllCarryoverLoans(await loadAllCarryoverLoans());
@@ -730,11 +816,36 @@ function PolicyCenterPage() {
       return toast.error("Pick at least one member for a selected-members service.");
     }
     let feeOverrides: Record<string, unknown> = {};
+    let normalDeductions: Record<string, unknown> = {};
+    let renewalRules: Record<string, unknown> = {};
+    let customCharges: unknown[] = [];
     if (serviceDraft.feeOverridesText.trim()) {
       try {
         feeOverrides = JSON.parse(serviceDraft.feeOverridesText);
       } catch {
         return toast.error("Fee overrides must be valid JSON.");
+      }
+    }
+    if (serviceDraft.normalDeductionsText.trim()) {
+      try {
+        normalDeductions = JSON.parse(serviceDraft.normalDeductionsText);
+      } catch {
+        return toast.error("Normal deductions must be valid JSON.");
+      }
+    }
+    if (serviceDraft.renewalRulesText.trim()) {
+      try {
+        renewalRules = JSON.parse(serviceDraft.renewalRulesText);
+      } catch {
+        return toast.error("Renewal rules must be valid JSON.");
+      }
+    }
+    if (serviceDraft.customChargesText.trim()) {
+      try {
+        const parsed = JSON.parse(serviceDraft.customChargesText);
+        customCharges = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return toast.error("Custom charges must be a valid JSON array.");
       }
     }
     setServiceBusy(true);
@@ -743,6 +854,7 @@ function PolicyCenterPage() {
         data: {
           id: serviceDraft.id,
           name: serviceDraft.name,
+          serviceCategory: serviceDraft.serviceCategory,
           description: serviceDraft.description,
           price: serviceDraft.price,
           billingFrequency: serviceDraft.billingFrequency,
@@ -750,6 +862,18 @@ function PolicyCenterPage() {
           selectedMemberIds: serviceDraft.selectedMemberIds,
           deductionMode: serviceDraft.deductionMode,
           feeOverrides,
+          effectiveDate: serviceDraft.effectiveDate,
+          expiryDate: serviceDraft.expiryDate,
+          registrationFee: serviceDraft.registrationFee,
+          processingFee: serviceDraft.processingFee,
+          serviceCharge: serviceDraft.serviceCharge,
+          waiverAmount: serviceDraft.waiverAmount,
+          penaltyAmount: serviceDraft.penaltyAmount,
+          customCharges,
+          negotiatedDiscountAmount: serviceDraft.negotiatedDiscountAmount,
+          normalDeductions,
+          gracePeriodDays: serviceDraft.gracePeriodDays,
+          renewalRules,
           active: serviceDraft.active,
         },
       });
@@ -760,6 +884,21 @@ function PolicyCenterPage() {
       toast.error(error?.message ?? "Could not save service.");
     } finally {
       setServiceBusy(false);
+    }
+  }
+
+  async function saveServiceApplicationDraft() {
+    if (!serviceApplicationDraft.memberId) return toast.error("Select a member.");
+    setServiceApplicationBusy(true);
+    try {
+      const result = await saveServiceApplication({ data: serviceApplicationDraft });
+      await refreshServiceApplications();
+      setServiceApplicationDraft(blankServiceApplicationDraft(serviceApplicationDraft.memberId));
+      toast.success(`Application ${result.applicationNumber} saved.`);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Could not save service application.");
+    } finally {
+      setServiceApplicationBusy(false);
     }
   }
 
@@ -1564,6 +1703,8 @@ function PolicyCenterPage() {
                                 setServiceDraft({
                                   id: service.id,
                                   name: service.name ?? "",
+                                  serviceCategory:
+                                    service.serviceCategory ?? service.service_category ?? "",
                                   description: service.description ?? "",
                                   price: Number(service.price ?? 0),
                                   billingFrequency:
@@ -1575,6 +1716,52 @@ function PolicyCenterPage() {
                                   deductionMode:
                                     service.deductionMode ?? service.deduction_mode ?? "normal",
                                   feeOverridesText: JSON.stringify(feeOverrides, null, 2),
+                                  effectiveDate:
+                                    service.effectiveDate ??
+                                    service.effective_date ??
+                                    new Date().toISOString().slice(0, 10),
+                                  expiryDate: service.expiryDate ?? service.expiry_date ?? "",
+                                  registrationFee: Number(
+                                    service.registrationFee ?? service.registration_fee ?? 0,
+                                  ),
+                                  processingFee: Number(
+                                    service.processingFee ?? service.processing_fee ?? 0,
+                                  ),
+                                  serviceCharge: Number(
+                                    service.serviceCharge ??
+                                      service.service_charge ??
+                                      service.price ??
+                                      0,
+                                  ),
+                                  waiverAmount: Number(
+                                    service.waiverAmount ?? service.waiver_amount ?? 0,
+                                  ),
+                                  penaltyAmount: Number(
+                                    service.penaltyAmount ?? service.penalty_amount ?? 0,
+                                  ),
+                                  customChargesText: JSON.stringify(
+                                    service.customCharges ?? service.custom_charges ?? [],
+                                    null,
+                                    2,
+                                  ),
+                                  negotiatedDiscountAmount: Number(
+                                    service.negotiatedDiscountAmount ??
+                                      service.negotiated_discount_amount ??
+                                      0,
+                                  ),
+                                  normalDeductionsText: JSON.stringify(
+                                    service.normalDeductions ?? service.normal_deductions ?? {},
+                                    null,
+                                    2,
+                                  ),
+                                  gracePeriodDays: Number(
+                                    service.gracePeriodDays ?? service.grace_period_days ?? 0,
+                                  ),
+                                  renewalRulesText: JSON.stringify(
+                                    service.renewalRules ?? service.renewal_rules ?? {},
+                                    null,
+                                    2,
+                                  ),
                                   active,
                                 })
                               }
@@ -1613,11 +1800,79 @@ function PolicyCenterPage() {
                     className="input"
                   />
                 </Field>
+                <Field label="Service category">
+                  <input
+                    value={serviceDraft.serviceCategory}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        serviceCategory: event.target.value,
+                      }))
+                    }
+                    placeholder="Permit, transport, compliance..."
+                    className="input"
+                  />
+                </Field>
                 <NumberField
-                  label="Price (KES)"
+                  label="Display price (KES)"
                   value={serviceDraft.price}
                   onChange={(value) =>
                     setServiceDraft((current) => ({ ...current, price: Math.max(0, value) }))
+                  }
+                />
+                <NumberField
+                  label="Registration fee"
+                  value={serviceDraft.registrationFee}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({
+                      ...current,
+                      registrationFee: Math.max(0, value),
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Processing fee"
+                  value={serviceDraft.processingFee}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({
+                      ...current,
+                      processingFee: Math.max(0, value),
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Service charge"
+                  value={serviceDraft.serviceCharge}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({
+                      ...current,
+                      serviceCharge: Math.max(0, value),
+                      price: Math.max(current.price, value),
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Penalty amount"
+                  value={serviceDraft.penaltyAmount}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({ ...current, penaltyAmount: Math.max(0, value) }))
+                  }
+                />
+                <NumberField
+                  label="Waiver amount"
+                  value={serviceDraft.waiverAmount}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({ ...current, waiverAmount: Math.max(0, value) }))
+                  }
+                />
+                <NumberField
+                  label="Negotiated discount"
+                  value={serviceDraft.negotiatedDiscountAmount}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({
+                      ...current,
+                      negotiatedDiscountAmount: Math.max(0, value),
+                    }))
                   }
                 />
                 <Field label="Billing frequency">
@@ -1635,9 +1890,47 @@ function PolicyCenterPage() {
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="semi_annual">Semi-annual</option>
+                    <option value="annual">Annual</option>
                     <option value="yearly">Yearly</option>
+                    <option value="seasonal">Seasonal</option>
+                    <option value="custom">Custom period</option>
                   </select>
                 </Field>
+                <Field label="Effective date">
+                  <input
+                    type="date"
+                    value={serviceDraft.effectiveDate}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        effectiveDate: event.target.value,
+                      }))
+                    }
+                    className="input"
+                  />
+                </Field>
+                <Field label="Expiry date">
+                  <input
+                    type="date"
+                    value={serviceDraft.expiryDate}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({ ...current, expiryDate: event.target.value }))
+                    }
+                    className="input"
+                  />
+                </Field>
+                <NumberField
+                  label="Grace period days"
+                  value={serviceDraft.gracePeriodDays}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({
+                      ...current,
+                      gracePeriodDays: Math.max(0, Math.floor(value)),
+                    }))
+                  }
+                />
                 <Field label="Subjected to">
                   <select
                     value={serviceDraft.scope}
@@ -1654,6 +1947,7 @@ function PolicyCenterPage() {
                     className="input"
                   >
                     <option value="all_members">All members</option>
+                    <option value="sbc_members">SBC members only</option>
                     <option value="service_members">Service members only</option>
                     <option value="selected_members">Specific members</option>
                   </select>
@@ -1798,6 +2092,45 @@ function PolicyCenterPage() {
                       setServiceDraft((current) => ({
                         ...current,
                         feeOverridesText: event.target.value,
+                      }))
+                    }
+                    className="input font-mono text-xs"
+                  />
+                </Field>
+                <Field label="Custom charges JSON" className="sm:col-span-2">
+                  <textarea
+                    rows={3}
+                    value={serviceDraft.customChargesText}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        customChargesText: event.target.value,
+                      }))
+                    }
+                    className="input font-mono text-xs"
+                  />
+                </Field>
+                <Field label="Normal deductions JSON" className="sm:col-span-2">
+                  <textarea
+                    rows={3}
+                    value={serviceDraft.normalDeductionsText}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        normalDeductionsText: event.target.value,
+                      }))
+                    }
+                    className="input font-mono text-xs"
+                  />
+                </Field>
+                <Field label="Renewal rules JSON" className="sm:col-span-2">
+                  <textarea
+                    rows={3}
+                    value={serviceDraft.renewalRulesText}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        renewalRulesText: event.target.value,
                       }))
                     }
                     className="input font-mono text-xs"
@@ -2104,7 +2437,7 @@ function PolicyCenterPage() {
 
         {tab === "interest" && (
           <Section
-            title="Fixed interest by repayment term"
+            title="Fixed interest by loan category"
             action={
               <button
                 onClick={() =>
@@ -2124,44 +2457,35 @@ function PolicyCenterPage() {
             <div className="grid gap-6 p-5 lg:grid-cols-2">
               <div className="space-y-3">
                 <div className="text-sm font-medium">Standard loans</div>
-                <div className="grid gap-4 md:grid-cols-3">
-                  {STANDARD_POLICY_TERMS.map((days) => (
-                    <NumberField
-                      key={`standard-${days}`}
-                      label={`${days} day interest %`}
-                      value={interestDraft.standard[days]}
-                      onChange={(value) =>
-                        setInterestDraft((current) => ({
-                          ...current,
-                          standard: { ...current.standard, [days]: value },
-                        }))
-                      }
-                    />
-                  ))}
-                </div>
+                <NumberField
+                  label="Interest %"
+                  value={interestDraft.standard[7]}
+                  onChange={(value) =>
+                    setInterestDraft((current) => ({
+                      ...current,
+                      standard: { 7: value, 14: value, 30: value },
+                    }))
+                  }
+                />
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium">Premium loans</div>
-                <div className="grid gap-4 md:grid-cols-4">
-                  {PREMIUM_POLICY_TERMS.map((days) => (
-                    <NumberField
-                      key={`premium-${days}`}
-                      label={`${days} day interest %`}
-                      value={interestDraft.premium[days]}
-                      onChange={(value) =>
-                        setInterestDraft((current) => ({
-                          ...current,
-                          premium: { ...current.premium, [days]: value },
-                        }))
-                      }
-                    />
-                  ))}
-                </div>
+                <NumberField
+                  label="Interest %"
+                  value={interestDraft.premium[14]}
+                  onChange={(value) =>
+                    setInterestDraft((current) => ({
+                      ...current,
+                      premium: { 14: value, 30: value, 60: value, 90: value },
+                    }))
+                  }
+                />
               </div>
             </div>
             <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-              New loan applications use these fixed rates immediately. Existing loans keep the rate
-              already stored on the loan record.
+              New loan applications use these category rates as a percentage of net disbursed.
+              Repayment days only change the daily repayment. Existing loans keep the rate already
+              stored on the loan record.
             </div>
           </Section>
         )}

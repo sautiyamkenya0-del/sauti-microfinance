@@ -125,6 +125,10 @@ function asJsonObject(value: unknown) {
     : {};
 }
 
+function asJsonArray(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
 type CarryoverLiveState = {
   savingsBalance: number;
   shareUnits: number;
@@ -484,7 +488,7 @@ function termPeriodsForLoanKind(
 
 function loanScheduleTotal(principal: number, monthlyRatePct: number, months: number) {
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
-  const interest = principal * (monthlyRatePct / 100) * periods;
+  const interest = Math.max(0, principal) * (monthlyRatePct / 100);
   const total = principal + interest;
   return { interest, total, monthly: total / periods };
 }
@@ -496,7 +500,7 @@ function loanScheduleTotalFromNet(
   months: number,
 ) {
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
-  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100) * periods;
+  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100);
   const total = Math.max(0, financedPrincipal) + interest;
   return { interest, total, monthly: total / periods };
 }
@@ -960,7 +964,7 @@ function serviceMemberNumberSequence(value: unknown) {
   const match = String(value ?? "")
     .trim()
     .toUpperCase()
-    .match(/SVC(\d+)/);
+    .match(/(?:SM|SVC)(\d+)/);
   return match ? Number(match[1]) : 0;
 }
 
@@ -969,7 +973,23 @@ function nextServiceMemberNumber(values: Array<string | null | undefined>) {
     (highest, value) => Math.max(highest, serviceMemberNumberSequence(value)),
     0,
   );
-  return `SVC${String(max + 1).padStart(4, "0")}`;
+  return `SM${String(max + 1).padStart(3, "0")}K`;
+}
+
+function prefixedKSequence(prefix: string, value: unknown) {
+  const match = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .match(new RegExp(`^${prefix}(\\d+)K?$`));
+  return match ? Number(match[1]) : 0;
+}
+
+function nextPrefixedKNumber(prefix: string, values: Array<string | null | undefined>) {
+  const max = values.reduce(
+    (highest, value) => Math.max(highest, prefixedKSequence(prefix, value)),
+    0,
+  );
+  return `${prefix}${String(max + 1).padStart(3, "0")}K`;
 }
 
 async function syncMemberServiceSubscriptions(args: {
@@ -5820,6 +5840,10 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       await moveMemberReference("member_carryover_loans");
       await moveOptionalMemberReference("system_payout_requests");
       await moveOptionalMemberReference("member_service_subscriptions");
+      await moveOptionalMemberReference("service_applications");
+      await moveOptionalMemberReference("service_billing_invoices");
+      await moveOptionalMemberReference("member_wallets");
+      await moveOptionalMemberReference("member_contributions");
 
       const currentAccountAliases = membershipAccountAliases(currentMemberId);
       for (const accountAlias of currentAccountAliases) {
@@ -9021,6 +9045,7 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
     (data: {
       id?: string;
       name: string;
+      serviceCategory?: string;
       description?: string;
       price: number;
       billingFrequency?: ServiceBillingFrequency;
@@ -9028,10 +9053,23 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
       selectedMemberIds?: string[];
       deductionMode?: "normal" | "override_all" | "amended_override";
       feeOverrides?: Record<string, unknown>;
+      effectiveDate?: string;
+      expiryDate?: string;
+      registrationFee?: number;
+      processingFee?: number;
+      serviceCharge?: number;
+      waiverAmount?: number;
+      penaltyAmount?: number;
+      customCharges?: unknown[];
+      negotiatedDiscountAmount?: number;
+      normalDeductions?: Record<string, unknown>;
+      gracePeriodDays?: number;
+      renewalRules?: Record<string, unknown>;
       active?: boolean;
     }) => ({
       id: String(data?.id ?? "").trim() || undefined,
       name: String(data?.name ?? "").trim(),
+      serviceCategory: data?.serviceCategory?.trim() || undefined,
       description: data?.description?.trim() || undefined,
       price: Math.max(0, Number(data?.price ?? 0)),
       billingFrequency: normalizeServiceBillingFrequency(data?.billingFrequency),
@@ -9044,6 +9082,18 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
           ? data.deductionMode
           : "normal",
       feeOverrides: asJsonObject(data?.feeOverrides),
+      effectiveDate: data?.effectiveDate?.trim() || new Date().toISOString().slice(0, 10),
+      expiryDate: data?.expiryDate?.trim() || undefined,
+      registrationFee: Math.max(0, Number(data?.registrationFee ?? 0)),
+      processingFee: Math.max(0, Number(data?.processingFee ?? 0)),
+      serviceCharge: Math.max(0, Number(data?.serviceCharge ?? data?.price ?? 0)),
+      waiverAmount: Math.max(0, Number(data?.waiverAmount ?? 0)),
+      penaltyAmount: Math.max(0, Number(data?.penaltyAmount ?? 0)),
+      customCharges: asJsonArray(data?.customCharges),
+      negotiatedDiscountAmount: Math.max(0, Number(data?.negotiatedDiscountAmount ?? 0)),
+      normalDeductions: asJsonObject(data?.normalDeductions),
+      gracePeriodDays: Math.max(0, Math.floor(Number(data?.gracePeriodDays ?? 0))),
+      renewalRules: asJsonObject(data?.renewalRules),
       active: data?.active !== false,
     }),
   )
@@ -9059,6 +9109,7 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
     const { error } = await runtimeDb.from("service_catalog").upsert({
       id,
       name: data.name,
+      service_category: data.serviceCategory ?? null,
       description: data.description ?? null,
       price: data.price,
       billing_frequency: data.billingFrequency,
@@ -9066,6 +9117,18 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
       selected_member_ids: data.scope === "selected_members" ? data.selectedMemberIds : [],
       deduction_mode: data.deductionMode,
       fee_overrides: data.feeOverrides,
+      effective_date: data.effectiveDate,
+      expiry_date: data.expiryDate ?? null,
+      registration_fee: data.registrationFee,
+      processing_fee: data.processingFee,
+      service_charge: data.serviceCharge,
+      waiver_amount: data.waiverAmount,
+      penalty_amount: data.penaltyAmount,
+      custom_charges: data.customCharges,
+      negotiated_discount_amount: data.negotiatedDiscountAmount,
+      normal_deductions: data.normalDeductions,
+      grace_period_days: data.gracePeriodDays,
+      renewal_rules: data.renewalRules,
       active: data.active,
       created_by: actor.id,
     });
@@ -9085,6 +9148,7 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
             member.member_category,
             member.is_investor,
           );
+          if (data.scope === "sbc_members") return tags.includes("member");
           if (data.scope === "service_members") return tags.includes("service");
           return tags.includes("member") || tags.includes("service");
         })
@@ -9114,10 +9178,17 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
       summary: `${actor.name} saved service ${data.name}`,
       details: {
         price: data.price,
+        serviceCategory: data.serviceCategory ?? null,
         billingFrequency: data.billingFrequency,
         scope: data.scope,
         selectedMemberIds: data.scope === "selected_members" ? data.selectedMemberIds : [],
         deductionMode: data.deductionMode,
+        registrationFee: data.registrationFee,
+        processingFee: data.processingFee,
+        serviceCharge: data.serviceCharge,
+        waiverAmount: data.waiverAmount,
+        penaltyAmount: data.penaltyAmount,
+        negotiatedDiscountAmount: data.negotiatedDiscountAmount,
         active: data.active,
       },
     });
@@ -9154,6 +9225,268 @@ export const deleteServiceCatalogRecord = createServerFn({ method: "POST" })
       summary: `${actor.name} deactivated service ${service?.name ?? data.id}`,
     });
     return { ok: true };
+  });
+
+export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      memberId: string;
+      serviceId?: string;
+      serviceType?: string;
+      caseType?: "normal" | "overcharged_invoice" | "invoice_with_penalty" | "confiscated_items";
+      priority?: "low" | "normal" | "high" | "urgent";
+      problemReason?: string;
+      notes?: string;
+      county?: string;
+      subcounty?: string;
+      ward?: string;
+      town?: string;
+      scheduleId?: string;
+      invoiceReference?: string;
+      invoiceNumber?: string;
+      invoiceDate?: string;
+      invoiceAmountCharged?: number;
+      issueDate?: string;
+      expiryDate?: string;
+      renewalWindowDays?: number;
+      gracePeriodDays?: number;
+      confiscationReference?: string;
+      inventorySheetNumber?: string;
+      confiscationDate?: string;
+      status?: string;
+      paymentStatus?: string;
+      workflowStage?: string;
+      manualCountyCharges?: number;
+      waiverAmount?: number;
+      penaltyAmount?: number;
+    }) => ({
+      id: String(data?.id ?? "").trim() || undefined,
+      memberId: String(data?.memberId ?? "").trim(),
+      serviceId: String(data?.serviceId ?? "").trim() || undefined,
+      serviceType: data?.serviceType?.trim() || undefined,
+      caseType:
+        data?.caseType === "overcharged_invoice" ||
+        data?.caseType === "invoice_with_penalty" ||
+        data?.caseType === "confiscated_items"
+          ? data.caseType
+          : "normal",
+      priority:
+        data?.priority === "low" || data?.priority === "high" || data?.priority === "urgent"
+          ? data.priority
+          : "normal",
+      problemReason: data?.problemReason?.trim() || undefined,
+      notes: data?.notes?.trim() || undefined,
+      county: data?.county?.trim() || undefined,
+      subcounty: data?.subcounty?.trim() || undefined,
+      ward: data?.ward?.trim() || undefined,
+      town: data?.town?.trim() || undefined,
+      scheduleId: data?.scheduleId?.trim() || undefined,
+      invoiceReference: data?.invoiceReference?.trim() || undefined,
+      invoiceNumber: data?.invoiceNumber?.trim() || undefined,
+      invoiceDate: data?.invoiceDate?.trim() || undefined,
+      invoiceAmountCharged: Math.max(0, Number(data?.invoiceAmountCharged ?? 0)),
+      issueDate: data?.issueDate?.trim() || undefined,
+      expiryDate: data?.expiryDate?.trim() || undefined,
+      renewalWindowDays: Math.max(0, Math.floor(Number(data?.renewalWindowDays ?? 0))),
+      gracePeriodDays: Math.max(0, Math.floor(Number(data?.gracePeriodDays ?? 0))),
+      confiscationReference: data?.confiscationReference?.trim() || undefined,
+      inventorySheetNumber: data?.inventorySheetNumber?.trim() || undefined,
+      confiscationDate: data?.confiscationDate?.trim() || undefined,
+      status: data?.status?.trim() || "submitted",
+      paymentStatus: data?.paymentStatus?.trim() || "pending",
+      workflowStage: data?.workflowStage?.trim() || "application_submitted",
+      manualCountyCharges: Math.max(0, Number(data?.manualCountyCharges ?? 0)),
+      waiverAmount: Math.max(0, Number(data?.waiverAmount ?? 0)),
+      penaltyAmount: Math.max(0, Number(data?.penaltyAmount ?? 0)),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireManagerOrDirectorActor();
+    if (!data.memberId) throw new Error("Member is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+
+    const { data: member, error: memberError } = await runtimeDb
+      .from("members")
+      .select("id, name, member_category, member_tags, is_investor")
+      .eq("id", data.memberId)
+      .maybeSingle();
+    if (memberError) throw new Error(memberError.message);
+    if (!member) throw new Error("Selected member was not found.");
+
+    const { data: service, error: serviceError } = data.serviceId
+      ? await runtimeDb.from("service_catalog").select("*").eq("id", data.serviceId).maybeSingle()
+      : { data: null, error: null };
+    if (serviceError) throw new Error(serviceError.message);
+
+    if (service) {
+      const memberTags = normalizeMemberTags(
+        member.member_tags,
+        member.member_category,
+        member.is_investor,
+      );
+      const serviceScope = normalizeServiceScope(service.scope);
+      const selectedMemberIds = Array.isArray(service.selected_member_ids)
+        ? service.selected_member_ids
+        : [];
+      const allowed =
+        serviceScope === "all_members" ||
+        (serviceScope === "sbc_members" && memberTags.includes("member")) ||
+        (serviceScope === "service_members" && memberTags.includes("service")) ||
+        (serviceScope === "selected_members" && selectedMemberIds.includes(data.memberId));
+      if (!allowed) throw new Error("This member is not eligible for the selected service.");
+    }
+
+    const { data: schedule, error: scheduleError } = data.scheduleId
+      ? await runtimeDb
+          .from("county_charge_schedules")
+          .select("*")
+          .eq("id", data.scheduleId)
+          .maybeSingle()
+      : { data: null, error: null };
+    if (scheduleError) throw new Error(scheduleError.message);
+
+    const serviceCustomCharges = Array.isArray(service?.custom_charges)
+      ? service.custom_charges.reduce(
+          (sum: number, row: any) => sum + Math.max(0, Number(row?.amount ?? 0)),
+          0,
+        )
+      : 0;
+    const countyCharges =
+      schedule != null ? Math.max(0, Number(schedule.total_amount ?? 0)) : data.manualCountyCharges;
+    const registrationFee = Math.max(0, Number(service?.registration_fee ?? 0));
+    const processingFee = Math.max(0, Number(service?.processing_fee ?? 0));
+    const serviceFee = Math.max(
+      0,
+      Number(service?.service_charge ?? service?.price ?? 0),
+    );
+    const penaltyAmount = Math.max(0, Number(service?.penalty_amount ?? 0), data.penaltyAmount);
+    const waiverAmount = Math.max(0, Number(service?.waiver_amount ?? 0), data.waiverAmount);
+    const discountAmount = Math.max(0, Number(service?.negotiated_discount_amount ?? 0));
+    const expectedAmount =
+      countyCharges + serviceFee + processingFee + registrationFee + serviceCustomCharges;
+    const finalAmount = Math.max(
+      0,
+      expectedAmount + penaltyAmount - waiverAmount - discountAmount,
+    );
+    const overchargeAmount = Math.max(0, data.invoiceAmountCharged - finalAmount);
+    const calculatedCharges = {
+      countyCharges,
+      serviceFee,
+      processingFee,
+      registrationFee,
+      customCharges: serviceCustomCharges,
+      penaltyAmount,
+      waiverAmount,
+      discountAmount,
+      expectedAmount,
+      invoiceAmountCharged: data.invoiceAmountCharged,
+      overchargeAmount,
+      finalAmount,
+    };
+
+    let applicationNumber = data.id;
+    if (!applicationNumber) {
+      const { data: existingApps, error: appNumberError } = await runtimeDb
+        .from("service_applications")
+        .select("application_number");
+      if (appNumberError && !isMissingRelationError(appNumberError)) {
+        throw new Error(appNumberError.message);
+      }
+      applicationNumber = appNumberError
+        ? makeId("APP")
+        : nextPrefixedKNumber(
+            "APP",
+            (existingApps ?? []).map(
+              (row: { application_number?: string | null }) => row.application_number,
+            ),
+          );
+    }
+
+    const applicationId = data.id ?? makeId("SAPP");
+    const invoiceNumber =
+      data.invoiceNumber ||
+      nextPrefixedKNumber("INV", [
+        applicationNumber?.replace(/^APP/i, "INV").replace(/K$/i, "K") ?? null,
+      ]);
+
+    const applicationPayload = {
+      id: applicationId,
+      member_id: data.memberId,
+      service_id: data.serviceId ?? null,
+      application_number: applicationNumber,
+      service_type: data.serviceType ?? service?.service_category ?? service?.name ?? null,
+      case_type: data.caseType,
+      priority: data.priority,
+      problem_reason: data.problemReason ?? null,
+      notes: data.notes ?? null,
+      county: data.county ?? schedule?.county ?? null,
+      subcounty: data.subcounty ?? null,
+      ward: data.ward ?? null,
+      town: data.town ?? null,
+      schedule_id: data.scheduleId ?? null,
+      invoice_reference: data.invoiceReference ?? null,
+      invoice_number: data.invoiceNumber ?? null,
+      invoice_date: data.invoiceDate ?? null,
+      invoice_amount_charged: data.invoiceAmountCharged,
+      issue_date: data.issueDate ?? null,
+      expiry_date: data.expiryDate ?? null,
+      renewal_window_days: data.renewalWindowDays,
+      grace_period_days: data.gracePeriodDays || Number(service?.grace_period_days ?? 0),
+      confiscation_reference: data.confiscationReference ?? null,
+      inventory_sheet_number: data.inventorySheetNumber ?? null,
+      confiscation_date: data.confiscationDate ?? null,
+      status: data.status,
+      payment_status: data.paymentStatus,
+      workflow_stage: data.workflowStage,
+      calculated_charges: calculatedCharges,
+      created_by: actor.id,
+    };
+
+    const { error: appError } = await runtimeDb
+      .from("service_applications")
+      .upsert(applicationPayload);
+    if (appError) throw new Error(appError.message);
+
+    const { error: invoiceError } = await runtimeDb.from("service_billing_invoices").upsert({
+      id: `${applicationId}-INV`,
+      application_id: applicationId,
+      member_id: data.memberId,
+      service_id: data.serviceId ?? null,
+      invoice_number: invoiceNumber,
+      county_charges: countyCharges,
+      service_fee: serviceFee,
+      processing_fee: processingFee,
+      registration_fee: registrationFee,
+      custom_charges: serviceCustomCharges,
+      penalty_amount: penaltyAmount,
+      waiver_amount: waiverAmount,
+      discount_amount: discountAmount,
+      expected_amount: expectedAmount,
+      invoice_amount_charged: data.invoiceAmountCharged,
+      overcharge_amount: overchargeAmount,
+      final_amount: finalAmount,
+      status: data.paymentStatus,
+      due_date: data.expiryDate ?? null,
+    });
+    if (invoiceError) throw new Error(invoiceError.message);
+
+    await auditAction({
+      actor,
+      action: "service_application.upserted",
+      targetType: "service_application",
+      targetId: applicationId,
+      summary: `${actor.name} saved service application ${applicationNumber}`,
+      details: {
+        memberId: data.memberId,
+        serviceId: data.serviceId ?? null,
+        caseType: data.caseType,
+        paymentStatus: data.paymentStatus,
+        calculatedCharges,
+      },
+    });
+
+    return { id: applicationId, applicationNumber, invoiceNumber, calculatedCharges };
   });
 
 export const upsertPolicySettingRecord = createServerFn({ method: "POST" })
@@ -9313,8 +9646,18 @@ type SupplierType = "individual" | "company";
 type SupplierRegistrationCategory = "goods" | "services" | "works";
 type SupplierClass = "normal" | "special_broker";
 type SupplierAgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
-type ServiceBillingFrequency = "one_time" | "daily" | "weekly" | "monthly" | "yearly";
-type ServiceScope = "all_members" | "service_members" | "selected_members";
+type ServiceBillingFrequency =
+  | "one_time"
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "quarterly"
+  | "semi_annual"
+  | "annual"
+  | "yearly"
+  | "seasonal"
+  | "custom";
+type ServiceScope = "all_members" | "sbc_members" | "service_members" | "selected_members";
 
 const MEMBER_DOCKETS: MemberDocket[] = [
   "withdrawable_savings",
@@ -9409,13 +9752,20 @@ function normalizeServiceBillingFrequency(value: unknown): ServiceBillingFrequen
   return value === "one_time" ||
     value === "daily" ||
     value === "weekly" ||
-    value === "yearly"
+    value === "quarterly" ||
+    value === "semi_annual" ||
+    value === "annual" ||
+    value === "yearly" ||
+    value === "seasonal" ||
+    value === "custom"
     ? value
     : "monthly";
 }
 
 function normalizeServiceScope(value: unknown): ServiceScope {
-  return value === "service_members" || value === "selected_members" ? value : "all_members";
+  return value === "sbc_members" || value === "service_members" || value === "selected_members"
+    ? value
+    : "all_members";
 }
 
 function normalizeSupplierType(value: unknown): SupplierType {

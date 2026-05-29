@@ -1397,7 +1397,7 @@ export function loanTermDaysOf(loan: Pick<Loan, "termDays" | "termMonths" | "loa
 
 export function loanScheduleTotal(principal: number, monthlyRatePct: number, months: number) {
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
-  const interest = principal * (monthlyRatePct / 100) * periods;
+  const interest = Math.max(0, principal) * (monthlyRatePct / 100);
   const total = principal + interest;
   return { interest, total, monthly: total / periods };
 }
@@ -1409,7 +1409,7 @@ export function loanScheduleTotalFromNet(
   months: number,
 ) {
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
-  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100) * periods;
+  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100);
   const total = Math.max(0, financedPrincipal) + interest;
   return { interest, total, monthly: total / periods };
 }

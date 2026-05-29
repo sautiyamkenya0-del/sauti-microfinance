@@ -2640,5 +2640,1609 @@ comment on column public.members.vehicle_plate is
   'Default vehicle plate for locomotive members so fuel refill rows do not repeat the plate on every entry.';
 
 -- =====================================================================
+-- Migration: 20260528103000_one_open_loan_per_member_category.sql
+-- =====================================================================
+
+create or replace function public.tg_reject_duplicate_open_carryover_loan()
+returns trigger
+language plpgsql
+as $$
+declare
+  normalized_kind text := coalesce(nullif(new.loan_kind, ''), 'financial');
+begin
+  if coalesce(new.finished, false) = true or new.status not in ('active', 'defaulted') then
+    return new;
+  end if;
+
+  if exists (
+    select 1
+    from public.loans l
+    where l.member_id = new.member_id
+      and coalesce(nullif(l.loan_kind, ''), 'financial') = normalized_kind
+      and l.status in ('pending', 'active', 'defaulted')
+  ) then
+    raise exception 'Member % already has an open % loan.', new.member_id, normalized_kind;
+  end if;
+
+  if exists (
+    select 1
+    from public.member_carryover_loans cl
+    where cl.member_id = new.member_id
+      and coalesce(nullif(cl.loan_kind, ''), 'financial') = normalized_kind
+      and cl.status in ('active', 'defaulted')
+      and coalesce(cl.finished, false) = false
+      and cl.id <> new.id
+  ) then
+    raise exception 'Member % already has an open % carryover loan.', new.member_id, normalized_kind;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_member_carryover_loans_reject_duplicate_open
+on public.member_carryover_loans;
+
+create trigger trg_member_carryover_loans_reject_duplicate_open
+before insert or update of member_id, status, loan_kind, finished
+on public.member_carryover_loans
+for each row
+execute function public.tg_reject_duplicate_open_carryover_loan();
+
+create or replace view public.financial_invariant_violations as
+with settings as (
+  select
+    public.sauti_policy_numeric('mandatorySavingsThreshold', 5000) as savings_threshold,
+    public.sauti_policy_numeric('mandatorySharesThreshold', 3000) as shares_threshold
+),
+ledger_net as (
+  select
+    member_id,
+    sum(
+      case
+        when type in ('deposit', 'loan_repayment', 'share_purchase', 'fee_payment', 'investor_contribution')
+          then amount
+        when type in ('withdrawal', 'loan_disbursement')
+          then -amount
+        else 0
+      end
+    ) as net_amount
+  from public.transactions
+  where member_id is not null
+  group by member_id
+),
+carryover_net as (
+  select
+    member_id,
+    greatest(
+      coalesce(total_collected, 0),
+      case
+        when (collection_breakdown ->> 'totalDepositsRecorded') ~ '^-?[0-9]+(\.[0-9]+)?$'
+          then (collection_breakdown ->> 'totalDepositsRecorded')::numeric
+        else 0
+      end
+    ) as net_amount
+  from public.member_carryover_profiles
+),
+docket_totals as (
+  select
+    member_id,
+    sum(amount) filter (where docket = 'purpose_pool') as purpose_pool,
+    sum(amount) filter (where docket <> 'purpose_pool') as other_dockets
+  from public.member_docket_balances
+  group by member_id
+),
+member_positions as (
+  select
+    m.id as member_id,
+    m.savings_balance,
+    (m.shares * 100) + m.share_reserve_balance as share_basket,
+    coalesce(d.purpose_pool, 0) as purpose_pool,
+    coalesce(d.other_dockets, 0) as other_dockets,
+    greatest(coalesce(l.net_amount, 0), coalesce(c.net_amount, 0)) as lifetime_net
+  from public.members m
+  left join ledger_net l on l.member_id = m.id
+  left join carryover_net c on c.member_id = m.id
+  left join docket_totals d on d.member_id = m.id
+),
+open_loans as (
+  select
+    id,
+    member_id,
+    coalesce(nullif(loan_kind, ''), 'financial') as loan_kind,
+    'live'::text as source
+  from public.loans
+  where status in ('pending', 'active', 'defaulted')
+  union all
+  select
+    id,
+    member_id,
+    coalesce(nullif(loan_kind, ''), 'financial') as loan_kind,
+    'carryover'::text as source
+  from public.member_carryover_loans
+  where status in ('active', 'defaulted')
+    and coalesce(finished, false) = false
+),
+duplicate_open_loans as (
+  select
+    member_id,
+    loan_kind,
+    jsonb_agg(jsonb_build_object('id', id, 'source', source) order by source, id) as loans
+  from open_loans
+  group by member_id, loan_kind
+  having count(*) > 1
+)
+select
+  'negative_member_balance'::text as violation,
+  mp.member_id,
+  jsonb_build_object(
+    'savingsBalance', mp.savings_balance,
+    'shareBasket', mp.share_basket
+  ) as details
+from member_positions mp
+where mp.savings_balance < 0
+   or mp.share_basket < 0
+union all
+select
+  'mandatory_savings_above_threshold'::text as violation,
+  mp.member_id,
+  jsonb_build_object(
+    'savingsBalance', mp.savings_balance,
+    'threshold', s.savings_threshold
+  ) as details
+from member_positions mp
+cross join settings s
+where mp.savings_balance > s.savings_threshold
+union all
+select
+  'shares_above_threshold'::text as violation,
+  mp.member_id,
+  jsonb_build_object(
+    'shareBasket', mp.share_basket,
+    'threshold', s.shares_threshold
+  ) as details
+from member_positions mp
+cross join settings s
+where mp.share_basket > s.shares_threshold
+union all
+select
+  'purpose_pool_above_lifetime_net'::text as violation,
+  mp.member_id,
+  jsonb_build_object(
+    'lifetimeNet', mp.lifetime_net,
+    'mandatoryAndOtherHeld', mp.savings_balance + mp.share_basket + mp.other_dockets,
+    'purposePool', mp.purpose_pool
+  ) as details
+from member_positions mp
+where mp.purpose_pool > greatest(0, mp.lifetime_net - mp.savings_balance - mp.share_basket - mp.other_dockets)
+union all
+select
+  'duplicate_open_loans'::text as violation,
+  member_id,
+  jsonb_build_object('loanKind', loan_kind, 'loans', loans) as details
+from duplicate_open_loans;
+
+-- =====================================================================
+-- Migration: 20260528114500_penalty_rate_split_and_default_cap.sql
+-- =====================================================================
+
+update public.policy_settings
+set value = jsonb_set(
+  jsonb_set(
+    coalesce(value, '{}'::jsonb),
+    '{penaltyDailyPct}',
+    '5'::jsonb,
+    true
+  ),
+  '{defaultPenaltyPct}',
+  '2'::jsonb,
+  true
+)
+where key = 'percentages';
+
+-- =====================================================================
+-- Migration: 20260528130000_service_wallet_communications_and_requests.sql
+-- =====================================================================
+
+alter type public.member_docket add value if not exists 'service_wallet';
+
+alter table public.staff_memos
+  add column if not exists document_kind text not null default 'memo',
+  add column if not exists letter_meta jsonb not null default '{}'::jsonb;
+
+create index if not exists idx_staff_memos_document_kind
+on public.staff_memos(document_kind, memo_date desc);
+
+alter table public.members
+  add column if not exists service_member_number text;
+
+create unique index if not exists idx_members_service_member_number
+on public.members(service_member_number)
+where service_member_number is not null;
+
+create table if not exists public.service_catalog (
+  id text primary key,
+  name text not null,
+  description text,
+  price numeric(14,2) not null default 0,
+  billing_frequency text not null default 'monthly',
+  scope text not null default 'all_members',
+  selected_member_ids text[] not null default '{}'::text[],
+  deduction_mode text not null default 'normal',
+  fee_overrides jsonb not null default '{}'::jsonb,
+  active boolean not null default true,
+  created_by text references public.staff(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint service_catalog_frequency_check
+    check (billing_frequency in ('one_time','daily','weekly','monthly','yearly')),
+  constraint service_catalog_scope_check
+    check (scope in ('all_members','service_members','selected_members'))
+);
+
+alter table public.service_catalog enable row level security;
+
+alter table public.service_catalog
+  add column if not exists deduction_mode text not null default 'normal',
+  add column if not exists fee_overrides jsonb not null default '{}'::jsonb;
+
+do $$
+begin
+  alter table public.service_catalog
+    add constraint service_catalog_deduction_mode_check
+    check (deduction_mode in ('normal','override_all','amended_override'));
+exception when duplicate_object then null;
+end $$;
+
+drop trigger if exists trg_service_catalog_updated_at on public.service_catalog;
+create trigger trg_service_catalog_updated_at before update on public.service_catalog
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.member_service_subscriptions (
+  member_id text not null references public.members(id) on delete cascade,
+  service_id text not null references public.service_catalog(id) on delete cascade,
+  status text not null default 'active',
+  assigned_by text references public.staff(id) on delete set null,
+  assigned_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (member_id, service_id),
+  constraint member_service_subscriptions_status_check
+    check (status in ('active','paused','cancelled'))
+);
+
+alter table public.member_service_subscriptions enable row level security;
+
+drop trigger if exists trg_member_service_subscriptions_updated_at
+on public.member_service_subscriptions;
+create trigger trg_member_service_subscriptions_updated_at
+before update on public.member_service_subscriptions
+for each row execute function public.tg_set_updated_at();
+
+create index if not exists idx_member_service_subscriptions_service
+on public.member_service_subscriptions(service_id, status);
+
+create index if not exists idx_member_service_subscriptions_member
+on public.member_service_subscriptions(member_id, status);
+
+insert into public.fee_policies (
+  key, label, amount, permanence, effective_from, scope, custom, notes
+)
+values (
+  'sticker',
+  'Member Buffer',
+  3000,
+  'permanent',
+  current_date,
+  'all',
+  false,
+  'Replaces the old shop sticker fee while keeping the sticker key for existing ledgers.'
+)
+on conflict (key) do update set
+  label = excluded.label,
+  amount = excluded.amount,
+  permanence = excluded.permanence,
+  effective_from = least(public.fee_policies.effective_from, excluded.effective_from),
+  scope = excluded.scope,
+  custom = excluded.custom,
+  notes = excluded.notes,
+  updated_at = now();
+
+comment on column public.staff_memos.document_kind is
+  'memo for normal notices, letter for member-downloadable letterhead documents.';
+
+comment on column public.staff_memos.letter_meta is
+  'Letterhead options, selected member facts, included fields, and delivery/download metadata.';
+
+comment on column public.service_catalog.deduction_mode is
+  'normal applies normal service deduction, override_all replaces other deductions, amended_override stores custom fee overrides.';
+
+update public.policy_settings
+set value = coalesce(value, '{}'::jsonb)
+  || jsonb_build_object(
+    'fuelBufferAmount', coalesce(value->'fuelBufferAmount', '3000'::jsonb),
+    'fuelChargeAmount', coalesce(value->'fuelChargeAmount', '100'::jsonb),
+    'stockChargeAmount', coalesce(value->'stockChargeAmount', '100'::jsonb)
+  ),
+  notes = coalesce(notes, '') || ' Configurable fuel buffer, fuel charge, and stock charge added.',
+  updated_at = now()
+where key = 'percentages';
+
+-- =====================================================================
+-- Migration: 20260529120000_sauti_ai_intelligence_platform.sql
+-- =====================================================================
+
+-- Sauti AI intelligence platform foundation.
+-- This creates durable memory, conversation, file, research, agent, and call-session records.
+
+create or replace function public.touch_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create table if not exists public.ai_conversations (
+  id text primary key,
+  owner_kind text not null default 'staff' check (owner_kind in ('staff', 'member', 'system')),
+  owner_id text,
+  title text not null default 'New SautiAI chat',
+  folder text,
+  pinned boolean not null default false,
+  mode text not null default 'chat' check (mode in ('chat', 'call', 'research', 'file', 'agent')),
+  agent_key text,
+  visibility text not null default 'private' check (visibility in ('private', 'team', 'organization')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  last_message_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_messages (
+  id text primary key,
+  conversation_id text not null references public.ai_conversations(id) on delete cascade,
+  role text not null check (role in ('system', 'user', 'assistant', 'tool')),
+  content text not null default '',
+  attachments jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_memories (
+  id text primary key,
+  owner_kind text not null default 'staff' check (owner_kind in ('staff', 'member', 'system', 'organization')),
+  owner_id text,
+  memory_type text not null default 'user' check (memory_type in ('user', 'operational', 'contextual', 'governance')),
+  scope text not null default 'private' check (scope in ('private', 'team', 'organization', 'member')),
+  source text not null default 'manual',
+  content text not null,
+  tags text[] not null default '{}'::text[],
+  confidence numeric(4,3) not null default 0.700,
+  approved boolean not null default false,
+  approved_by text,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_observations (
+  id text primary key,
+  observation_type text not null default 'workflow',
+  title text not null,
+  detail text not null default '',
+  severity text not null default 'low' check (severity in ('low', 'medium', 'high', 'critical')),
+  entity_type text,
+  entity_id text,
+  status text not null default 'open' check (status in ('open', 'reviewed', 'dismissed', 'actioned')),
+  confidence numeric(4,3) not null default 0.700,
+  created_by text,
+  reviewed_by text,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_files (
+  id text primary key,
+  owner_kind text not null default 'staff' check (owner_kind in ('staff', 'member', 'system', 'organization')),
+  owner_id text,
+  filename text not null,
+  mime_type text,
+  size_bytes bigint not null default 0,
+  text_content text,
+  summary text,
+  tags text[] not null default '{}'::text[],
+  status text not null default 'uploaded' check (status in ('uploaded', 'processed', 'failed')),
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_research_logs (
+  id text primary key,
+  query text not null,
+  source_url text,
+  source_title text,
+  summary text not null default '',
+  trusted boolean not null default false,
+  requested_by text,
+  created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_agents (
+  key text primary key,
+  name text not null,
+  description text not null default '',
+  domain text not null default 'operations',
+  enabled boolean not null default true,
+  system_prompt text not null default '',
+  tools text[] not null default '{}'::text[],
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.ai_call_sessions (
+  id text primary key,
+  owner_kind text not null default 'staff' check (owner_kind in ('staff', 'member', 'system')),
+  owner_id text,
+  conversation_id text references public.ai_conversations(id) on delete set null,
+  mode text not null default 'audio' check (mode in ('audio', 'video', 'screen')),
+  status text not null default 'active' check (status in ('active', 'ended')),
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  transcript jsonb not null default '[]'::jsonb,
+  scene_notes jsonb not null default '[]'::jsonb,
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_file_chunks (
+  id text primary key,
+  file_id text not null references public.ai_files(id) on delete cascade,
+  chunk_index integer not null default 0,
+  content text not null default '',
+  summary text,
+  tags text[] not null default '{}'::text[],
+  embedding jsonb,
+  created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  unique (file_id, chunk_index)
+);
+
+create table if not exists public.ai_knowledge_links (
+  id text primary key,
+  source_type text not null,
+  source_id text not null,
+  target_type text not null,
+  target_id text not null,
+  relation text not null default 'related',
+  confidence numeric(4,3) not null default 0.700,
+  created_by text,
+  created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ai_tool_permissions (
+  id text primary key,
+  tool_key text not null,
+  role text not null default 'staff',
+  enabled boolean not null default false,
+  requires_approval boolean not null default true,
+  approved_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  unique (tool_key, role)
+);
+
+create table if not exists public.ai_realtime_events (
+  id text primary key,
+  conversation_id text references public.ai_conversations(id) on delete set null,
+  call_session_id text references public.ai_call_sessions(id) on delete cascade,
+  event_type text not null,
+  payload jsonb not null default '{}'::jsonb,
+  created_by text,
+  created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create index if not exists ai_conversations_owner_idx on public.ai_conversations(owner_kind, owner_id, updated_at desc);
+create index if not exists ai_messages_conversation_idx on public.ai_messages(conversation_id, created_at);
+create index if not exists ai_memories_owner_idx on public.ai_memories(owner_kind, owner_id, memory_type, updated_at desc);
+create index if not exists ai_memories_tags_idx on public.ai_memories using gin(tags);
+create index if not exists ai_observations_status_idx on public.ai_observations(status, severity, created_at desc);
+create index if not exists ai_files_owner_idx on public.ai_files(owner_kind, owner_id, created_at desc);
+create index if not exists ai_research_logs_created_idx on public.ai_research_logs(created_at desc);
+create index if not exists ai_call_sessions_owner_idx on public.ai_call_sessions(owner_kind, owner_id, started_at desc);
+create index if not exists ai_file_chunks_file_idx on public.ai_file_chunks(file_id, chunk_index);
+create index if not exists ai_knowledge_links_source_idx on public.ai_knowledge_links(source_type, source_id);
+create index if not exists ai_knowledge_links_target_idx on public.ai_knowledge_links(target_type, target_id);
+create index if not exists ai_tool_permissions_tool_idx on public.ai_tool_permissions(tool_key, role);
+create index if not exists ai_realtime_events_call_idx on public.ai_realtime_events(call_session_id, created_at desc);
+
+alter table public.ai_conversations enable row level security;
+alter table public.ai_messages enable row level security;
+alter table public.ai_memories enable row level security;
+alter table public.ai_observations enable row level security;
+alter table public.ai_files enable row level security;
+alter table public.ai_research_logs enable row level security;
+alter table public.ai_agents enable row level security;
+alter table public.ai_call_sessions enable row level security;
+alter table public.ai_file_chunks enable row level security;
+alter table public.ai_knowledge_links enable row level security;
+alter table public.ai_tool_permissions enable row level security;
+alter table public.ai_realtime_events enable row level security;
+
+drop policy if exists "Service role manages AI conversations" on public.ai_conversations;
+create policy "Service role manages AI conversations"
+on public.ai_conversations for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI messages" on public.ai_messages;
+create policy "Service role manages AI messages"
+on public.ai_messages for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI memories" on public.ai_memories;
+create policy "Service role manages AI memories"
+on public.ai_memories for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI observations" on public.ai_observations;
+create policy "Service role manages AI observations"
+on public.ai_observations for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI files" on public.ai_files;
+create policy "Service role manages AI files"
+on public.ai_files for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI research logs" on public.ai_research_logs;
+create policy "Service role manages AI research logs"
+on public.ai_research_logs for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Authenticated users read enabled AI agents" on public.ai_agents;
+create policy "Authenticated users read enabled AI agents"
+on public.ai_agents for select
+to authenticated
+using (enabled = true);
+
+drop policy if exists "Service role manages AI agents" on public.ai_agents;
+create policy "Service role manages AI agents"
+on public.ai_agents for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI call sessions" on public.ai_call_sessions;
+create policy "Service role manages AI call sessions"
+on public.ai_call_sessions for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI file chunks" on public.ai_file_chunks;
+create policy "Service role manages AI file chunks"
+on public.ai_file_chunks for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI knowledge links" on public.ai_knowledge_links;
+create policy "Service role manages AI knowledge links"
+on public.ai_knowledge_links for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI tool permissions" on public.ai_tool_permissions;
+create policy "Service role manages AI tool permissions"
+on public.ai_tool_permissions for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "Service role manages AI realtime events" on public.ai_realtime_events;
+create policy "Service role manages AI realtime events"
+on public.ai_realtime_events for all
+to service_role
+using (true)
+with check (true);
+
+drop trigger if exists touch_ai_conversations_updated_at on public.ai_conversations;
+create trigger touch_ai_conversations_updated_at
+before update on public.ai_conversations
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists touch_ai_memories_updated_at on public.ai_memories;
+create trigger touch_ai_memories_updated_at
+before update on public.ai_memories
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists touch_ai_observations_updated_at on public.ai_observations;
+create trigger touch_ai_observations_updated_at
+before update on public.ai_observations
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists touch_ai_files_updated_at on public.ai_files;
+create trigger touch_ai_files_updated_at
+before update on public.ai_files
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists touch_ai_agents_updated_at on public.ai_agents;
+create trigger touch_ai_agents_updated_at
+before update on public.ai_agents
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists touch_ai_tool_permissions_updated_at on public.ai_tool_permissions;
+create trigger touch_ai_tool_permissions_updated_at
+before update on public.ai_tool_permissions
+for each row execute function public.touch_updated_at();
+
+insert into public.ai_agents (key, name, description, domain, system_prompt, tools)
+values
+  ('finance', 'Finance Assistant', 'Loan, savings, shares, dockets, repayment, penalty, and reconciliation intelligence.', 'finance', 'Focus on financial accuracy, ledger evidence, loan cycles, repayment logic, and audit-safe recommendations.', array['ledger_read', 'loan_analysis', 'docket_analysis']),
+  ('customer_support', 'Customer Support Assistant', 'Member service, support triage, letters, policies, and plain-language explanations.', 'support', 'Focus on warm support, member privacy, clear escalation, and accurate portal guidance.', array['support_threads', 'memo_polish']),
+  ('technical_support', 'Technical Support AI', 'System diagnostics, callback errors, integrations, configuration, and workflow troubleshooting.', 'technical', 'Focus on system evidence, reproducible diagnostics, and careful change recommendations.', array['audit_log', 'callback_errors']),
+  ('operations', 'Operations AI', 'Daily operations, approvals, staff workflow, field visits, suppliers, fuel, stock, and service wallets.', 'operations', 'Focus on operational bottlenecks, approvals, supplier fulfillment, service wallets, and field execution.', array['approvals', 'suppliers', 'stock']),
+  ('hr', 'HR AI', 'Attendance, payroll support, staff patterns, and internal communication.', 'hr', 'Focus on privacy-aware staff support, attendance patterns, and internal communication clarity.', array['attendance', 'payroll']),
+  ('developer', 'Developer Assistant', 'Product architecture, bugs, data model, guardrails, and implementation planning.', 'engineering', 'Focus on architecture, safe database changes, regression risk, and implementation sequencing.', array['schema_read', 'audit_log']),
+  ('analytics', 'Analytics AI', 'Reports, anomaly detection, trend discovery, and management intelligence.', 'analytics', 'Focus on trends, anomalies, summaries, and decision-ready management insight.', array['reports', 'semantic_search'])
+on conflict (key) do update set
+  name = excluded.name,
+  description = excluded.description,
+  domain = excluded.domain,
+  system_prompt = excluded.system_prompt,
+  tools = excluded.tools,
+  enabled = true,
+  updated_at = now();
+
+insert into public.ai_tool_permissions (id, tool_key, role, enabled, requires_approval, metadata)
+values
+  ('AITP-DIRECTOR-BROWSE', 'controlled_browsing', 'director', true, true, '{"purpose":"Allow directors to approve external research and store verified discoveries."}'::jsonb),
+  ('AITP-MANAGER-BROWSE', 'controlled_browsing', 'manager', false, true, '{"purpose":"Managers can request external research but need director approval before memory storage."}'::jsonb),
+  ('AITP-STAFF-BROWSE', 'controlled_browsing', 'loan_officer', false, true, '{"purpose":"Staff can log research requests only."}'::jsonb),
+  ('AITP-DIRECTOR-MEMORY', 'organization_memory', 'director', true, false, '{"purpose":"Directors may approve organization-wide AI memory."}'::jsonb),
+  ('AITP-MANAGER-MEMORY', 'team_memory', 'manager', true, true, '{"purpose":"Managers may propose team memory subject to approval."}'::jsonb),
+  ('AITP-STAFF-CALL', 'ai_call_mode', 'loan_officer', true, false, '{"purpose":"Staff may use browser audio, camera, and screen capture AI sessions."}'::jsonb),
+  ('AITP-DIRECTOR-FILE', 'file_intelligence', 'director', true, false, '{"purpose":"Directors may process uploaded files into AI knowledge."}'::jsonb),
+  ('AITP-STAFF-FILE', 'file_intelligence', 'loan_officer', true, true, '{"purpose":"Staff file ingestion is logged and reviewable."}'::jsonb)
+on conflict (tool_key, role) do update set
+  enabled = excluded.enabled,
+  requires_approval = excluded.requires_approval,
+  metadata = excluded.metadata,
+  updated_at = now();
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- Migration: 20260529133000_ai_schema_cache_and_loan_duplicate_repair.sql
+-- =====================================================================
+
+-- Repair duplicate open loan-category records and refresh PostgREST's schema cache.
+-- Business rule: a member may have only one unfinished loan per category.
+
+create or replace function public.sauti_live_loan_settlement_amount(loan_row public.loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(
+      loan_row.financed_principal_amount,
+      loan_row.approved_amount,
+      loan_row.principal,
+      0
+    )
+  );
+$$;
+
+create or replace function public.sauti_carryover_loan_settlement_amount(loan_row public.member_carryover_loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(loan_row.principal, 0)
+    + case
+        when coalesce(nullif(loan_row.loan_kind, ''), 'financial') in ('fuel', 'stock', 'service') then
+          coalesce(nullif(loan_row.fee_breakdown ->> 'processingFeeAmount', '')::numeric, 0)
+        else
+          coalesce(nullif(loan_row.fee_breakdown ->> 'processingFeeAmount', '')::numeric, 0)
+          + coalesce(nullif(loan_row.fee_breakdown ->> 'insuranceFeeAmount', '')::numeric, 0)
+          + coalesce(nullif(loan_row.fee_breakdown ->> 'transactionFeeAmount', '')::numeric, 0)
+          + (coalesce(loan_row.principal, 0) * coalesce(loan_row.interest_rate_pct, 0) / 100)
+          + coalesce(loan_row.daily_savings_amount, 0) * greatest(1, coalesce(loan_row.term_days, 1))
+      end
+  );
+$$;
+
+create or replace function public.sauti_carryover_prior_penalty_amount(loan_row public.member_carryover_loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(nullif(loan_row.fee_breakdown ->> 'priorPenaltyAmount', '')::numeric, 0)
+    + coalesce(nullif(loan_row.fee_breakdown ->> 'manualPenaltyAmount', '')::numeric, 0)
+    + coalesce(nullif(loan_row.fee_breakdown ->> 'carriedForwardPenaltyAmount', '')::numeric, 0)
+  );
+$$;
+
+create or replace function public.sauti_repair_duplicate_open_loan_categories()
+returns table (
+  source_table text,
+  member_id text,
+  loan_kind text,
+  kept_loan_id text,
+  closed_loan_ids text[],
+  closed_count integer
+)
+language plpgsql
+as $$
+declare
+  group_row record;
+  loan_ids text[];
+  duplicate_ids text[];
+  latest_source text;
+  latest_id text;
+begin
+  for group_row in
+    select
+      l.member_id,
+      coalesce(nullif(l.loan_kind, ''), 'financial') as loan_kind
+    from public.loans l
+    where l.status in ('pending', 'active', 'defaulted')
+    group by l.member_id, coalesce(nullif(l.loan_kind, ''), 'financial')
+    having count(*) > 1
+  loop
+    select array_agg(l.id order by l.start_date desc nulls last, l.created_at desc nulls last, l.id desc)
+      into loan_ids
+    from public.loans l
+    where l.member_id = group_row.member_id
+      and coalesce(nullif(l.loan_kind, ''), 'financial') = group_row.loan_kind
+      and l.status in ('pending', 'active', 'defaulted');
+
+    kept_loan_id := loan_ids[1];
+    duplicate_ids := loan_ids[2:cardinality(loan_ids)];
+
+    update public.loans duplicate
+    set
+      status = 'closed',
+      paid = greatest(coalesce(duplicate.paid, 0), public.sauti_live_loan_settlement_amount(duplicate)),
+      supplier_payload = coalesce(duplicate.supplier_payload, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeLoanId', kept_loan_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids);
+
+    source_table := 'loans';
+    member_id := group_row.member_id;
+    loan_kind := group_row.loan_kind;
+    closed_loan_ids := duplicate_ids;
+    closed_count := cardinality(duplicate_ids);
+    return next;
+  end loop;
+
+  for group_row in
+    select
+      cl.member_id,
+      coalesce(nullif(cl.loan_kind, ''), 'financial') as loan_kind
+    from public.member_carryover_loans cl
+    where cl.status in ('active', 'defaulted')
+      and coalesce(cl.finished, false) = false
+    group by cl.member_id, coalesce(nullif(cl.loan_kind, ''), 'financial')
+    having count(*) > 1
+  loop
+    select array_agg(cl.id order by cl.start_date desc nulls last, cl.created_at desc nulls last, cl.id desc)
+      into loan_ids
+    from public.member_carryover_loans cl
+    where cl.member_id = group_row.member_id
+      and coalesce(nullif(cl.loan_kind, ''), 'financial') = group_row.loan_kind
+      and cl.status in ('active', 'defaulted')
+      and coalesce(cl.finished, false) = false;
+
+    kept_loan_id := loan_ids[1];
+    duplicate_ids := loan_ids[2:cardinality(loan_ids)];
+
+    update public.member_carryover_loans duplicate
+    set
+      status = 'closed',
+      finished = true,
+      closed_on = coalesce(duplicate.closed_on, duplicate.due_date, current_date),
+      paid_to_date = greatest(
+        coalesce(duplicate.paid_to_date, 0),
+        public.sauti_carryover_loan_settlement_amount(duplicate)
+      ),
+      penalty_waived_amount = greatest(
+        coalesce(duplicate.penalty_waived_amount, 0),
+        public.sauti_carryover_prior_penalty_amount(duplicate)
+      ),
+      fee_breakdown = coalesce(duplicate.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeCarryoverId', kept_loan_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      notes = concat_ws(E'\n', duplicate.notes, 'System closed older same-category cycle from lifetime net before ' || kept_loan_id),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids);
+
+    source_table := 'member_carryover_loans';
+    member_id := group_row.member_id;
+    loan_kind := group_row.loan_kind;
+    closed_loan_ids := duplicate_ids;
+    closed_count := cardinality(duplicate_ids);
+    return next;
+  end loop;
+
+  for group_row in
+    with open_cycles as (
+      select
+        'loans'::text as source,
+        l.id,
+        l.member_id,
+        coalesce(nullif(l.loan_kind, ''), 'financial') as loan_kind,
+        l.start_date,
+        l.created_at
+      from public.loans l
+      where l.status in ('pending', 'active', 'defaulted')
+      union all
+      select
+        'member_carryover_loans'::text as source,
+        cl.id,
+        cl.member_id,
+        coalesce(nullif(cl.loan_kind, ''), 'financial') as loan_kind,
+        cl.start_date,
+        cl.created_at
+      from public.member_carryover_loans cl
+      where cl.status in ('active', 'defaulted')
+        and coalesce(cl.finished, false) = false
+    ),
+    grouped as (
+      select
+        oc.member_id,
+        oc.loan_kind,
+        array_agg(oc.source order by oc.start_date desc nulls last, oc.created_at desc nulls last, oc.id desc) as sources,
+        array_agg(oc.id order by oc.start_date desc nulls last, oc.created_at desc nulls last, oc.id desc) as ids
+      from open_cycles oc
+      group by oc.member_id, oc.loan_kind
+      having count(*) > 1
+    )
+    select * from grouped
+  loop
+    latest_source := group_row.sources[1];
+    latest_id := group_row.ids[1];
+    kept_loan_id := latest_id;
+    duplicate_ids := group_row.ids[2:cardinality(group_row.ids)];
+
+    update public.loans duplicate
+    set
+      status = 'closed',
+      paid = greatest(coalesce(duplicate.paid, 0), public.sauti_live_loan_settlement_amount(duplicate)),
+      supplier_payload = coalesce(duplicate.supplier_payload, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeSource', latest_source,
+        'closedAsEarlierCycleBeforeId', latest_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids)
+      and duplicate.id <> latest_id;
+
+    update public.member_carryover_loans duplicate
+    set
+      status = 'closed',
+      finished = true,
+      closed_on = coalesce(duplicate.closed_on, duplicate.due_date, current_date),
+      paid_to_date = greatest(
+        coalesce(duplicate.paid_to_date, 0),
+        public.sauti_carryover_loan_settlement_amount(duplicate)
+      ),
+      penalty_waived_amount = greatest(
+        coalesce(duplicate.penalty_waived_amount, 0),
+        public.sauti_carryover_prior_penalty_amount(duplicate)
+      ),
+      fee_breakdown = coalesce(duplicate.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeSource', latest_source,
+        'closedAsEarlierCycleBeforeId', latest_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      notes = concat_ws(E'\n', duplicate.notes, 'System closed older same-category cycle from lifetime net before ' || latest_id),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids)
+      and duplicate.id <> latest_id;
+
+    source_table := 'loans/member_carryover_loans';
+    member_id := group_row.member_id;
+    loan_kind := group_row.loan_kind;
+    closed_loan_ids := duplicate_ids;
+    closed_count := cardinality(duplicate_ids);
+    return next;
+  end loop;
+end;
+$$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.loans'::regclass
+      and tgname = 'trg_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.loans disable trigger trg_loans_reject_duplicate_open;
+  end if;
+
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.member_carryover_loans'::regclass
+      and tgname = 'trg_member_carryover_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.member_carryover_loans disable trigger trg_member_carryover_loans_reject_duplicate_open;
+  end if;
+end $$;
+
+select * from public.sauti_repair_duplicate_open_loan_categories();
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.loans'::regclass
+      and tgname = 'trg_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.loans enable trigger trg_loans_reject_duplicate_open;
+  end if;
+
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.member_carryover_loans'::regclass
+      and tgname = 'trg_member_carryover_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.member_carryover_loans enable trigger trg_member_carryover_loans_reject_duplicate_open;
+  end if;
+end $$;
+
+drop index if exists public.loans_one_open_per_member_kind_idx;
+create unique index loans_one_open_per_member_kind_idx
+on public.loans (member_id, (coalesce(nullif(loan_kind, ''), 'financial')))
+where status in ('pending', 'active', 'defaulted');
+
+drop index if exists public.member_carryover_loans_one_open_per_member_kind_idx;
+create unique index member_carryover_loans_one_open_per_member_kind_idx
+on public.member_carryover_loans (member_id, (coalesce(nullif(loan_kind, ''), 'financial')))
+where status in ('active', 'defaulted')
+  and coalesce(finished, false) = false;
+
+create or replace function public.tg_reject_duplicate_open_live_loan()
+returns trigger
+language plpgsql
+as $$
+declare
+  normalized_kind text := coalesce(nullif(new.loan_kind, ''), 'financial');
+begin
+  if new.status not in ('pending', 'active', 'defaulted') then
+    return new;
+  end if;
+
+  if exists (
+    select 1
+    from public.loans l
+    where l.member_id = new.member_id
+      and coalesce(nullif(l.loan_kind, ''), 'financial') = normalized_kind
+      and l.status in ('pending', 'active', 'defaulted')
+      and l.id <> new.id
+  ) then
+    raise exception 'Member % already has an open % loan.', new.member_id, normalized_kind;
+  end if;
+
+  if exists (
+    select 1
+    from public.member_carryover_loans cl
+    where cl.member_id = new.member_id
+      and coalesce(nullif(cl.loan_kind, ''), 'financial') = normalized_kind
+      and cl.status in ('active', 'defaulted')
+      and coalesce(cl.finished, false) = false
+  ) then
+    raise exception 'Member % already has an open % carryover loan.', new.member_id, normalized_kind;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_loans_reject_duplicate_open on public.loans;
+create trigger trg_loans_reject_duplicate_open
+before insert or update of member_id, status, loan_kind
+on public.loans
+for each row
+execute function public.tg_reject_duplicate_open_live_loan();
+
+create or replace function public.tg_reject_duplicate_open_carryover_loan()
+returns trigger
+language plpgsql
+as $$
+declare
+  normalized_kind text := coalesce(nullif(new.loan_kind, ''), 'financial');
+begin
+  if coalesce(new.finished, false) = true or new.status not in ('active', 'defaulted') then
+    return new;
+  end if;
+
+  if exists (
+    select 1
+    from public.loans l
+    where l.member_id = new.member_id
+      and coalesce(nullif(l.loan_kind, ''), 'financial') = normalized_kind
+      and l.status in ('pending', 'active', 'defaulted')
+  ) then
+    raise exception 'Member % already has an open % loan.', new.member_id, normalized_kind;
+  end if;
+
+  if exists (
+    select 1
+    from public.member_carryover_loans cl
+    where cl.member_id = new.member_id
+      and coalesce(nullif(cl.loan_kind, ''), 'financial') = normalized_kind
+      and cl.status in ('active', 'defaulted')
+      and coalesce(cl.finished, false) = false
+      and cl.id <> new.id
+  ) then
+    raise exception 'Member % already has an open % carryover loan.', new.member_id, normalized_kind;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_member_carryover_loans_reject_duplicate_open
+on public.member_carryover_loans;
+
+create trigger trg_member_carryover_loans_reject_duplicate_open
+before insert or update of member_id, status, loan_kind, finished
+on public.member_carryover_loans
+for each row
+execute function public.tg_reject_duplicate_open_carryover_loan();
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- Migration: 20260529134500_interest_rates_by_loan_category.sql
+-- =====================================================================
+
+with current_interest as (
+  select
+    coalesce(value #>> '{standard,7}', value ->> '7', '10')::numeric as standard_rate,
+    coalesce(value #>> '{premium,14}', value ->> '14', '15')::numeric as premium_rate
+  from public.policy_settings
+  where key = 'interest_rates'
+),
+resolved_interest as (
+  select
+    coalesce((select standard_rate from current_interest), 10) as standard_rate,
+    coalesce((select premium_rate from current_interest), 15) as premium_rate
+)
+insert into public.policy_settings (key, label, value, notes)
+select
+  'interest_rates',
+  'Interest rates by loan category',
+  jsonb_build_object(
+    'standard', jsonb_build_object(
+      '7', standard_rate,
+      '14', standard_rate,
+      '30', standard_rate
+    ),
+    'premium', jsonb_build_object(
+      '14', premium_rate,
+      '30', premium_rate,
+      '60', premium_rate,
+      '90', premium_rate
+    )
+  ),
+  'Fixed standard and premium interest percentages. Interest is calculated from net disbursed amount; repayment days only affect daily repayment.'
+from resolved_interest
+on conflict (key) do update
+set
+  label = excluded.label,
+  value = excluded.value,
+  notes = excluded.notes,
+  updated_at = now();
+
+-- =====================================================================
+-- Migration: 20260529140000_service_registration_application_wallet_foundation.sql
+-- =====================================================================
+
+-- Foundation for the SBC service registration/application guide:
+-- service metadata, county schedules, applications, billing, wallets, contributions, and transport groups.
+
+alter table public.service_catalog
+  add column if not exists service_category text,
+  add column if not exists eligibility_rules jsonb not null default '{}'::jsonb,
+  add column if not exists effective_date date not null default current_date,
+  add column if not exists expiry_date date,
+  add column if not exists registration_fee numeric(14,2) not null default 0,
+  add column if not exists processing_fee numeric(14,2) not null default 0,
+  add column if not exists service_charge numeric(14,2) not null default 0,
+  add column if not exists waiver_amount numeric(14,2) not null default 0,
+  add column if not exists penalty_amount numeric(14,2) not null default 0,
+  add column if not exists custom_charges jsonb not null default '[]'::jsonb,
+  add column if not exists negotiated_discount_amount numeric(14,2) not null default 0,
+  add column if not exists normal_deductions jsonb not null default '{}'::jsonb,
+  add column if not exists grace_period_days integer not null default 0,
+  add column if not exists renewal_rules jsonb not null default '{}'::jsonb;
+
+alter table public.service_catalog
+  drop constraint if exists service_catalog_frequency_check;
+
+alter table public.service_catalog
+  add constraint service_catalog_frequency_check
+  check (
+    billing_frequency in (
+      'one_time',
+      'daily',
+      'weekly',
+      'monthly',
+      'quarterly',
+      'semi_annual',
+      'annual',
+      'yearly',
+      'seasonal',
+      'custom'
+    )
+  );
+
+alter table public.service_catalog
+  drop constraint if exists service_catalog_scope_check;
+
+alter table public.service_catalog
+  add constraint service_catalog_scope_check
+  check (scope in ('all_members','sbc_members','service_members','selected_members'));
+
+create table if not exists public.county_charge_schedules (
+  id text primary key,
+  county text not null default 'Kiambu',
+  schedule_version text not null default 'default',
+  code text not null,
+  description text not null,
+  business_type text,
+  fire_amount numeric(14,2) not null default 0,
+  sw_amount numeric(14,2) not null default 0,
+  sbp_amount numeric(14,2) not null default 0,
+  app_amount numeric(14,2) not null default 0,
+  pho_amount numeric(14,2) not null default 0,
+  pho_inspection_amount numeric(14,2) not null default 0,
+  other_amount numeric(14,2) not null default 0,
+  total_amount numeric(14,2) generated always as (
+    fire_amount + sw_amount + sbp_amount + app_amount + pho_amount + pho_inspection_amount + other_amount
+  ) stored,
+  effective_from date not null default current_date,
+  effective_to date,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (county, schedule_version, code)
+);
+
+alter table public.county_charge_schedules enable row level security;
+
+drop trigger if exists trg_county_charge_schedules_updated_at on public.county_charge_schedules;
+create trigger trg_county_charge_schedules_updated_at before update on public.county_charge_schedules
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.service_applications (
+  id text primary key,
+  member_id text not null references public.members(id) on delete cascade,
+  service_id text references public.service_catalog(id) on delete set null,
+  application_number text not null unique,
+  service_type text,
+  case_type text not null default 'normal',
+  priority text not null default 'normal',
+  problem_reason text,
+  notes text,
+  attachments jsonb not null default '[]'::jsonb,
+  county text,
+  subcounty text,
+  ward text,
+  town text,
+  schedule_id text references public.county_charge_schedules(id) on delete set null,
+  invoice_reference text,
+  invoice_number text,
+  invoice_date date,
+  invoice_amount_charged numeric(14,2) not null default 0,
+  issue_date date,
+  expiry_date date,
+  renewal_window_days integer not null default 0,
+  grace_period_days integer not null default 0,
+  confiscation_reference text,
+  inventory_sheet_number text,
+  confiscation_date date,
+  status text not null default 'submitted',
+  payment_status text not null default 'pending',
+  workflow_stage text not null default 'application_submitted',
+  calculated_charges jsonb not null default '{}'::jsonb,
+  created_by text references public.staff(id) on delete set null,
+  assigned_to text references public.staff(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint service_applications_case_type_check
+    check (case_type in ('normal','overcharged_invoice','invoice_with_penalty','confiscated_items')),
+  constraint service_applications_priority_check
+    check (priority in ('low','normal','high','urgent')),
+  constraint service_applications_status_check
+    check (status in ('submitted','verification','financial_review','waiver_approval','final_approval','billing','processing','completed','cancelled','under_review')),
+  constraint service_applications_payment_status_check
+    check (payment_status in ('pending','partially_paid','paid','waived','cancelled','under_review')),
+  constraint service_applications_workflow_stage_check
+    check (workflow_stage in ('application_submitted','verification','financial_review','waiver_approval','final_approval','billing','service_processing','completed'))
+);
+
+alter table public.service_applications enable row level security;
+
+alter table public.members
+  add column if not exists linked_previous_number text,
+  add column if not exists previous_service_member_number text,
+  add column if not exists alternative_phone text,
+  add column if not exists email text,
+  add column if not exists gender text,
+  add column if not exists date_of_birth date,
+  add column if not exists county text,
+  add column if not exists subcounty text,
+  add column if not exists ward text,
+  add column if not exists town text,
+  add column if not exists physical_address text,
+  add column if not exists next_of_kin text,
+  add column if not exists next_of_kin_contact text,
+  add column if not exists passport_photo_url text,
+  add column if not exists business_category_code text,
+  add column if not exists business_description text,
+  add column if not exists number_of_employees integer,
+  add column if not exists kra_pin text,
+  add column if not exists business_permit_number text,
+  add column if not exists locomotive_details jsonb not null default '{}'::jsonb,
+  add column if not exists operation_location jsonb not null default '{}'::jsonb,
+  add column if not exists contribution_frequency text not null default 'monthly',
+  add column if not exists service_member_upgraded_at timestamptz;
+
+alter table public.members
+  drop constraint if exists members_contribution_frequency_check;
+
+alter table public.members
+  add constraint members_contribution_frequency_check
+  check (contribution_frequency in ('one_time','daily','weekly','monthly','annual','yearly','seasonal','custom'));
+
+drop trigger if exists trg_service_applications_updated_at on public.service_applications;
+create trigger trg_service_applications_updated_at before update on public.service_applications
+  for each row execute function public.tg_set_updated_at();
+
+create index if not exists idx_service_applications_member
+on public.service_applications(member_id, created_at desc);
+
+create index if not exists idx_service_applications_status
+on public.service_applications(status, payment_status, created_at desc);
+
+create table if not exists public.service_billing_invoices (
+  id text primary key,
+  application_id text references public.service_applications(id) on delete cascade,
+  member_id text not null references public.members(id) on delete cascade,
+  service_id text references public.service_catalog(id) on delete set null,
+  invoice_number text not null unique,
+  county_charges numeric(14,2) not null default 0,
+  service_fee numeric(14,2) not null default 0,
+  processing_fee numeric(14,2) not null default 0,
+  registration_fee numeric(14,2) not null default 0,
+  custom_charges numeric(14,2) not null default 0,
+  penalty_amount numeric(14,2) not null default 0,
+  waiver_amount numeric(14,2) not null default 0,
+  discount_amount numeric(14,2) not null default 0,
+  expected_amount numeric(14,2) not null default 0,
+  invoice_amount_charged numeric(14,2) not null default 0,
+  overcharge_amount numeric(14,2) not null default 0,
+  final_amount numeric(14,2) not null default 0,
+  status text not null default 'pending',
+  due_date date,
+  issued_at timestamptz not null default now(),
+  paid_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint service_billing_invoices_status_check
+    check (status in ('pending','partially_paid','paid','waived','cancelled','under_review'))
+);
+
+alter table public.service_billing_invoices enable row level security;
+
+drop trigger if exists trg_service_billing_invoices_updated_at on public.service_billing_invoices;
+create trigger trg_service_billing_invoices_updated_at before update on public.service_billing_invoices
+  for each row execute function public.tg_set_updated_at();
+
+create index if not exists idx_service_billing_invoices_member
+on public.service_billing_invoices(member_id, issued_at desc);
+
+create table if not exists public.member_wallets (
+  id text primary key,
+  member_id text not null references public.members(id) on delete cascade,
+  wallet_type text not null default 'service_wallet',
+  balance numeric(14,2) not null default 0,
+  withdrawable_balance numeric(14,2) not null default 0,
+  reserved_balance numeric(14,2) not null default 0,
+  locked_balance numeric(14,2) not null default 0,
+  reserve_rules jsonb not null default '{}'::jsonb,
+  risk_rating text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (member_id, wallet_type),
+  constraint member_wallets_wallet_type_check
+    check (wallet_type in ('individual','collective','contribution','welfare','service_wallet')),
+  constraint member_wallets_nonnegative_check
+    check (balance >= 0 and withdrawable_balance >= 0 and reserved_balance >= 0 and locked_balance >= 0)
+);
+
+alter table public.member_wallets enable row level security;
+
+drop trigger if exists trg_member_wallets_updated_at on public.member_wallets;
+create trigger trg_member_wallets_updated_at before update on public.member_wallets
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.member_contributions (
+  id text primary key,
+  member_id text not null references public.members(id) on delete cascade,
+  contribution_type text not null,
+  purpose_pool text,
+  amount numeric(14,2) not null default 0,
+  frequency text not null default 'monthly',
+  status text not null default 'posted',
+  posted_by text references public.staff(id) on delete set null,
+  posted_at timestamptz not null default now(),
+  note text,
+  created_at timestamptz not null default now(),
+  constraint member_contributions_frequency_check
+    check (frequency in ('one_time','daily','weekly','monthly','quarterly','semi_annual','annual','yearly','seasonal','custom')),
+  constraint member_contributions_status_check
+    check (status in ('expected','posted','missed','waived','reversed'))
+);
+
+alter table public.member_contributions enable row level security;
+
+create index if not exists idx_member_contributions_member
+on public.member_contributions(member_id, posted_at desc);
+
+create table if not exists public.purpose_pools (
+  id text primary key,
+  name text not null,
+  pool_type text not null,
+  frequency text not null default 'monthly',
+  support_percentage numeric(6,2) not null default 0,
+  eligibility_rules jsonb not null default '{}'::jsonb,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint purpose_pools_frequency_check
+    check (frequency in ('one_time','daily','weekly','monthly','annual','yearly','seasonal','custom')),
+  constraint purpose_pools_support_percentage_check
+    check (support_percentage >= 0 and support_percentage <= 100)
+);
+
+alter table public.purpose_pools enable row level security;
+
+drop trigger if exists trg_purpose_pools_updated_at on public.purpose_pools;
+create trigger trg_purpose_pools_updated_at before update on public.purpose_pools
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.member_wallet_transactions (
+  id text primary key,
+  wallet_id text references public.member_wallets(id) on delete cascade,
+  member_id text not null references public.members(id) on delete cascade,
+  group_id text,
+  transaction_type text not null,
+  amount numeric(14,2) not null default 0,
+  balance_before numeric(14,2) not null default 0,
+  balance_after numeric(14,2) not null default 0,
+  purpose_pool_id text references public.purpose_pools(id) on delete set null,
+  officer_id text references public.staff(id) on delete set null,
+  reference text,
+  note text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint member_wallet_transactions_type_check
+    check (transaction_type in ('deposit','withdrawal','reserve','release_reserve','lock','unlock','service_payment','welfare_support','adjustment'))
+);
+
+alter table public.member_wallet_transactions enable row level security;
+
+create index if not exists idx_member_wallet_transactions_member
+on public.member_wallet_transactions(member_id, created_at desc);
+
+create table if not exists public.transport_groups (
+  id text primary key,
+  group_number text not null unique,
+  group_type text not null,
+  group_name text not null,
+  route_stage text,
+  sacco_association text,
+  county text,
+  subcounty text,
+  ward text,
+  town_stage text,
+  status text not null default 'active',
+  officer_assignments jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint transport_groups_status_check
+    check (status in ('active','inactive','suspended'))
+);
+
+alter table public.transport_groups enable row level security;
+
+drop trigger if exists trg_transport_groups_updated_at on public.transport_groups;
+create trigger trg_transport_groups_updated_at before update on public.transport_groups
+  for each row execute function public.tg_set_updated_at();
+
+do $$
+begin
+  alter table public.member_wallet_transactions
+    add constraint member_wallet_transactions_group_id_fkey
+    foreign key (group_id) references public.transport_groups(id) on delete set null;
+exception when duplicate_object then null;
+end $$;
+
+create table if not exists public.transport_group_members (
+  id text primary key,
+  group_id text not null references public.transport_groups(id) on delete cascade,
+  member_id text not null references public.members(id) on delete cascade,
+  role text not null default 'driver',
+  vehicle_assigned text,
+  route_assigned text,
+  stage_assigned text,
+  sacco_assigned text,
+  status text not null default 'active',
+  joined_at date not null default current_date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (group_id, member_id),
+  constraint transport_group_members_role_check
+    check (role in ('driver','conductor','crew','owner','officer')),
+  constraint transport_group_members_status_check
+    check (status in ('active','inactive','suspended'))
+);
+
+alter table public.transport_group_members enable row level security;
+
+drop trigger if exists trg_transport_group_members_updated_at on public.transport_group_members;
+create trigger trg_transport_group_members_updated_at before update on public.transport_group_members
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.collection_officer_commissions (
+  id text primary key,
+  officer_id text not null references public.staff(id) on delete cascade,
+  group_id text references public.transport_groups(id) on delete set null,
+  period_start date not null,
+  period_end date not null,
+  collection_amount numeric(14,2) not null default 0,
+  savings_growth_amount numeric(14,2) not null default 0,
+  service_conversion_count integer not null default 0,
+  target_amount numeric(14,2) not null default 0,
+  commission_amount numeric(14,2) not null default 0,
+  status text not null default 'pending',
+  calculated_at timestamptz not null default now(),
+  paid_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  constraint collection_officer_commissions_status_check
+    check (status in ('pending','approved','paid','cancelled'))
+);
+
+alter table public.collection_officer_commissions enable row level security;
+
+create table if not exists public.county_admin_locations (
+  id text primary key,
+  county text not null,
+  subcounty text not null,
+  ward text not null,
+  towns text[] not null default '{}'::text[],
+  active boolean not null default true,
+  unique (county, subcounty, ward)
+);
+
+alter table public.county_admin_locations enable row level security;
+
+create or replace view public.service_module_dashboard as
+select
+  (select count(*) from public.members where coalesce(member_tags, '{}'::text[]) @> array['service']::text[]) as total_service_members,
+  (select count(*) from public.members where coalesce(member_tags, '{}'::text[]) @> array['member']::text[]) as total_sbc_members,
+  (select count(*) from public.service_catalog where active = true) as active_services,
+  (select count(*) from public.service_applications where status not in ('completed','cancelled')) as pending_applications,
+  (select coalesce(sum(final_amount), 0) from public.service_billing_invoices where status in ('paid','partially_paid')) as revenue_collected,
+  (select coalesce(sum(balance), 0) from public.member_wallets) as wallet_balances,
+  (select coalesce(sum(waiver_amount), 0) from public.service_billing_invoices) as waivers_issued,
+  (select coalesce(sum(penalty_amount), 0) from public.service_billing_invoices) as penalties_charged;
+
+create or replace view public.service_member_reports as
+select
+  m.id,
+  coalesce(m.service_member_number, m.id) as service_member_number,
+  m.name,
+  m.phone,
+  m.member_category::text as member_category,
+  m.member_tags,
+  m.linked_previous_number,
+  m.previous_service_member_number,
+  coalesce(sum(w.balance), 0) as wallet_balance,
+  count(distinct sa.id) as service_application_count,
+  count(distinct mc.id) as contribution_count
+from public.members m
+left join public.member_wallets w on w.member_id = m.id
+left join public.service_applications sa on sa.member_id = m.id
+left join public.member_contributions mc on mc.member_id = m.id
+group by m.id;
+
+insert into public.county_charge_schedules (
+  id, county, schedule_version, code, description, business_type,
+  fire_amount, sw_amount, sbp_amount, app_amount, pho_amount, pho_inspection_amount
+)
+values
+  ('KIA-SBP-001', 'Kiambu', 'default', 'SBP-001', 'General small business permit', 'permanent', 0, 0, 0, 0, 0, 0),
+  ('KIA-TRN-001', 'Kiambu', 'default', 'TRN-001', 'Transport route/stage service', 'locomotive', 0, 0, 0, 0, 0, 0)
+on conflict (county, schedule_version, code) do nothing;
+
+insert into public.county_admin_locations (id, county, subcounty, ward, towns)
+values
+  ('KIA-THIKA-TOWNSHIP', 'Kiambu', 'Thika Town', 'Township', array['Thika CBD','Makongeni','Section 9']),
+  ('KIA-RUIRU-BIASHARA', 'Kiambu', 'Ruiru', 'Biashara', array['Ruiru Town','Kwa Kairu','Kimbo']),
+  ('KIA-KIAMBU-TOWNSHIP', 'Kiambu', 'Kiambu', 'Township', array['Kiambu Town','Ndumberi','Riabai']),
+  ('KIA-KIKUYU-TOWNSHIP', 'Kiambu', 'Kikuyu', 'Kikuyu Township', array['Kikuyu Town','Ondiri','Gitaru']),
+  ('KIA-LIMURU-TOWNSHIP', 'Kiambu', 'Limuru', 'Limuru Central', array['Limuru Town','Ngecha','Tigoni'])
+on conflict (county, subcounty, ward) do nothing;
+
+insert into public.purpose_pools (id, name, pool_type, frequency, support_percentage, eligibility_rules)
+values
+  ('POOL-LICENSE-RENEWAL', 'License Renewal Pool', 'license_renewal', 'monthly', 0, '{"minimumConsistencyDays": 30}'::jsonb),
+  ('POOL-PSV-COMPLIANCE', 'PSV Compliance Pool', 'psv_compliance', 'daily', 0, '{"transportOnly": true}'::jsonb),
+  ('POOL-INSURANCE', 'Insurance Pool', 'insurance', 'monthly', 0, '{"minimumContributionCount": 3}'::jsonb)
+on conflict (id) do nothing;
+
+comment on table public.service_applications is
+  'Service requests, county permit cases, overcharge checks, confiscated item cases, and workflow stages.';
+
+comment on table public.service_billing_invoices is
+  'Generated service invoices and county/SBC charge calculations.';
+
+comment on table public.member_wallets is
+  'Service and transport wallet balances, including withdrawable, reserved, and locked balances.';
+
+comment on table public.member_wallet_transactions is
+  'Auditable wallet ledger with officer, timestamp, before balance, and after balance for transport/service funds.';
+
+comment on view public.service_module_dashboard is
+  'Summary metrics for the SBC service registration, application, wallet, and county integration module.';
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
 -- End of full.sql
 -- =====================================================================

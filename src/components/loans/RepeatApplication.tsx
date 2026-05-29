@@ -420,15 +420,14 @@ export function RepeatApplication({
                 onChange={(v) => setRepaymentDays(Math.max(1, Number(v) || 0))}
               />
               <Select
-                label="Repayment Term Band"
+                label="Quick Term Picker"
                 value={String(calc.termDays)}
                 onChange={(v) => setRepaymentDays(Number(v))}
                 options={repaymentOptions.map((d) => String(d))}
               />
               <div className="md:col-span-2 lg:col-span-3 text-xs text-muted-foreground">
-                Manual {repaymentDays} day entry uses the {calc.termDays}-day {loanType} interest
-                band at {calc.ratePct}%. Enter an override above to use a custom percentage for this
-                loan.
+                Interest is {calc.ratePct}% of net disbursed for this {loanType} loan. Changing
+                days only changes the daily repayment.
               </div>
               <Select
                 label="Daily Compliance Contribution Plan"

@@ -74,7 +74,7 @@ export type PolicySettingRow = {
 
 export const POLICY_SETTING_LABELS: Record<PolicySettingKey, string> = {
   percentages: "Percentages and fixed values",
-  interest_rates: "Interest rates by term",
+  interest_rates: "Interest rates by loan category",
   waterfall_rules: "Payment waterfall rules",
   transaction_fee_bands: "Transaction fee bands",
 };
@@ -113,14 +113,14 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   interestRates: {
     standard: {
       7: 10,
-      14: 15,
-      30: 20,
+      14: 10,
+      30: 10,
     },
     premium: {
       14: 15,
-      30: 20,
-      60: 25,
-      90: 25,
+      30: 15,
+      60: 15,
+      90: 15,
     },
   },
   waterfallRules: [
@@ -348,24 +348,26 @@ function sanitizeInterestRates(value: unknown): PolicyInterestRates {
 
   const standardCandidate = isPlainObject(value.standard) ? value.standard : value;
   const premiumCandidate = isPlainObject(value.premium) ? value.premium : value;
+  const standardRate = toFiniteNumber(
+    standardCandidate["7"],
+    DEFAULT_POLICY_SETTINGS.interestRates.standard[7],
+  );
+  const premiumRate = toFiniteNumber(
+    premiumCandidate["14"],
+    DEFAULT_POLICY_SETTINGS.interestRates.premium[14],
+  );
 
   return {
     standard: {
-      7: toFiniteNumber(standardCandidate["7"], DEFAULT_POLICY_SETTINGS.interestRates.standard[7]),
-      14: toFiniteNumber(
-        standardCandidate["14"],
-        DEFAULT_POLICY_SETTINGS.interestRates.standard[14],
-      ),
-      30: toFiniteNumber(
-        standardCandidate["30"],
-        DEFAULT_POLICY_SETTINGS.interestRates.standard[30],
-      ),
+      7: standardRate,
+      14: standardRate,
+      30: standardRate,
     },
     premium: {
-      14: toFiniteNumber(premiumCandidate["14"], DEFAULT_POLICY_SETTINGS.interestRates.premium[14]),
-      30: toFiniteNumber(premiumCandidate["30"], DEFAULT_POLICY_SETTINGS.interestRates.premium[30]),
-      60: toFiniteNumber(premiumCandidate["60"], DEFAULT_POLICY_SETTINGS.interestRates.premium[60]),
-      90: toFiniteNumber(premiumCandidate["90"], DEFAULT_POLICY_SETTINGS.interestRates.premium[90]),
+      14: premiumRate,
+      30: premiumRate,
+      60: premiumRate,
+      90: premiumRate,
     },
   };
 }
@@ -591,17 +593,9 @@ export function policyInterestRateForTerm(
   loanType: PolicyLoanType,
   settings: PolicySettings = activePolicySettings,
 ) {
-  const bucket = normalizePolicyTermDays(termDays, loanType);
+  void termDays;
   if (loanType === "standard") {
-    const standardBucket =
-      bucket === 7 || bucket === 14 || bucket === 30
-        ? bucket
-        : STANDARD_POLICY_TERMS[STANDARD_POLICY_TERMS.length - 1];
-    return settings.interestRates.standard[standardBucket];
+    return settings.interestRates.standard[7];
   }
-  const premiumBucket =
-    bucket === 14 || bucket === 30 || bucket === 60 || bucket === 90
-      ? bucket
-      : PREMIUM_POLICY_TERMS[PREMIUM_POLICY_TERMS.length - 1];
-  return settings.interestRates.premium[premiumBucket];
+  return settings.interestRates.premium[14];
 }

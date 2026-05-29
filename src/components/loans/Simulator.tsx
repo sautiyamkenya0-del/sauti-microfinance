@@ -293,8 +293,8 @@ export function Simulator() {
               </Field>
             </div>
             <p className="text-xs text-muted-foreground">
-              Manual {requestedDays} day entry uses the {pricing.termDays}-day {loanType} interest
-              band at {pricing.ratePct}% for pricing.
+              Interest is {pricing.ratePct}% of net disbursed for this {loanType} loan. Changing
+              days only changes the daily repayment.
             </p>
 
             <Field label="Daily Compliance Contribution Inclusive">
@@ -376,7 +376,7 @@ export function Simulator() {
               <Tile
                 label="Interest"
                 value={fmtKES(pricing.interest)}
-                sub={`Computed on ${pricing.termDays} days at ${pricing.ratePct}%`}
+                sub={`${pricing.ratePct}% of net disbursed`}
               />
               <Tile
                 label="Total Repayment"

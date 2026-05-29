@@ -152,9 +152,15 @@ function mapPerformanceTargetRow(row: DbRow) {
 }
 
 function mapServiceCatalogRow(row: DbRow) {
+  const customCharges = Array.isArray(row.custom_charges)
+    ? row.custom_charges
+    : row.custom_charges && typeof row.custom_charges === "object"
+      ? [row.custom_charges]
+      : [];
   return {
     id: readText(row.id),
     name: readText(row.name),
+    serviceCategory: optionalText(row.service_category),
     description: optionalText(row.description),
     price: readNumber(row.price),
     billingFrequency: readText(row.billing_frequency) || "monthly",
@@ -167,8 +173,91 @@ function mapServiceCatalogRow(row: DbRow) {
       row.fee_overrides && typeof row.fee_overrides === "object"
         ? (row.fee_overrides as Record<string, unknown>)
         : {},
+    effectiveDate: optionalText(row.effective_date),
+    expiryDate: optionalText(row.expiry_date),
+    registrationFee: readNumber(row.registration_fee),
+    processingFee: readNumber(row.processing_fee),
+    serviceCharge: readNumber(row.service_charge),
+    waiverAmount: readNumber(row.waiver_amount),
+    penaltyAmount: readNumber(row.penalty_amount),
+    customCharges,
+    negotiatedDiscountAmount: readNumber(row.negotiated_discount_amount),
+    normalDeductions:
+      row.normal_deductions && typeof row.normal_deductions === "object"
+        ? (row.normal_deductions as Record<string, unknown>)
+        : {},
+    gracePeriodDays: Math.max(0, Math.floor(readNumber(row.grace_period_days))),
+    renewalRules:
+      row.renewal_rules && typeof row.renewal_rules === "object"
+        ? (row.renewal_rules as Record<string, unknown>)
+        : {},
     active: row.active !== false,
     createdBy: optionalText(row.created_by),
+    createdAt: optionalText(row.created_at),
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+function mapCountyChargeScheduleRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    county: readText(row.county) || "Kiambu",
+    scheduleVersion: readText(row.schedule_version) || "default",
+    code: readText(row.code),
+    description: readText(row.description),
+    businessType: optionalText(row.business_type),
+    fireAmount: readNumber(row.fire_amount),
+    swAmount: readNumber(row.sw_amount),
+    sbpAmount: readNumber(row.sbp_amount),
+    appAmount: readNumber(row.app_amount),
+    phoAmount: readNumber(row.pho_amount),
+    phoInspectionAmount: readNumber(row.pho_inspection_amount),
+    otherAmount: readNumber(row.other_amount),
+    totalAmount: readNumber(row.total_amount),
+    effectiveFrom: optionalText(row.effective_from),
+    effectiveTo: optionalText(row.effective_to),
+    active: row.active !== false,
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+function mapServiceApplicationRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    applicationNumber: readText(row.application_number),
+    memberId: readText(row.member_id),
+    serviceId: optionalText(row.service_id),
+    serviceType: optionalText(row.service_type),
+    caseType: readText(row.case_type) || "normal",
+    priority: readText(row.priority) || "normal",
+    problemReason: optionalText(row.problem_reason),
+    notes: optionalText(row.notes),
+    attachments: Array.isArray(row.attachments) ? row.attachments : [],
+    county: optionalText(row.county),
+    subcounty: optionalText(row.subcounty),
+    ward: optionalText(row.ward),
+    town: optionalText(row.town),
+    scheduleId: optionalText(row.schedule_id),
+    invoiceReference: optionalText(row.invoice_reference),
+    invoiceNumber: optionalText(row.invoice_number),
+    invoiceDate: optionalText(row.invoice_date),
+    invoiceAmountCharged: readNumber(row.invoice_amount_charged),
+    issueDate: optionalText(row.issue_date),
+    expiryDate: optionalText(row.expiry_date),
+    renewalWindowDays: Math.max(0, Math.floor(readNumber(row.renewal_window_days))),
+    gracePeriodDays: Math.max(0, Math.floor(readNumber(row.grace_period_days))),
+    confiscationReference: optionalText(row.confiscation_reference),
+    inventorySheetNumber: optionalText(row.inventory_sheet_number),
+    confiscationDate: optionalText(row.confiscation_date),
+    status: readText(row.status) || "submitted",
+    paymentStatus: readText(row.payment_status) || "pending",
+    workflowStage: readText(row.workflow_stage) || "application_submitted",
+    calculatedCharges:
+      row.calculated_charges && typeof row.calculated_charges === "object"
+        ? (row.calculated_charges as Record<string, unknown>)
+        : {},
+    createdBy: optionalText(row.created_by),
+    assignedTo: optionalText(row.assigned_to),
     createdAt: optionalText(row.created_at),
     updatedAt: optionalText(row.updated_at),
   };
@@ -473,6 +562,37 @@ export const listServiceCatalog = createServerFn({ method: "GET" }).handler(asyn
     throw new Error(error.message);
   }
   return (data ?? []).map((row) => mapServiceCatalogRow(row as DbRow));
+});
+
+export const listCountyChargeSchedules = createServerFn({ method: "GET" }).handler(async () => {
+  await requireStaffActor();
+  const supabaseAdmin = requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("county_charge_schedules")
+    .select("*")
+    .order("active", { ascending: false })
+    .order("county", { ascending: true })
+    .order("code", { ascending: true });
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => mapCountyChargeScheduleRow(row as DbRow));
+});
+
+export const listServiceApplications = createServerFn({ method: "GET" }).handler(async () => {
+  await requireStaffActor();
+  const supabaseAdmin = requireSupabaseAdmin();
+  const { data, error } = await supabaseAdmin
+    .from("service_applications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => mapServiceApplicationRow(row as DbRow));
 });
 
 export const listMemberServiceSubscriptions = createServerFn({ method: "GET" }).handler(
