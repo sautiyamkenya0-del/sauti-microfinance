@@ -1,4 +1,5 @@
 import { Section, Badge } from "@/components/ui-bits";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { useStore, fmtKES, scoreLoan } from "@/lib/store";
 import { Input, Select, Snap, inputCss } from "./atoms";
 import { useEffect, useMemo, useState } from "react";
@@ -207,8 +208,17 @@ export function AppraisalForm({
             <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
               Member
             </span>
+            <div className="mt-1">
+              <MemberSearchSelect
+                members={members}
+                value={memberId}
+                onChange={setMemberId}
+                emptyLabel="Select member"
+                describeMember={(m) => `${m.id} - ${m.name} - ${m.phone ?? ""}`}
+              />
+            </div>
             <select
-              className="loan-input mt-1"
+              className="hidden"
               value={memberId}
               onChange={(e) => setMemberId(e.target.value)}
             >

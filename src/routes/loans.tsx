@@ -134,7 +134,6 @@ function LoansHub() {
   const [selectedLoanKind, setSelectedLoanKind] = useState<LoanKind>("financial");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [appraisalLoanId, setAppraisalLoanId] = useState("");
-  const [memberQuery, setMemberQuery] = useState("");
   const [historyMemberId, setHistoryMemberId] = useState<string | null>(null);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
 
@@ -210,16 +209,6 @@ function LoansHub() {
   const selectedOpenLoanBlocker = selectedMemberId
     ? openLoanBlocker(selectedMemberId, selectedLoanKind)
     : "";
-  const filteredMemberAccounts = useMemo(() => {
-    const query = memberQuery.trim().toLowerCase();
-    if (!query) return eligibleMemberAccounts;
-    return eligibleMemberAccounts.filter(
-      (member) =>
-        member.name.toLowerCase().includes(query) ||
-        member.id.toLowerCase().includes(query) ||
-        member.phone.toLowerCase().includes(query),
-    );
-  }, [eligibleMemberAccounts, memberQuery]);
 
   useEffect(() => {
     if (
@@ -326,40 +315,26 @@ function LoansHub() {
                 </label>
                 <label className="block">
                   <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    Search Member
-                  </span>
-                  <input
-                    value={memberQuery}
-                    onChange={(event) => setMemberQuery(event.target.value)}
-                    placeholder="Search name, member no., or phone"
-                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     Select Member
                   </span>
-                  <select
-                    value={selectedMemberId}
-                    onChange={(event) => setSelectedMemberId(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                  >
-                    <option value="">- New / Walk-in (capture full details) -</option>
-                    {filteredMemberAccounts.map((member) => (
-                      <option
-                        key={member.id}
-                        value={member.id}
-                        disabled={!!openLoanBlocker(member.id, selectedLoanKind)}
-                      >
-                        {member.id} - {member.name} - {member.phone} - ({totalLoanCount(member.id)}{" "}
-                        loans)
-                        {openLoanBlocker(member.id, selectedLoanKind)
-                          ? ` - blocked: ${openLoanBlocker(member.id, selectedLoanKind)}`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {filteredMemberAccounts.length === 0 ? (
+                  <div className="mt-1">
+                    <MemberSearchSelect
+                      members={eligibleMemberAccounts}
+                      value={selectedMemberId}
+                      onChange={setSelectedMemberId}
+                      emptyLabel="- New / Walk-in (capture full details) -"
+                      describeMember={(member) => {
+                        const blocker = openLoanBlocker(member.id, selectedLoanKind);
+                        return `${member.id} - ${member.name} - ${member.phone ?? ""} - (${totalLoanCount(
+                          member.id,
+                        )} loans)${blocker ? ` - blocked: ${blocker}` : ""}`;
+                      }}
+                      getOptionDisabled={(member) =>
+                        !!openLoanBlocker(member.id, selectedLoanKind)
+                      }
+                    />
+                  </div>
+                  {eligibleMemberAccounts.length === 0 ? (
                     <span className="mt-1 block text-[11px] text-destructive">
                       No eligible members found for this loan type.
                     </span>

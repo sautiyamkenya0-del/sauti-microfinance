@@ -4,6 +4,8 @@ import { useServerFn } from "@tanstack/react-start";
 import {
   appendSupportMessageRecord,
   createSupportThreadRecord,
+  deleteSupportMessageRecord,
+  updateSupportMessageRecord,
   updateSupportThreadRecord,
 } from "@/lib/app-data.functions";
 import { listSupportThreads } from "@/lib/runtime-data.functions";
@@ -72,6 +74,8 @@ export function useSupportInboxActions() {
   const loadSupportThreads = useServerFn(listSupportThreads);
   const createThreadRecord = useServerFn(createSupportThreadRecord);
   const appendMessageRecord = useServerFn(appendSupportMessageRecord);
+  const updateMessageRecord = useServerFn(updateSupportMessageRecord);
+  const deleteMessageRecord = useServerFn(deleteSupportMessageRecord);
   const updateThreadRecord = useServerFn(updateSupportThreadRecord);
   const [rows, setRows] = useState<SupportThread[]>([]);
 
@@ -141,5 +145,21 @@ export function useSupportInboxActions() {
     [refresh, updateThreadRecord],
   );
 
-  return { rows, createThread, appendMessage, setThreadStatus, refresh };
+  const updateMessage = useCallback(
+    async (messageId: string, text: string) => {
+      await updateMessageRecord({ data: { id: messageId, text } });
+      await refresh();
+    },
+    [refresh, updateMessageRecord],
+  );
+
+  const deleteMessage = useCallback(
+    async (messageId: string) => {
+      await deleteMessageRecord({ data: { id: messageId } });
+      await refresh();
+    },
+    [deleteMessageRecord, refresh],
+  );
+
+  return { rows, createThread, appendMessage, setThreadStatus, updateMessage, deleteMessage, refresh };
 }

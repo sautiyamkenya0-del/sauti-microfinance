@@ -2,6 +2,7 @@ import { useMemo, useState, type ChangeEvent } from "react";
 import { Camera, ExternalLink, MapPinned, Navigation, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import { Button } from "@/components/ui/button";
 import {
@@ -338,8 +339,19 @@ export function FieldVisits() {
               <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
                 Member
               </span>
+              <div className="mt-1">
+                <MemberSearchSelect
+                  members={members}
+                  value={memberId}
+                  onChange={setMemberId}
+                  emptyLabel="Select member"
+                  describeMember={(member) =>
+                    `${member.id} - ${member.name} - ${member.phone ?? ""}`
+                  }
+                />
+              </div>
               <select
-                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                className="hidden"
                 value={memberId}
                 onChange={(event) => setMemberId(event.target.value)}
               >

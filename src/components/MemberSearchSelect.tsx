@@ -18,6 +18,7 @@ export function MemberSearchSelect({
   placeholder = "Search name, member no., or phone",
   emptyLabel = "Select member",
   describeMember,
+  getOptionDisabled,
 }: {
   members: MemberOption[];
   value: string;
@@ -25,6 +26,7 @@ export function MemberSearchSelect({
   placeholder?: string;
   emptyLabel?: string;
   describeMember?: (member: MemberOption) => string;
+  getOptionDisabled?: (member: MemberOption) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const filteredMembers = useMemo(() => {
@@ -52,7 +54,7 @@ export function MemberSearchSelect({
       >
         <option value="">{emptyLabel}</option>
         {filteredMembers.map((member) => (
-          <option key={member.id} value={member.id}>
+          <option key={member.id} value={member.id} disabled={getOptionDisabled?.(member)}>
             {describeMember
               ? describeMember(member)
               : `${member.id} - ${member.name} (${memberCategoryLabel(

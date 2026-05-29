@@ -1,6 +1,21 @@
-import { isInvestorCategory, resolveMemberCategory } from "@/lib/membership";
+import {
+  isInvestorCategory,
+  normalizeMemberTags,
+  resolveMemberCategory,
+  type MemberCategory,
+} from "@/lib/membership";
 
-export type FeeScope = "all" | "new_only" | "selected_members" | "loan_holders" | "investors";
+export type FeeScope =
+  | "all"
+  | "new_only"
+  | "selected_members"
+  | "loan_holders"
+  | "investors"
+  | "financial_members"
+  | "locomotive_members"
+  | "stock_members"
+  | "service_members"
+  | "supplier_members";
 export type FeePermanence = "permanent" | "semi";
 
 export type FeePolicy = {
@@ -40,11 +55,21 @@ export const DEFAULT_FEE_POLICIES: FeePolicy[] = [
   },
   {
     key: "sticker",
-    label: "Shop Sticker",
+    label: "Sticker Fee",
     amount: 500,
     permanence: "permanent",
     effectiveFrom: "2026-01-01",
-    scope: "all",
+    scope: "financial_members",
+    custom: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    key: "fuel_buffer",
+    label: "Fuel Buffer",
+    amount: 1000,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "locomotive_members",
     custom: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
@@ -70,6 +95,16 @@ export function scopeLabel(s: FeeScope): string {
       return "Members with active loans";
     case "investors":
       return "Investors only";
+    case "financial_members":
+      return "Financial members only";
+    case "locomotive_members":
+      return "Locomotive members only";
+    case "stock_members":
+      return "Stock members only";
+    case "service_members":
+      return "Service members only";
+    case "supplier_members":
+      return "Supplier members only";
   }
 }
 
@@ -107,8 +142,15 @@ export type FeeTargetMember = {
   id: string;
   joinedAt?: string;
   category?: string;
+  memberTags?: string[];
   isInvestor?: boolean;
 };
+
+function hasCategory(member: FeeTargetMember, category: MemberCategory) {
+  return normalizeMemberTags(member.memberTags, member.category, member.isInvestor).includes(
+    category,
+  );
+}
 
 export function feePolicyAppliesToMember(
   policy: FeePolicy,
@@ -132,6 +174,11 @@ export function feePolicyAppliesToMember(
   if (policy.scope === "loan_holders") return options?.hasActiveLoan === true;
 
   const category = resolveMemberCategory(member.category, member.isInvestor);
+  if (policy.scope === "financial_members") return hasCategory(member, "member");
+  if (policy.scope === "locomotive_members") return hasCategory(member, "locomotive");
+  if (policy.scope === "stock_members") return hasCategory(member, "stock");
+  if (policy.scope === "service_members") return hasCategory(member, "service");
+  if (policy.scope === "supplier_members") return hasCategory(member, "supplier");
   return isInvestorCategory(category);
 }
 

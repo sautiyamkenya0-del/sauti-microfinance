@@ -111,7 +111,10 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           const body = await request.json();
           const msisdn = formatDarajaPhone(body.phone);
           const amount = Math.max(1, Math.floor(Number(body.amount) || 0));
-          const accountRef = String(body.accountRef ?? "SBC").slice(0, 12);
+          const accountRef = String(body.accountRef ?? "SBC")
+            .trim()
+            .toUpperCase()
+            .slice(0, 12);
           const description = String(body.description ?? "Sauti payment").slice(0, 100);
 
           if (!/^254[17]\d{8}$/.test(msisdn)) {
@@ -135,7 +138,10 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
           if (session.authMode === "member") {
             const member = await requireMemberActor();
             const expectedAccountRef = formatMembershipNumber(member.id);
-            if (accountRef.toUpperCase() !== expectedAccountRef) {
+            if (
+              accountRef !== expectedAccountRef &&
+              !accountRef.startsWith(`${expectedAccountRef}-`)
+            ) {
               return Response.json(
                 {
                   ok: false,

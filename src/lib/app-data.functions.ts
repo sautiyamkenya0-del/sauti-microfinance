@@ -47,6 +47,7 @@ import {
 } from "@/lib/legacy-finance";
 import { DEFAULT_DEFAULTED_AMOUNT_STOP_CAP, buildLoanDailyLedger } from "@/lib/loan-calculations";
 import { requestMpesaWithdrawalPayout } from "@/lib/mpesa-payouts.server";
+import { timeInKenya, todayInKenya } from "@/lib/time";
 import { isValidLocalKenyanPhone, toComparableKenyanPhone, toLocalKenyanPhone } from "@/lib/utils";
 
 function splitLegacyLastName(lastName: string | null | undefined) {
@@ -288,6 +289,7 @@ function isMissingRelationError(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
   return (
     error?.code === "42P01" ||
+    error?.code === "PGRST204" ||
     error?.code === "PGRST205" ||
     message.includes("does not exist") ||
     message.includes("schema cache") ||
@@ -6202,7 +6204,7 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
       staffId: String(data?.staffId ?? "").trim(),
       status: data?.status ?? "present",
       when: data?.when ?? "in",
-      date: data?.date?.trim() || new Date().toISOString().slice(0, 10),
+      date: data?.date?.trim() || todayInKenya(),
     }),
   )
   .handler(async ({ data }) => {
@@ -6217,7 +6219,7 @@ export const upsertAttendanceRecord = createServerFn({ method: "POST" })
       throw new Error("You can only update your own attendance unless granted attendance rights.");
     }
     const supabaseAdmin = await requireSupabaseAdmin();
-    const time = new Date().toTimeString().slice(0, 5);
+    const time = timeInKenya();
     const id = `A-${data.date}-${data.staffId}`;
 
     const { data: existing, error: existingError } = await supabaseAdmin
@@ -7998,6 +8000,70 @@ export const createStaffMessageRecord = createServerFn({ method: "POST" })
     return { id };
   });
 
+export const updateStaffMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string; content: string }) => ({
+    id: String(data?.id ?? "").trim(),
+    content: String(data?.content ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.id) throw new Error("Message id is required.");
+    if (!data.content) throw new Error("Message cannot be empty.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: message, error: readError } = await runtimeDb
+      .from("staff_messages")
+      .select("sender_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+    if (!message) throw new Error("Message not found.");
+    if (message.sender_id !== actor.id && actor.role !== "director" && actor.role !== "manager") {
+      throw new Error("You can only edit your own messages.");
+    }
+    const { error } = await runtimeDb
+      .from("staff_messages")
+      .update({ content: data.content, updated_at: new Date().toISOString() })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff_message.updated",
+      targetType: "staff_message",
+      targetId: data.id,
+      summary: `${actor.name} edited staff message ${data.id}`,
+      details: { contentPreview: clipAuditText(data.content, 160) },
+    });
+    return { ok: true };
+  });
+
+export const deleteStaffMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.id) throw new Error("Message id is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: message, error: readError } = await runtimeDb
+      .from("staff_messages")
+      .select("sender_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+    if (!message) throw new Error("Message not found.");
+    if (message.sender_id !== actor.id && actor.role !== "director" && actor.role !== "manager") {
+      throw new Error("You can only delete your own messages.");
+    }
+    const { error } = await runtimeDb.from("staff_messages").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    await auditAction({
+      actor,
+      action: "staff_message.deleted",
+      targetType: "staff_message",
+      targetId: data.id,
+      summary: `${actor.name} deleted staff message ${data.id}`,
+    });
+    return { ok: true };
+  });
+
 export const createStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
@@ -8974,7 +9040,17 @@ export const upsertFeePolicyRecord = createServerFn({ method: "POST" })
       permanence: "permanent" | "semi";
       durationDays?: number;
       effectiveFrom: string;
-      scope: "all" | "new_only" | "selected_members" | "loan_holders" | "investors";
+      scope:
+        | "all"
+        | "new_only"
+        | "selected_members"
+        | "loan_holders"
+        | "investors"
+        | "financial_members"
+        | "locomotive_members"
+        | "stock_members"
+        | "service_members"
+        | "supplier_members";
       selectedMemberIds?: string[];
       custom?: boolean;
       notes?: string;
@@ -12947,6 +13023,84 @@ export const appendSupportMessageRecord = createServerFn({ method: "POST" })
       });
     }
     return { id };
+  });
+
+export const updateSupportMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string; text: string }) => ({
+    id: String(data?.id ?? "").trim(),
+    text: String(data?.text ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.id) throw new Error("Support message id is required.");
+    if (!data.text) throw new Error("Message cannot be empty.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: message, error: readError } = await runtimeDb
+      .from("support_messages")
+      .select("sender_kind, sender_id, thread_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+    if (!message) throw new Error("Message not found.");
+    if (
+      message.sender_kind !== "staff" ||
+      (message.sender_id !== actor.id && actor.role !== "director" && actor.role !== "manager")
+    ) {
+      throw new Error("You can only edit staff replies you are allowed to manage.");
+    }
+    const { error } = await runtimeDb
+      .from("support_messages")
+      .update({ text: data.text })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    await runtimeDb
+      .from("support_threads")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", message.thread_id);
+    await auditAction({
+      actor,
+      action: "support_message.updated",
+      targetType: "support_message",
+      targetId: data.id,
+      summary: `${actor.name} edited support message ${data.id}`,
+      details: { textPreview: clipAuditText(data.text, 180) },
+    });
+    return { ok: true };
+  });
+
+export const deleteSupportMessageRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.id) throw new Error("Support message id is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: message, error: readError } = await runtimeDb
+      .from("support_messages")
+      .select("sender_kind, sender_id, thread_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+    if (!message) throw new Error("Message not found.");
+    if (
+      message.sender_kind !== "staff" ||
+      (message.sender_id !== actor.id && actor.role !== "director" && actor.role !== "manager")
+    ) {
+      throw new Error("You can only delete staff replies you are allowed to manage.");
+    }
+    const { error } = await runtimeDb.from("support_messages").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    await runtimeDb
+      .from("support_threads")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", message.thread_id);
+    await auditAction({
+      actor,
+      action: "support_message.deleted",
+      targetType: "support_message",
+      targetId: data.id,
+      summary: `${actor.name} deleted support message ${data.id}`,
+    });
+    return { ok: true };
   });
 
 export const updateSupportThreadRecord = createServerFn({ method: "POST" })

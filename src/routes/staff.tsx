@@ -12,9 +12,13 @@ import {
   MessageSquare,
   StickyNote,
   Inbox,
+  Copy,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useReadIds } from "@/lib/read-state";
+import { formatKenyaTime } from "@/lib/time";
 
 export const Route = createFileRoute("/staff")({
   head: () => ({ meta: [{ title: "Staff Chat — Sauti Microfinance" }] }),
@@ -35,7 +39,8 @@ type ChatMsg = {
 type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
 
 function StaffChat() {
-  const { staff, currentUser, staffMessages, addStaffMessage } = useStore();
+  const { staff, currentUser, staffMessages, addStaffMessage, updateStaffMessage, deleteStaffMessage } =
+    useStore();
   const others = staff.filter((s) => s.id !== currentUser.id);
   const [activeId, setActiveId] = useState(others[0]?.id ?? "");
   const allMsgs: ChatMsg[] = staffMessages.map((message) => ({
@@ -125,6 +130,28 @@ function StaffChat() {
     if (!t) return;
     await pushMsg({ text: t });
     setText("");
+  }
+
+  async function copyMessage(message: ChatMsg) {
+    const value = message.text ?? message.att?.name ?? "";
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    toast.success("Copied");
+  }
+
+  async function editMessage(message: ChatMsg) {
+    if (message.from !== currentUser.id || !message.text) return;
+    const next = window.prompt("Edit message", message.text);
+    if (next == null || next.trim() === message.text.trim()) return;
+    await updateStaffMessage(message.id, next);
+    toast.success("Message updated");
+  }
+
+  async function removeMessage(message: ChatMsg) {
+    if (message.from !== currentUser.id) return;
+    if (!window.confirm("Delete this message?")) return;
+    await deleteStaffMessage(message.id);
+    toast.success("Message deleted");
   }
 
   function attach(file: File) {
@@ -240,13 +267,43 @@ function StaffChat() {
                   key={m.id}
                   className={`flex ${m.from === currentUser.id ? "justify-end" : "justify-start"}`}
                 >
-                  <div
-                    className={`max-w-[75%] px-3 py-2 rounded-lg text-sm ${m.from === currentUser.id ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                  >
-                    {m.text && <div className="whitespace-pre-wrap">{m.text}</div>}
+                    <div
+                      className={`max-w-[75%] px-3 py-2 rounded-lg text-sm ${m.from === currentUser.id ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                    >
+                      <div className="mb-1 flex justify-end gap-1 opacity-70">
+                        <button
+                          type="button"
+                          onClick={() => void copyMessage(m)}
+                          className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                          title="Copy"
+                        >
+                          <Copy className="h-3 w-3" />
+                        </button>
+                        {m.from === currentUser.id && m.text ? (
+                          <button
+                            type="button"
+                            onClick={() => void editMessage(m)}
+                            className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                            title="Edit"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                        {m.from === currentUser.id ? (
+                          <button
+                            type="button"
+                            onClick={() => void removeMessage(m)}
+                            className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                      </div>
+                      {m.text && <div className="whitespace-pre-wrap">{m.text}</div>}
                     {m.att && <Attachment att={m.att} />}
                     <div className="text-[10px] opacity-60 mt-1">
-                      {new Date(m.at).toLocaleTimeString()}
+                      {formatKenyaTime(m.at)}
                     </div>
                   </div>
                 </div>

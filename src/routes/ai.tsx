@@ -5,6 +5,8 @@ import {
   Camera,
   Folder,
   Image,
+  Menu,
+  MessageSquare,
   Mic,
   MonitorUp,
   Pin,
@@ -16,11 +18,11 @@ import {
   Upload,
   Video,
   Volume2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { AppHeader } from "@/components/AppHeader";
 import {
   createSautiAiCallSessionRecord,
   createSautiAiFileRecord,
@@ -79,11 +81,31 @@ const INITIAL_MESSAGE: Msg = {
 };
 
 const DEFAULT_AGENTS: AiAgent[] = [
-  { key: "operations", name: "Operations AI", description: "Approvals, suppliers, fuel, stock, services, and field workflows." },
-  { key: "finance", name: "Finance Assistant", description: "Loans, savings, shares, dockets, penalties, and reconciliations." },
-  { key: "customer_support", name: "Customer Support Assistant", description: "Member support, policies, memos, and plain-language replies." },
-  { key: "analytics", name: "Analytics AI", description: "Trends, anomalies, reports, and management insight." },
-  { key: "developer", name: "Developer Assistant", description: "Product architecture, bugs, guardrails, and implementation planning." },
+  {
+    key: "operations",
+    name: "Operations AI",
+    description: "Approvals, suppliers, fuel, stock, services, and field workflows.",
+  },
+  {
+    key: "finance",
+    name: "Finance Assistant",
+    description: "Loans, savings, shares, dockets, penalties, and reconciliations.",
+  },
+  {
+    key: "customer_support",
+    name: "Customer Support Assistant",
+    description: "Member support, policies, memos, and plain-language replies.",
+  },
+  {
+    key: "analytics",
+    name: "Analytics AI",
+    description: "Trends, anomalies, reports, and management insight.",
+  },
+  {
+    key: "developer",
+    name: "Developer Assistant",
+    description: "Product architecture, bugs, guardrails, and implementation planning.",
+  },
 ];
 
 function AiPage() {
@@ -111,12 +133,16 @@ function AiPage() {
   const [search, setSearch] = useState("");
   const [folder, setFolder] = useState("");
   const [memoryScope, setMemoryScope] = useState<"private" | "team" | "organization">("private");
-  const [memoryType, setMemoryType] = useState<"user" | "operational" | "contextual" | "governance">("operational");
+  const [memoryType, setMemoryType] = useState<
+    "user" | "operational" | "contextual" | "governance"
+  >("operational");
   const [callId, setCallId] = useState<string | null>(null);
   const [callMode, setCallMode] = useState<CallMode>("audio");
   const [observationTitle, setObservationTitle] = useState("");
   const [researchSummary, setResearchSummary] = useState("");
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   const selectedAgent = agents.find((agent) => agent.key === agentKey) ?? agents[0];
@@ -134,7 +160,8 @@ function AiPage() {
       });
   }, [folder, search, sessions]);
   const folders = useMemo(
-    () => Array.from(new Set(sessions.map((session) => session.folder).filter(Boolean))) as string[],
+    () =>
+      Array.from(new Set(sessions.map((session) => session.folder).filter(Boolean))) as string[],
     [sessions],
   );
 
@@ -197,7 +224,8 @@ function AiPage() {
               mode: String(conversation.mode ?? "chat") as ChatMode,
             }))
           : [];
-        if (dbSessions.length > 0) setSessions((current) => saveAiSessions(mergeSessions(dbSessions, current)));
+        if (dbSessions.length > 0)
+          setSessions((current) => saveAiSessions(mergeSessions(dbSessions, current)));
         setWorkspaceLoaded(true);
       })
       .catch((error) => {
@@ -243,6 +271,7 @@ function AiPage() {
     setMode(session.mode ?? "chat");
     setAttachments([]);
     setFileNotes([]);
+    setHistoryOpen(false);
   }
 
   function updateCurrentSession(patch: Partial<ChatSession>) {
@@ -261,7 +290,11 @@ function AiPage() {
       if (file.type.startsWith("image/")) {
         nextImages.push(await readImage(file));
       } else {
-        const note: FileNote = { name: file.name, type: file.type || "application/octet-stream", size: file.size };
+        const note: FileNote = {
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+        };
         if (file.type.startsWith("text/") || file.name.endsWith(".csv")) {
           note.text = (await file.text()).slice(0, 12000);
         }
@@ -272,7 +305,10 @@ function AiPage() {
     if (nextFiles.length) {
       setFileNotes((current) => [...current, ...nextFiles].slice(0, 10));
       setMode("file");
-      setInput((current) => current || "Summarize these file notes and suggest how Sauti should tag or act on them.");
+      setInput(
+        (current) =>
+          current || "Summarize these file notes and suggest how Sauti should tag or act on them.",
+      );
       await Promise.all(
         nextFiles.map((file) =>
           saveAiFile({
@@ -492,8 +528,15 @@ function AiPage() {
             attachments:
               message.role === "user"
                 ? [
-                    ...outgoingAttachments.map((attachment) => ({ name: attachment.name, type: "image" })),
-                    ...fileNotes.map((file) => ({ name: file.name, type: file.type, size: file.size })),
+                    ...outgoingAttachments.map((attachment) => ({
+                      name: attachment.name,
+                      type: "image",
+                    })),
+                    ...fileNotes.map((file) => ({
+                      name: file.name,
+                      type: file.type,
+                      size: file.size,
+                    })),
                   ]
                 : [],
           })),
@@ -544,7 +587,7 @@ function AiPage() {
         tx: store.transactions.length,
         staff: store.staff.length,
       },
-      members: store.members.map((m) => ({ id: m.id, name: m.name, phone: m.phone })).slice(0, 80),
+      members: store.members.map((m) => ({ id: m.id, name: m.name, phone: m.phone })).slice(0, 25),
       loans: store.loans
         .map((l) => ({
           id: l.id,
@@ -553,10 +596,10 @@ function AiPage() {
           status: l.status,
           loanKind: l.loanKind,
         }))
-        .slice(0, 100),
-      penalties: (store.penalties ?? []).slice(0, 40),
-      recentTx: store.transactions.slice(-50),
-      sautiMemories: memories.slice(0, 40),
+        .slice(0, 35),
+      penalties: (store.penalties ?? []).slice(0, 20),
+      recentTx: store.transactions.slice(-25),
+      sautiMemories: memories.slice(0, 20),
       fileNotes: fileNotes.map((file) => ({ name: file.name, type: file.type, size: file.size })),
     };
 
@@ -565,7 +608,16 @@ function AiPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...msgs, { role: "user", content: `${promptText}${fileContext}` }],
+          messages: [...msgs, { role: "user", content: `${promptText}${fileContext}` }]
+            .filter((message) => message.role === "user" || message.role === "assistant")
+            .slice(-8)
+            .map((message) => ({
+              role: message.role,
+              content:
+                message.content.length > 1800
+                  ? `${message.content.slice(0, 1800)}...`
+                  : message.content,
+            })),
           snapshot,
           role: store.currentUser.role,
           mode: "staff",
@@ -577,7 +629,9 @@ function AiPage() {
         const err = await r.json().catch(() => ({ error: "Failed" }));
         setMsgs((previous) =>
           previous.map((message, index) =>
-            index === previous.length - 1 ? { ...message, content: `Notice: ${err.error}` } : message,
+            index === previous.length - 1
+              ? { ...message, content: `Notice: ${err.error}` }
+              : message,
           ),
         );
         return;
@@ -620,7 +674,10 @@ function AiPage() {
           }
         }
       }
-      const finalMessages = [...next.slice(0, -1), { role: "assistant" as const, content: plainAiText(acc) }];
+      const finalMessages = [
+        ...next.slice(0, -1),
+        { role: "assistant" as const, content: plainAiText(acc) },
+      ];
       setMsgs(finalMessages);
       await persistConversation(finalMessages, outgoingAttachments);
     } catch (error: unknown) {
@@ -636,297 +693,264 @@ function AiPage() {
     }
   }
 
+  const activeSession = sessions.find((session) => session.id === sessionId);
+  const toolButtons = [
+    {
+      label: "Upload files",
+      icon: Upload,
+      kind: "file" as const,
+    },
+    {
+      label: "Camera",
+      icon: Camera,
+      onClick: () => void captureCameraFrame().catch((error) => toast.error(error.message)),
+    },
+    {
+      label: "Screen",
+      icon: MonitorUp,
+      onClick: () => void captureScreenFrame().catch((error) => toast.error(error.message)),
+    },
+    { label: "Talk", icon: Mic, onClick: dictate },
+    { label: "Read aloud", icon: Volume2, onClick: speakLastAnswer },
+  ];
+
   return (
-    <>
-      <AppHeader
-        title="Sauti AI"
-        subtitle="Operational intelligence, memory, multimodal assistance, controlled research, and specialist agents for Sauti."
-      />
-      <main className="mx-auto flex w-full max-w-7xl flex-1 gap-4 p-5 lg:p-7">
-        <aside className="hidden w-80 shrink-0 flex-col gap-3 lg:flex">
-          <div className="rounded-lg border border-border bg-card p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Search className="h-4 w-4" />
-              Chat history
-            </div>
+    <main className="relative flex min-h-[calc(100vh-4rem)] flex-1 overflow-hidden bg-[linear-gradient(90deg,color-mix(in_oklch,var(--border)_42%,transparent)_1px,transparent_1px),linear-gradient(180deg,color-mix(in_oklch,var(--border)_42%,transparent)_1px,transparent_1px)] bg-[size:44px_44px]">
+      <div className="absolute inset-x-0 top-0 h-32 border-b border-primary/10 bg-primary/5" />
+      {historyOpen ? (
+        <button
+          type="button"
+          aria-label="Close chat history"
+          onClick={() => setHistoryOpen(false)}
+          className="fixed inset-0 z-30 bg-background/60 backdrop-blur-sm lg:hidden"
+        />
+      ) : null}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-[min(86vw,22rem)] border-r border-border bg-card/95 p-4 shadow-xl backdrop-blur-xl transition-transform lg:static lg:z-auto lg:flex lg:w-80 lg:translate-x-0 lg:flex-col lg:shadow-none ${
+          historyOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs uppercase tracking-[0.24em] text-primary">Sauti AI</div>
+            <div className="mt-1 text-lg font-semibold">Command Memory</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(false)}
+            className="grid h-9 w-9 place-items-center rounded-md border border-border hover:bg-muted lg:hidden"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search previous chats"
-              className="mb-2 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-border bg-muted/70 py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
             />
-            <select
-              value={folder}
-              onChange={(event) => setFolder(event.target.value)}
-              className="mb-3 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+          </div>
+          <select
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            className="w-full rounded-lg border border-border bg-muted/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            <option value="">All folders</option>
+            {folders.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
+          {filteredSessions.map((session) => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => openChat(session.id)}
+              className={`w-full rounded-lg border px-3 py-3 text-left text-xs transition ${
+                session.id === sessionId
+                  ? "border-primary/50 bg-primary/10 shadow-[0_0_0_1px_color-mix(in_oklch,var(--primary)_18%,transparent)]"
+                  : "border-border bg-background/70 hover:bg-muted"
+              }`}
             >
-              <option value="">All folders</option>
-              {folders.map((item) => (
-                <option key={item} value={item}>
-                  {item}
+              <div className="flex items-center justify-between gap-2">
+                <span className="line-clamp-1 font-medium">{session.title}</span>
+                {session.pinned ? <Pin className="h-3.5 w-3.5 text-primary" /> : null}
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                {session.folder || session.agentKey || "General"} /{" "}
+                {new Date(session.updatedAt).toLocaleDateString()}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+            <Brain className="h-4 w-4 text-primary" />
+            Memory Stream
+          </div>
+          <div className="max-h-48 space-y-2 overflow-y-auto text-xs">
+            {memories.slice(0, 8).map((memory) => (
+              <div key={memory.id} className="rounded-md border border-border bg-background/80 p-2">
+                <div className="font-medium">
+                  {memory.memoryType ?? "memory"} / {memory.scope ?? "private"}
+                </div>
+                <div className="mt-1 line-clamp-3 text-muted-foreground">{memory.text}</div>
+              </div>
+            ))}
+            {memories.length === 0 ? (
+              <div className="text-muted-foreground">No saved memory yet.</div>
+            ) : null}
+          </div>
+        </div>
+      </aside>
+
+      <section className="relative z-10 flex min-w-0 flex-1 flex-col px-3 py-3 sm:px-5 lg:px-7">
+        <header className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/85 px-3 py-2 shadow-sm backdrop-blur-xl">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border hover:bg-muted lg:hidden"
+              aria-label="Open chat history"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary shadow-[inset_0_0_24px_color-mix(in_oklch,var(--primary)_18%,transparent)]">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="truncate text-lg font-semibold sm:text-xl">Sauti AI</h1>
+                <span className="hidden rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-primary sm:inline-flex">
+                  {workspaceLoaded ? "Live" : "Sync"}
+                </span>
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {selectedAgent?.name ?? "Operations AI"} /{" "}
+                {selectedAgent?.description ?? "Specialist workspace"}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => startNewChat("chat")}
+              className="grid h-10 w-10 place-items-center rounded-lg border border-border hover:bg-muted"
+              title="New chat"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateCurrentSession({ pinned: !sessions.find((s) => s.id === sessionId)?.pinned })
+              }
+              className={`grid h-10 w-10 place-items-center rounded-lg border ${
+                activeSession?.pinned
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border hover:bg-muted"
+              }`}
+              title="Pin chat"
+            >
+              <Pin className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+          <div className="flex min-w-0 gap-2 overflow-x-auto rounded-xl border border-border bg-card/80 p-2 backdrop-blur-xl">
+            <select
+              value={agentKey}
+              onChange={(event) => setAgentKey(event.target.value)}
+              className="min-w-44 rounded-lg border border-border bg-muted/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              {agents.map((agent) => (
+                <option key={agent.key} value={agent.key}>
+                  {agent.name}
                 </option>
               ))}
             </select>
-            <div className="max-h-[44vh] space-y-2 overflow-y-auto">
-              {filteredSessions.map((session) => (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => openChat(session.id)}
-                  className={`w-full rounded-md border px-3 py-2 text-left text-xs hover:bg-muted ${
-                    session.id === sessionId ? "border-primary bg-primary/5" : "border-border"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="line-clamp-1 font-medium">{session.title}</span>
-                    {session.pinned ? <Pin className="h-3.5 w-3.5" /> : null}
-                  </div>
-                  <div className="mt-1 text-muted-foreground">
-                    {session.folder || session.agentKey || "General"} -{" "}
-                    {new Date(session.updatedAt).toLocaleDateString()}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border bg-card p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Brain className="h-4 w-4" />
-              Memory timeline
-            </div>
-            <div className="max-h-56 space-y-2 overflow-y-auto text-xs">
-              {memories.slice(0, 12).map((memory) => (
-                <div key={memory.id} className="rounded-md bg-muted p-2">
-                  <div className="font-medium">{memory.memoryType ?? "memory"} / {memory.scope ?? "private"}</div>
-                  <div className="mt-1 text-muted-foreground">{memory.text}</div>
-                </div>
-              ))}
-              {memories.length === 0 ? (
-                <div className="text-muted-foreground">
-                  Save memories from the composer to build Sauti's controlled long-term context.
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </aside>
-
-        <section className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="grid gap-3 rounded-lg border border-border bg-card p-3 xl:grid-cols-[1.4fr_1fr]">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => startNewChat("chat")}
-                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-              >
-                <Plus className="h-4 w-4" />
-                New chat
-              </button>
-              <select
-                value={agentKey}
-                onChange={(event) => setAgentKey(event.target.value)}
-                className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              >
-                {agents.map((agent) => (
-                  <option key={agent.key} value={agent.key}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={mode}
-                onChange={(event) => setMode(event.target.value as ChatMode)}
-                className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              >
-                <option value="chat">Chat</option>
-                <option value="call">AI call</option>
-                <option value="file">Files</option>
-                <option value="research">Research</option>
-                <option value="agent">Agent work</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => updateCurrentSession({ pinned: !sessions.find((s) => s.id === sessionId)?.pinned })}
-                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-              >
-                <Pin className="h-4 w-4" />
-                Pin
-              </button>
-              <input
-                value={sessions.find((session) => session.id === sessionId)?.folder ?? ""}
-                onChange={(event) => updateCurrentSession({ folder: event.target.value })}
-                placeholder="Folder"
-                className="w-32 rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="text-xs text-muted-foreground">
-              <div className="font-semibold text-foreground">{selectedAgent?.name ?? "Sauti AI"}</div>
-              {selectedAgent?.description ?? "Specialist agent context will be applied to this session."}
-              <div className="mt-1">{workspaceLoaded ? "Persistent workspace loaded." : "Loading memory workspace..."}</div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">
-              <Upload className="h-4 w-4" />
-              Upload files
-              <input
-                type="file"
-                accept="image/*,.pdf,.txt,.csv,.json,video/*"
-                multiple
-                className="hidden"
-                onChange={(event) => void addFiles(event.target.files)}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void captureCameraFrame().catch((error) => toast.error(error.message))}
-              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as ChatMode)}
+              className="min-w-32 rounded-lg border border-border bg-muted/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
             >
-              <Camera className="h-4 w-4" />
-              Camera
-            </button>
-            <button
-              type="button"
-              onClick={() => void captureScreenFrame().catch((error) => toast.error(error.message))}
-              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-            >
-              <MonitorUp className="h-4 w-4" />
-              Screen
-            </button>
-            <button
-              type="button"
-              onClick={dictate}
-              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-            >
-              <Mic className="h-4 w-4" />
-              Talk
-            </button>
-            <button
-              type="button"
-              onClick={speakLastAnswer}
-              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-            >
-              <Volume2 className="h-4 w-4" />
-              Read aloud
-            </button>
-            {callId ? (
-              <button
-                type="button"
-                onClick={() => void endAiCall()}
-                className="inline-flex items-center gap-2 rounded-md bg-destructive px-3 py-2 text-sm text-destructive-foreground hover:bg-destructive/90"
-              >
-                <Radio className="h-4 w-4" />
-                End {callMode} call
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void startAiCall("audio")}
-                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                >
-                  <Radio className="h-4 w-4" />
-                  Audio call
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void startAiCall("video")}
-                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                >
-                  <Video className="h-4 w-4" />
-                  Video call
-                </button>
-              </>
-            )}
-          </div>
-
-          <div className="min-h-[52vh] flex-1 space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-4">
-            {msgs.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`flex gap-3 ${message.role === "user" ? "justify-end" : ""}`}>
-                {message.role === "assistant" ? (
-                  <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
-                    <Sparkles className="h-4 w-4" />
-                  </div>
-                ) : null}
-                <div
-                  className={`max-w-[84%] whitespace-pre-wrap rounded-lg px-4 py-2.5 text-sm ${
-                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
-                  }`}
-                >
-                  {message.content || <span className="opacity-50">...</span>}
-                </div>
-              </div>
-            ))}
-            <div ref={endRef} />
-          </div>
-
-          {(attachments.length > 0 || fileNotes.length > 0) && (
-            <div className="flex flex-wrap gap-2 text-xs">
-              {attachments.map((attachment) => (
-                <span key={attachment.name} className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1">
-                  <Image className="h-3.5 w-3.5" />
-                  {attachment.name}
-                </span>
-              ))}
-              {fileNotes.map((file) => (
-                <span key={file.name} className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1">
-                  <Folder className="h-3.5 w-3.5" />
-                  {file.name}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="grid gap-2 rounded-lg border border-border bg-card p-3 lg:grid-cols-[1fr_auto]">
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Ask Sauti AI to analyze a member, inspect a screen capture, remember a policy, draft an action, or log a research request."
-              className="min-h-24 resize-none rounded-md border border-border bg-muted px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+              <option value="chat">Chat</option>
+              <option value="call">AI call</option>
+              <option value="file">Files</option>
+              <option value="research">Research</option>
+              <option value="agent">Agent work</option>
+            </select>
+            <input
+              value={activeSession?.folder ?? ""}
+              onChange={(event) => updateCurrentSession({ folder: event.target.value })}
+              placeholder="Folder"
+              className="min-w-32 rounded-lg border border-border bg-muted/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
             />
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void send()}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
-              >
-                <Send className="h-4 w-4" />
-                {busy ? "Thinking" : "Send"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void rememberCurrentInput()}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-muted"
-              >
-                <Brain className="h-4 w-4" />
-                Remember
-              </button>
-              <button
-                type="button"
-                onClick={() => void recordObservation()}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-muted"
-              >
-                <Sparkles className="h-4 w-4" />
-                Observe
-              </button>
-              <button
-                type="button"
-                onClick={() => void logResearch()}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-muted"
-              >
-                <Search className="h-4 w-4" />
-                Log research
-              </button>
-            </div>
           </div>
 
-          <div className="grid gap-2 text-xs md:grid-cols-4">
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-card/80 p-2 backdrop-blur-xl">
+            {toolButtons.map((tool) => {
+              const Icon = tool.icon;
+              if (tool.kind === "file") {
+                return (
+                  <label
+                    key={tool.label}
+                    className="grid h-10 w-10 cursor-pointer place-items-center rounded-lg border border-border hover:bg-muted"
+                    title={tool.label}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <input
+                      type="file"
+                      accept="image/*,.pdf,.txt,.csv,.json,video/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => void addFiles(event.target.files)}
+                    />
+                  </label>
+                );
+              }
+              return (
+                <button
+                  key={tool.label}
+                  type="button"
+                  onClick={tool.onClick}
+                  className="grid h-10 w-10 place-items-center rounded-lg border border-border hover:bg-muted"
+                  title={tool.label}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setToolsOpen((current) => !current)}
+              className="grid h-10 w-10 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
+              title="More controls"
+            >
+              <MessageSquare className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {toolsOpen ? (
+          <div className="mt-3 grid gap-2 rounded-xl border border-border bg-card/90 p-3 text-xs shadow-sm backdrop-blur-xl md:grid-cols-4">
             <select
               value={memoryType}
               onChange={(event) => setMemoryType(event.target.value as typeof memoryType)}
-              className="rounded-md border border-border bg-card px-3 py-2"
+              className="rounded-lg border border-border bg-muted/70 px-3 py-2 outline-none focus:ring-2 focus:ring-primary/30"
             >
               <option value="user">User memory</option>
               <option value="operational">Operational memory</option>
@@ -936,7 +960,7 @@ function AiPage() {
             <select
               value={memoryScope}
               onChange={(event) => setMemoryScope(event.target.value as typeof memoryScope)}
-              className="rounded-md border border-border bg-card px-3 py-2"
+              className="rounded-lg border border-border bg-muted/70 px-3 py-2 outline-none focus:ring-2 focus:ring-primary/30"
             >
               <option value="private">Private</option>
               <option value="team">Team</option>
@@ -946,18 +970,127 @@ function AiPage() {
               value={observationTitle}
               onChange={(event) => setObservationTitle(event.target.value)}
               placeholder="Observation title"
-              className="rounded-md border border-border bg-card px-3 py-2"
+              className="rounded-lg border border-border bg-muted/70 px-3 py-2 outline-none focus:ring-2 focus:ring-primary/30"
             />
             <input
               value={researchSummary}
               onChange={(event) => setResearchSummary(event.target.value)}
               placeholder="Research note"
-              className="rounded-md border border-border bg-card px-3 py-2"
+              className="rounded-lg border border-border bg-muted/70 px-3 py-2 outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-        </section>
-      </main>
-    </>
+        ) : null}
+
+        <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-border bg-card/70 p-4 shadow-sm backdrop-blur-xl">
+          <div className="mx-auto flex max-w-4xl flex-col gap-4">
+            {msgs.map((message, index) => (
+              <div
+                key={`${message.role}-${index}`}
+                className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                {message.role === "assistant" ? (
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                ) : null}
+                <div
+                  className={`max-w-[88%] whitespace-pre-wrap rounded-xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                    message.role === "user"
+                      ? "border-primary/30 bg-primary text-primary-foreground"
+                      : "border-border bg-background/90"
+                  }`}
+                >
+                  {message.content || <span className="opacity-50">...</span>}
+                </div>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
+        </div>
+
+        {(attachments.length > 0 || fileNotes.length > 0) && (
+          <div className="mx-auto mt-3 flex w-full max-w-4xl flex-wrap gap-2 text-xs">
+            {attachments.map((attachment) => (
+              <span
+                key={attachment.name}
+                className="inline-flex items-center gap-1 rounded-lg border border-primary/25 bg-primary/10 px-2 py-1 text-primary"
+              >
+                <Image className="h-3.5 w-3.5" />
+                {attachment.name}
+              </span>
+            ))}
+            {fileNotes.map((file) => (
+              <span
+                key={file.name}
+                className="inline-flex items-center gap-1 rounded-lg border border-accent/40 bg-accent/20 px-2 py-1"
+              >
+                <Folder className="h-3.5 w-3.5" />
+                {file.name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="mx-auto mt-3 w-full max-w-4xl rounded-2xl border border-primary/20 bg-card/95 p-2 shadow-[0_12px_40px_color-mix(in_oklch,var(--primary)_12%,transparent)] backdrop-blur-xl">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Ask Sauti AI..."
+              className="min-h-12 flex-1 resize-none rounded-xl border border-transparent bg-muted/70 px-4 py-3 text-sm outline-none focus:border-primary/30 focus:bg-background"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void rememberCurrentInput()}
+                className="hidden h-12 w-12 place-items-center rounded-xl border border-border hover:bg-muted sm:grid"
+                title="Remember"
+              >
+                <Brain className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void recordObservation()}
+                className="hidden h-12 w-12 place-items-center rounded-xl border border-border hover:bg-muted sm:grid"
+                title="Observe"
+              >
+                <Sparkles className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void logResearch()}
+                className="hidden h-12 w-12 place-items-center rounded-xl border border-border hover:bg-muted sm:grid"
+                title="Log research"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void send()}
+                className="grid h-12 w-12 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_0_24px_color-mix(in_oklch,var(--primary)_30%,transparent)] hover:bg-primary/90 disabled:opacity-60"
+                title="Send"
+              >
+                <Send className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 px-2 text-[11px] text-muted-foreground">
+            <span>
+              {busy ? "Sauti AI is thinking" : callId ? `${callMode} call active` : "Ready"}
+            </span>
+            <button
+              type="button"
+              onClick={() => (callId ? void endAiCall() : void startAiCall("audio"))}
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 hover:bg-muted"
+            >
+              <Radio className="h-3.5 w-3.5" />
+              {callId ? "End call" : "Call"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -968,7 +1101,23 @@ function newSessionId() {
 function readImage(file: File) {
   return new Promise<ImageAttachment>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result) });
+    reader.onload = () => {
+      const raw = String(reader.result);
+      const image = document.createElement("img");
+      image.onload = () => {
+        const maxSide = 1024;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d")?.drawImage(image, 0, 0, width, height);
+        resolve({ name: file.name, dataUrl: canvas.toDataURL("image/jpeg", 0.72) });
+      };
+      image.onerror = () => resolve({ name: file.name, dataUrl: raw });
+      image.src = raw;
+    };
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });

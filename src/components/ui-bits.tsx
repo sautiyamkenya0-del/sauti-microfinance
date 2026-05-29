@@ -16,7 +16,7 @@ export function DirectorOnly({
 
 export function RestrictedNotice({ label = "Restricted to Directors" }: { label?: string }) {
   return (
-    <div className="bg-card border border-dashed border-border rounded-xl p-5 flex items-center gap-3 text-sm text-muted-foreground">
+    <div className="bg-card border border-dashed border-border rounded-lg p-5 flex items-center gap-3 text-sm text-muted-foreground">
       <Lock className="h-4 w-4 text-accent" />
       <span>
         <span className="font-medium text-foreground">{label}.</span> Aggregate company figures are
@@ -47,7 +47,7 @@ export function StatCard({
     destructive: "bg-destructive/10 text-destructive",
   }[tone];
   return (
-    <div className="bg-card border border-border rounded-xl p-5 hover:shadow-sm transition">
+    <div className="bg-card border border-border rounded-lg p-4 hover:shadow-sm transition">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
@@ -72,8 +72,8 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="bg-card border border-border rounded-xl">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+    <section className="bg-card border border-border rounded-lg">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-border">
         <h2 className="font-display text-base font-semibold">{title}</h2>
         {action}
       </div>

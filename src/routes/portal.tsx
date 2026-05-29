@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   Bell,
   Wallet,
+  Send,
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
@@ -73,6 +74,12 @@ type ClientAlert = {
   title: string;
   detail: string;
   tab?: Tab;
+};
+
+type PortalPaymentIntent = {
+  purpose: "savings" | "loan" | "shares" | "investment" | "fees";
+  amount?: number;
+  loanId?: string;
 };
 
 function noticeKind(value?: string): ClientAlert["kind"] {
@@ -134,6 +141,9 @@ function Portal() {
   const [loanRequestAmount, setLoanRequestAmount] = useState("");
   const [loanRequestDays, setLoanRequestDays] = useState("30");
   const [loanRequestPurpose, setLoanRequestPurpose] = useState("");
+  const [loanRequestKind, setLoanRequestKind] = useState<
+    "financial" | "fuel" | "stock" | "service"
+  >("financial");
 
   const member = members.find((m) => m.id === memberId);
   const investorProfile = member
@@ -181,6 +191,7 @@ function Portal() {
   const [pinOld, setPinOld] = useState("");
   const [pinNew, setPinNew] = useState("");
   const [payMember, setPayMember] = useState<Member | null>(null);
+  const [paymentIntent, setPaymentIntent] = useState<PortalPaymentIntent | undefined>();
   const [clientNotices, setClientNotices] = useState<ClientNotice[]>([]);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [clientReadIds, setClientReadIds] = useState<Set<string>>(new Set());
@@ -436,6 +447,39 @@ function Portal() {
     setNotificationPermission(permission);
   }, []);
 
+  function openPayment(intent: PortalPaymentIntent) {
+    if (!member) return;
+    setPaymentIntent(intent);
+    setPayMember(member);
+  }
+
+  async function submitLoanApplication() {
+    if (!member) return;
+    const amount = Math.max(0, Number(loanRequestAmount) || 0);
+    const days = Math.max(1, Number(loanRequestDays) || 30);
+    if (amount <= 0) return toast.error("Enter the loan amount.");
+    if (!loanRequestPurpose.trim()) return toast.error("Enter the loan purpose.");
+    await submit({
+      kind: "other",
+      title: `${loanRequestKind === "financial" ? "Loan" : loanRequestKind} application`,
+      detail: `${member.name} requests ${fmtKES(amount)} for ${days} days. Purpose: ${loanRequestPurpose}.`,
+      requestedBy: member.id,
+      requestedByName: member.name,
+      payload: {
+        requestType: "loan",
+        loanKind: loanRequestKind,
+        amount,
+        termDays: days,
+        purpose: loanRequestPurpose,
+      },
+    });
+    toast.success("Loan application submitted for staff review");
+    setLoanRequestAmount("");
+    setLoanRequestDays("30");
+    setLoanRequestPurpose("");
+    setLoanRequestKind("financial");
+  }
+
   useEffect(() => {
     if (isStaffView || typeof window === "undefined") return;
     const incoming = unreadClientAlerts.filter(
@@ -567,7 +611,7 @@ function Portal() {
           </div>
           {member && !isStaffView && (
             <button
-              onClick={() => setPayMember(member)}
+              onClick={() => openPayment({ purpose: "savings" })}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
             >
               <Smartphone className="h-4 w-4" /> Pay via M-Pesa
@@ -629,6 +673,68 @@ function Portal() {
 
             {tab === "overview" && (
               <>
+                {!isStaffView && (
+                  <Section title="Make a payment">
+                    <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                      <PaymentAction
+                        icon={PiggyBank}
+                        title="Daily contribution"
+                        detail="Prompt your registered phone for savings."
+                        amount="Any amount"
+                        onClick={() => openPayment({ purpose: "savings", amount: 100 })}
+                      />
+                      <PaymentAction
+                        icon={Banknote}
+                        title="Loan repayment"
+                        detail={
+                          myLoans.some(
+                            (loan) => loan.status === "active" || loan.status === "defaulted",
+                          )
+                            ? "Pay a specific active loan."
+                            : "No active loan right now."
+                        }
+                        amount="Balance or custom"
+                        disabled={
+                          !myLoans.some(
+                            (loan) => loan.status === "active" || loan.status === "defaulted",
+                          )
+                        }
+                        onClick={() => {
+                          const loan = myLoans.find(
+                            (item) => item.status === "active" || item.status === "defaulted",
+                          );
+                          openPayment({ purpose: "loan", loanId: loan?.id });
+                        }}
+                      />
+                      <PaymentAction
+                        icon={Coins}
+                        title="Buy shares"
+                        detail="Send a share purchase prompt."
+                        amount="Custom"
+                        onClick={() => openPayment({ purpose: "shares" })}
+                      />
+                      <PaymentAction
+                        icon={Receipt}
+                        title="Clear fees"
+                        detail="Prompt for outstanding mandatory fees."
+                        amount={fmtKES(
+                          visibleFees
+                            .filter((fee) =>
+                              fee.key === "membership"
+                                ? !member.fees.membership
+                                : fee.key === "card"
+                                  ? !member.fees.card
+                                  : fee.key === "sticker"
+                                    ? memberNeedsSticker(member) && !member.fees.sticker
+                                    : false,
+                            )
+                            .reduce((sum, fee) => sum + fee.amount, 0),
+                        )}
+                        onClick={() => openPayment({ purpose: "fees" })}
+                      />
+                    </div>
+                  </Section>
+                )}
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <StatCard
                     label="Daily compliance contribution"
@@ -854,8 +960,20 @@ function Portal() {
                   </div>
                 </Section>
                 {!isStaffView && canRequestLoans && (
-                  <Section title="Request loan">
+                  <Section title="Apply for a loan">
                     <div className="grid gap-3 p-5 sm:grid-cols-3">
+                      <select
+                        value={loanRequestKind}
+                        onChange={(event) =>
+                          setLoanRequestKind(event.target.value as typeof loanRequestKind)
+                        }
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      >
+                        <option value="financial">Financial loan</option>
+                        <option value="fuel">Fuel loan</option>
+                        <option value="stock">Stock loan</option>
+                        <option value="service">Service loan</option>
+                      </select>
                       <input
                         value={loanRequestAmount}
                         onChange={(event) => setLoanRequestAmount(event.target.value)}
@@ -876,32 +994,14 @@ function Portal() {
                         value={loanRequestPurpose}
                         onChange={(event) => setLoanRequestPurpose(event.target.value)}
                         placeholder="Purpose"
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-3"
                       />
                       <div className="sm:col-span-3">
                         <button
-                          onClick={async () => {
-                            await submit({
-                              kind: "other",
-                              title: "Loan request",
-                              detail: `${member.name} requests ${loanRequestAmount || "0"} KES for ${loanRequestDays || "0"} days. Purpose: ${loanRequestPurpose || "not stated"}.`,
-                              requestedBy: member.id,
-                              requestedByName: member.name,
-                              payload: {
-                                requestType: "loan",
-                                amount: loanRequestAmount,
-                                termDays: loanRequestDays,
-                                purpose: loanRequestPurpose,
-                              },
-                            });
-                            toast.success("Loan request submitted for staff review");
-                            setLoanRequestAmount("");
-                            setLoanRequestDays("30");
-                            setLoanRequestPurpose("");
-                          }}
+                          onClick={() => void submitLoanApplication()}
                           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                         >
-                          Submit loan request
+                          Submit loan application
                         </button>
                       </div>
                     </div>
@@ -1300,6 +1400,22 @@ function Portal() {
                             )}
                           </div>
                         )}
+                        {!isStaffView && (l.status === "active" || l.status === "defaulted") ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openPayment({
+                                purpose: "loan",
+                                loanId: l.id,
+                                amount: Math.max(0, balance),
+                              })
+                            }
+                            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                          >
+                            <Smartphone className="h-3.5 w-3.5" />
+                            Prompt repayment
+                          </button>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -1359,6 +1475,57 @@ function Portal() {
                       </div>
                     );
                   })}
+                  {!isStaffView && canRequestLoans ? (
+                    <div className="rounded-md border border-primary/25 bg-primary/5 p-4">
+                      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                        <Send className="h-4 w-4 text-primary" />
+                        New loan application
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-4">
+                        <select
+                          value={loanRequestKind}
+                          onChange={(event) =>
+                            setLoanRequestKind(event.target.value as typeof loanRequestKind)
+                          }
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm"
+                        >
+                          <option value="financial">Financial loan</option>
+                          <option value="fuel">Fuel loan</option>
+                          <option value="stock">Stock loan</option>
+                          <option value="service">Service loan</option>
+                        </select>
+                        <input
+                          value={loanRequestAmount}
+                          onChange={(event) => setLoanRequestAmount(event.target.value)}
+                          type="number"
+                          min={1}
+                          placeholder="Amount"
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm"
+                        />
+                        <input
+                          value={loanRequestDays}
+                          onChange={(event) => setLoanRequestDays(event.target.value)}
+                          type="number"
+                          min={1}
+                          placeholder="Days"
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void submitLoanApplication()}
+                          className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Apply
+                        </button>
+                        <input
+                          value={loanRequestPurpose}
+                          onChange={(event) => setLoanRequestPurpose(event.target.value)}
+                          placeholder="Purpose"
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm sm:col-span-4"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </Section>
             )}
@@ -1441,9 +1608,53 @@ function Portal() {
         )}
       </main>
       {payMember && (
-        <MemberPayDialog member={payMember} mode="member" onClose={() => setPayMember(null)} />
+        <MemberPayDialog
+          member={payMember}
+          mode="member"
+          initialPurpose={paymentIntent?.purpose}
+          initialAmount={paymentIntent?.amount}
+          initialLoanId={paymentIntent?.loanId}
+          onClose={() => {
+            setPayMember(null);
+            setPaymentIntent(undefined);
+          }}
+        />
       )}
     </>
+  );
+}
+
+function PaymentAction({
+  icon: Icon,
+  title,
+  detail,
+  amount,
+  disabled,
+  onClick,
+}: {
+  icon: LucideIcon;
+  title: string;
+  detail: string;
+  amount: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <span className="flex items-start justify-between gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-md bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="text-xs font-semibold text-primary">{amount}</span>
+      </span>
+      <span className="mt-3 block text-sm font-semibold">{title}</span>
+      <span className="mt-1 block text-xs text-muted-foreground">{detail}</span>
+    </button>
   );
 }
 

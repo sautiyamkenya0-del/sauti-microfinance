@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import {
   FuelJobCardFields,
   normalizeFuelJobCardRows,
@@ -198,7 +199,18 @@ type CarryoverCollectionBreakdown = {
 
 type CarryoverMemberMode = "loan" | "none";
 
-const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
+const SCOPES: FeeScope[] = [
+  "all",
+  "new_only",
+  "selected_members",
+  "loan_holders",
+  "financial_members",
+  "locomotive_members",
+  "stock_members",
+  "service_members",
+  "supplier_members",
+  "investors",
+];
 const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
   { key: "services", label: "Services" },
@@ -445,6 +457,7 @@ function PolicyCenterPage() {
   const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
   const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
   const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
+  const fuelBufferFeeAmount = feeRows.find((fee) => fee.key === "fuel_buffer")?.amount ?? 0;
   const filteredClients = memberAccounts.filter((member) => {
     const q = clientQuery.trim().toLowerCase();
     if (!q) return true;
@@ -1289,10 +1302,11 @@ function PolicyCenterPage() {
                 </button>
               }
             >
-              <div className="grid gap-4 p-5 md:grid-cols-3">
+              <div className="grid gap-4 p-5 md:grid-cols-4">
                 <StatCard label="Membership" value={fmtKES(membershipAmount)} />
                 <StatCard label="Card" value={fmtKES(cardAmount)} />
-                <StatCard label="Sticker" value={fmtKES(stickerAmount)} />
+                <StatCard label="Sticker (financial)" value={fmtKES(stickerAmount)} />
+                <StatCard label="Fuel buffer (locomotive)" value={fmtKES(fuelBufferFeeAmount)} />
               </div>
               <div className="overflow-x-auto border-t border-border">
                 <table className="w-full text-sm">
@@ -2682,17 +2696,15 @@ function PolicyCenterPage() {
                     </div>
                   )}
                   <Field label="Client record">
-                    <select
+                    <MemberSearchSelect
+                      members={filteredClients}
                       value={clientId}
-                      onChange={(event) => setClientId(event.target.value)}
-                      className="input"
-                    >
-                      {filteredClients.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.id} - {member.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setClientId}
+                      emptyLabel="Select client"
+                      describeMember={(member) =>
+                        `${member.id} - ${member.name} - ${member.phone ?? ""}`
+                      }
+                    />
                   </Field>
                 </div>
                 {selectedClient && clientRating && (

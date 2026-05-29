@@ -5,9 +5,10 @@ import { useStore } from "@/lib/store";
 import { useEffect, useState } from "react";
 import { CommsTabs } from "./staff";
 import { useSupportInboxActions } from "@/lib/support-inbox";
-import { Inbox, Send, CheckCircle2 } from "lucide-react";
+import { Inbox, Send, CheckCircle2, Copy, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useReadIds } from "@/lib/read-state";
+import { formatKenyaDateTime, formatKenyaTime } from "@/lib/time";
 
 export const Route = createFileRoute("/support-inbox")({
   head: () => ({ meta: [{ title: "Member Support — Sauti Microfinance" }] }),
@@ -16,7 +17,8 @@ export const Route = createFileRoute("/support-inbox")({
 
 function SupportInboxPage() {
   const { currentUser, staff } = useStore();
-  const { rows: threads, appendMessage, setThreadStatus } = useSupportInboxActions();
+  const { rows: threads, appendMessage, setThreadStatus, updateMessage, deleteMessage } =
+    useSupportInboxActions();
   const { markRead } = useReadIds();
   // Inbox: threads assigned to me + unassigned + my role-relevant
   const visible = threads.filter(
@@ -64,6 +66,24 @@ function SupportInboxPage() {
     toast.success("Conversation closed");
   }
 
+  async function copyMessage(text: string) {
+    await navigator.clipboard.writeText(text);
+    toast.success("Copied");
+  }
+
+  async function editMessage(messageId: string, text: string) {
+    const next = window.prompt("Edit message", text);
+    if (next == null || next.trim() === text.trim()) return;
+    await updateMessage(messageId, next);
+    toast.success("Message updated");
+  }
+
+  async function removeMessage(messageId: string) {
+    if (!window.confirm("Delete this message?")) return;
+    await deleteMessage(messageId);
+    toast.success("Message deleted");
+  }
+
   return (
     <>
       <AppHeader
@@ -104,7 +124,7 @@ function SupportInboxPage() {
                   </div>
                   <div className="text-xs text-muted-foreground truncate mt-0.5">{t.subject}</div>
                   <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {new Date(t.updatedAt).toLocaleString()} · {assigned?.name ?? "unassigned"}
+                    {formatKenyaDateTime(t.updatedAt)} · {assigned?.name ?? "unassigned"}
                   </div>
                 </button>
               );
@@ -125,8 +145,38 @@ function SupportInboxPage() {
                       <div
                         className={`max-w-[75%] px-3 py-2 rounded-lg text-sm ${m.from === "staff" ? "bg-primary text-primary-foreground" : m.from === "ai" ? "bg-accent/20" : "bg-muted"}`}
                       >
+                        <div className="mb-1 flex justify-end gap-1 opacity-70">
+                          <button
+                            type="button"
+                            onClick={() => void copyMessage(m.text)}
+                            className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                            title="Copy"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                          {m.from === "staff" && m.fromId === currentUser.id ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void editMessage(m.id, m.text)}
+                                className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                                title="Edit"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeMessage(m.id)}
+                                className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                                title="Delete"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                         <div className="text-[10px] opacity-70 mb-0.5">
-                          {m.fromName} · {new Date(m.at).toLocaleTimeString()}
+                          {m.fromName} · {formatKenyaTime(m.at)}
                         </div>
                         <div className="whitespace-pre-wrap">{m.text}</div>
                       </div>

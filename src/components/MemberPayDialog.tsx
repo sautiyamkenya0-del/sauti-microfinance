@@ -6,6 +6,7 @@ import {
   fuelBufferTargetAmount,
   formatMembershipNumber,
   isInvestorOnlyCategory,
+  loanSummary,
   memberIsFuelMember,
   memberNeedsSticker,
   upfrontTotalsForAmount,
@@ -15,7 +16,14 @@ import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import { toast } from "sonner";
 import { Smartphone, X, Loader2 } from "lucide-react";
 
-type Props = { member: Member; mode?: "member" | "officer"; onClose: () => void };
+type Props = {
+  member: Member;
+  mode?: "member" | "officer";
+  initialPurpose?: Purpose;
+  initialAmount?: number;
+  initialLoanId?: string;
+  onClose: () => void;
+};
 
 type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront";
 
@@ -24,11 +32,22 @@ type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront"
  * Member mode: free-form amount + purpose (no day caps).
  * Officer mode: prompts for the first-time minimum upfront + mandatory fees.
  */
-export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
+export function MemberPayDialog({
+  member,
+  mode = "member",
+  initialPurpose,
+  initialAmount,
+  initialLoanId,
+  onClose,
+}: Props) {
   const { loans, transactions, feePolicies } = useStore();
-  const activeLoan = loans.find(
-    (l) => l.memberId === member.id && (l.status === "active" || l.status === "defaulted"),
+  const activeLoans = loans.filter(
+    (loan) =>
+      loan.memberId === member.id && (loan.status === "active" || loan.status === "defaulted"),
   );
+  const [loanId, setLoanId] = useState(initialLoanId ?? activeLoans[0]?.id ?? "");
+  const activeLoan = activeLoans.find((loan) => loan.id === loanId) ?? activeLoans[0];
+  const loanBalance = activeLoan ? loanSummary(activeLoan).balance : 0;
   const [busy, setBusy] = useState(false);
 
   const fuelMember = memberIsFuelMember(member);
@@ -112,8 +131,10 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
 
   const investorOnly = isInvestorOnlyCategory(member.category);
   const defaultPurpose: Purpose = investorOnly ? "investment" : activeLoan ? "loan" : "savings";
-  const [purpose, setPurpose] = useState<Purpose>(mode === "officer" ? "upfront" : defaultPurpose);
-  const [amount, setAmount] = useState<number>(0);
+  const [purpose, setPurpose] = useState<Purpose>(
+    mode === "officer" ? "upfront" : (initialPurpose ?? defaultPurpose),
+  );
+  const [amount, setAmount] = useState<number>(Math.max(0, Math.floor(initialAmount ?? 0)));
   const [plannedLoanAmount, setPlannedLoanAmount] = useState<number>(5000);
   const upfrontTotals = useMemo(
     () =>
@@ -144,8 +165,25 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
       if (purpose === "fees") return feesDue + fuelBufferDue;
       return 0;
     }
+    if (purpose === "fees" && amount <= 0) return feesDue;
+    if (purpose === "loan" && amount <= 0) return loanBalance;
     return Math.max(0, Math.floor(amount || 0));
-  }, [amount, feesDue, fuelBufferDue, mode, purpose, upfrontTotals.totalUpfrontNow]);
+  }, [amount, feesDue, fuelBufferDue, loanBalance, mode, purpose, upfrontTotals.totalUpfrontNow]);
+
+  const accountToken =
+    purpose === "savings"
+      ? "DAILY"
+      : purpose === "shares"
+        ? "SHARE"
+        : purpose === "investment"
+          ? "INVEST"
+          : purpose === "fees"
+            ? "FEES"
+            : "";
+  const accountRef =
+    accountToken && purpose !== "fees"
+      ? `${formatMembershipNumber(member.id)}-${accountToken}`.slice(0, 12)
+      : formatMembershipNumber(member.id);
 
   const send = async () => {
     if (previewAmount <= 0) return toast.error("Enter an amount.");
@@ -154,7 +192,6 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
     }
 
     setBusy(true);
-    const accountRef = formatMembershipNumber(member.id);
     const purposeLabel = purposeOptions.find((p) => p.value === purpose)?.label ?? "Sauti payment";
 
     try {
@@ -165,7 +202,9 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
           phone: member.phone,
           amount: previewAmount,
           accountRef,
-          description: `${purposeLabel} - ${member.name}`,
+          description: `${purposeLabel}${
+            activeLoan && purpose === "loan" ? ` ${activeLoan.id}` : ""
+          } - ${member.name}`,
         }),
       });
 
@@ -235,7 +274,12 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
               <span className="text-sm font-medium">Purpose</span>
               <select
                 value={purpose}
-                onChange={(e) => setPurpose(e.target.value as Purpose)}
+                onChange={(e) => {
+                  const nextPurpose = e.target.value as Purpose;
+                  setPurpose(nextPurpose);
+                  if (nextPurpose === "fees") setAmount(feesDue);
+                  if (nextPurpose === "loan") setAmount(loanBalance);
+                }}
                 className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
               >
                 {purposeOptions.map((o) => (
@@ -246,6 +290,40 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 ))}
               </select>
             </label>
+            {purpose === "loan" && activeLoans.length > 0 ? (
+              <label className="block">
+                <span className="text-sm font-medium">Loan to repay</span>
+                <select
+                  value={activeLoan?.id ?? loanId}
+                  onChange={(event) => setLoanId(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                >
+                  {activeLoans.map((loan) => (
+                    <option key={loan.id} value={loan.id}>
+                      {loan.id} - {fmtKES(loan.principal)} - {loan.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                purpose === "fees" ? feesDue : 100,
+                purpose === "loan" ? Math.min(loanBalance, 500) : 500,
+                purpose === "loan" ? loanBalance : 1000,
+              ]
+                .filter((value) => value > 0)
+                .map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setAmount(Math.floor(value))}
+                    className="rounded-md border border-border px-2 py-1.5 text-xs hover:bg-muted"
+                  >
+                    {fmtKES(value)}
+                  </button>
+                ))}
+            </div>
             <label className="block">
               <span className="text-sm font-medium">Amount (KSh)</span>
               <input
@@ -257,7 +335,8 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
                 className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-base font-semibold"
               />
               <div className="mt-1 text-xs text-muted-foreground">
-                Pay any amount you wish - no caps.
+                Prompt goes to your registered phone. Account reference:{" "}
+                <span className="font-mono text-foreground">{accountRef}</span>
               </div>
             </label>
             {investorOnly && (

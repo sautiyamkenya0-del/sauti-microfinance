@@ -21,6 +21,7 @@ import {
   updateMemberRecord,
   createPettyCashRecord,
   createStaffMessageRecord,
+  deleteStaffMessageRecord,
   createStaffRecord,
   createTransactionRecord,
   deleteStaffRecord,
@@ -29,6 +30,7 @@ import {
   reviewLoanRecord,
   settlePenaltyFromPoolRecord,
   updateStaffRecord,
+  updateStaffMessageRecord,
   upsertAttendanceRecord,
 } from "@/lib/app-data.functions";
 import { signInMember, signInStaff, signOutSession } from "@/lib/auth.functions";
@@ -611,6 +613,8 @@ type Store = {
     content?: string;
     attachment?: StaffMessageAttachment;
   }) => Promise<string>;
+  updateStaffMessage: (id: string, content: string) => Promise<void>;
+  deleteStaffMessage: (id: string) => Promise<void>;
   reloadStaffMessages: () => Promise<void>;
   /** Mark another staff present/absent (caller must be director or canMarkAttendance). */
   markAttendance: (
@@ -650,6 +654,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const createLoan = useServerFn(createLoanRecord);
   const createPetty = useServerFn(createPettyCashRecord);
   const createStaffMessage = useServerFn(createStaffMessageRecord);
+  const updateStaffMessageRecordFn = useServerFn(updateStaffMessageRecord);
+  const deleteStaffMessageRecordFn = useServerFn(deleteStaffMessageRecord);
   const createStaff = useServerFn(createStaffRecord);
   const createTransaction = useServerFn(createTransactionRecord);
   const saveStaff = useServerFn(updateStaffRecord);
@@ -1111,6 +1117,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
         setStaffMessages(await loadStaffMessages());
         return result.id;
+      },
+      updateStaffMessage: async (id, content) => {
+        await updateStaffMessageRecordFn({ data: { id, content } });
+        setStaffMessages(await loadStaffMessages());
+      },
+      deleteStaffMessage: async (id) => {
+        await deleteStaffMessageRecordFn({ data: { id } });
+        setStaffMessages(await loadStaffMessages());
       },
       reloadStaffMessages: async () => {
         setStaffMessages(await loadStaffMessages());

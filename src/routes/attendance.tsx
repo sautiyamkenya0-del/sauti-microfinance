@@ -6,6 +6,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
 import { roleLabel, useStore, type Attendance } from "@/lib/store";
+import { todayInKenya } from "@/lib/time";
 import { getErrorMessage } from "@/lib/utils";
 
 export const Route = createFileRoute("/attendance")({
@@ -40,7 +41,7 @@ const STATUS_TONE: Record<Attendance["status"], "success" | "warning" | "destruc
 
 function AttendancePage() {
   const { attendance, currentUser, markAttendance, staff } = useStore();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInKenya();
   const dates = Array.from(new Set([today, ...attendance.map((row) => row.date)]))
     .sort()
     .reverse();

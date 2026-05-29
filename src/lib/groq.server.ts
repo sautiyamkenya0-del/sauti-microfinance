@@ -39,6 +39,16 @@ async function groqFetch(body: Record<string, unknown>) {
 
 async function readGroqError(response: Response) {
   const text = await response.text().catch(() => "");
+  try {
+    const payload = JSON.parse(text);
+    const message = String(payload?.error?.message ?? payload?.message ?? "");
+    if (message.includes("Request too large") || message.includes("tokens per minute")) {
+      return "Sauti AI context was too large for the current Groq tier. I have reduced the live snapshot size; please try again.";
+    }
+    if (message) return message.slice(0, 300);
+  } catch {
+    // fall back to plain text below
+  }
   return text.slice(0, 300) || `Groq request failed (${response.status})`;
 }
 

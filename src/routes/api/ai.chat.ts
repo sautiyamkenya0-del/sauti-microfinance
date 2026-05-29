@@ -13,8 +13,11 @@ type AiTableSpec = {
   directorOnly?: boolean;
 };
 
-const DEFAULT_AI_TABLE_LIMIT = 1000;
-const HEAVY_AI_TABLE_LIMIT = 3000;
+const DEFAULT_AI_TABLE_LIMIT = 10;
+const HEAVY_AI_TABLE_LIMIT = 14;
+const SNAPSHOT_TEXT_LIMIT = 5200;
+const MAX_CHAT_MESSAGES = 8;
+const MAX_MESSAGE_TEXT = 1600;
 
 function missingTableOrColumn(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
@@ -43,6 +46,42 @@ async function readAiTable(db: any, spec: AiTableSpec) {
     throw new Error(error.message);
   }
   return { key: spec.key, rows: data ?? [], warning: undefined };
+}
+
+function compactValue(value: unknown): unknown {
+  if (typeof value === "string") return value.length > 90 ? `${value.slice(0, 90)}...` : value;
+  if (Array.isArray(value)) return value.slice(0, 4).map(compactValue);
+  if (!value || typeof value !== "object") return value;
+  return compactRow(value as Record<string, unknown>);
+}
+
+function compactRow(row: Record<string, unknown>) {
+  const entries = Object.entries(row).slice(0, 10);
+  return Object.fromEntries(entries.map(([key, value]) => [key, compactValue(value)]));
+}
+
+function compactRows(rows: unknown[]) {
+  return rows
+    .slice(0, 16)
+    .map((row) =>
+      row && typeof row === "object" ? compactRow(row as Record<string, unknown>) : row,
+    );
+}
+
+function trimForModel(value: unknown, limit = MAX_MESSAGE_TEXT) {
+  const text = String(value ?? "").trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function normalizeMessagesForModel(messages: unknown[]) {
+  return messages
+    .filter((message: any) => message?.role === "user" || message?.role === "assistant")
+    .slice(-MAX_CHAT_MESSAGES)
+    .map((message: any) => ({
+      role: message.role,
+      content: trimForModel(message.content),
+    }))
+    .filter((message) => message.content);
 }
 
 async function buildStaffAiSnapshot(clientSnapshot: unknown) {
@@ -218,20 +257,20 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "supportMessages",
       table: "support_messages",
-      limit: 20000,
+      limit: 8,
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
       key: "auditLog",
       table: "audit_log",
-      limit: 1000,
+      limit: 12,
       build: (query) => query.order("ts", { ascending: false }),
       directorOnly: true,
     },
     {
       key: "staffMessages",
       table: "staff_messages",
-      limit: 1000,
+      limit: 12,
       build: (query) => query.order("created_at", { ascending: false }),
       directorOnly: true,
     },
@@ -243,25 +282,25 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "aiConversations",
       table: "ai_conversations",
-      limit: 500,
+      limit: 12,
       build: (query) => query.order("updated_at", { ascending: false }),
     },
     {
       key: "aiMemories",
       table: "ai_memories",
-      limit: 1000,
+      limit: 12,
       build: (query) => query.order("updated_at", { ascending: false }),
     },
     {
       key: "aiObservations",
       table: "ai_observations",
-      limit: 1000,
+      limit: 12,
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
       key: "aiFiles",
       table: "ai_files",
-      limit: 500,
+      limit: 12,
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
@@ -296,7 +335,7 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     {
       key: "mpesaCallbackErrors",
       table: "mpesa_callback_errors",
-      limit: 10000,
+      limit: 12,
       build: (query) => query.order("created_at", { ascending: false }),
     },
   ];
@@ -307,7 +346,7 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
   const counts: Record<string, number> = {};
   const warnings: string[] = [];
   for (const entry of entries) {
-    tables[entry.key] = entry.rows;
+    tables[entry.key] = compactRows(entry.rows);
     counts[entry.key] = entry.rows.length;
     if (entry.warning) warnings.push(entry.warning);
   }
@@ -342,7 +381,7 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
     ],
     generatedAt: new Date().toISOString(),
     counts,
-    warnings,
+    unavailableTables: warnings.map((warning) => warning.split(":")[0]).slice(0, 8),
     tables,
     clientSnapshot,
   };
@@ -396,14 +435,14 @@ async function buildMemberAiSnapshot(memberId: string, clientSnapshot: unknown) 
   const tables: Record<string, unknown[]> = {};
   const warnings: string[] = [];
   for (const entry of entries) {
-    tables[entry.key] = entry.rows;
+    tables[entry.key] = compactRows(entry.rows);
     if (entry.warning) warnings.push(entry.warning);
   }
 
   return {
     audience: "member",
     generatedAt: new Date().toISOString(),
-    warnings,
+    unavailableTables: warnings.map((warning) => warning.split(":")[0]).slice(0, 8),
     tables,
     clientSnapshot,
   };
@@ -463,7 +502,7 @@ Voice and style:
 - Do not dump role, counts, Current State, or Issues detected blocks unless they help answer the question.
 
 Working rules:
-- Use the server-built snapshot below as your source for Sauti data. It includes members, investors, loans, transactions, M-Pesa records, suppliers, stock, fuel/service requests, every available money docket, outflows, payroll, approvals, support, policy settings, staff messages, report snapshots, callback errors, and audit history when those tables exist.
+- Use the compact server-built snapshot below as your source for Sauti data. It includes counts and recent/sample rows from available system tables. If a detail is missing, ask for a member name, phone, id, loan id, date, or reference before guessing.
 - If selectedAgent is present in the snapshot, behave as that specialist agent while still respecting Sauti governance. Current selected agent key: ${String(agentKey ?? "operations")}.
 - If the snapshot includes sautiMemories, treat them as staff observations and preferences. Use them as context, but do not treat them as verified ledger facts unless the system tables confirm them.
 - If the snapshot includes AI memory, observation, file, research, conversation, or call-session tables, use them as long-term organizational context. Mark uncertain memories as observations, not facts.
@@ -488,7 +527,7 @@ Governance:
 - For action requests such as writing records, approvals, money movement, or browsing, propose the step and wait for a human-controlled system action.
 
 Snapshot:
-${JSON.stringify(enrichedSnapshot).slice(0, 50000)}`;
+${JSON.stringify(enrichedSnapshot).slice(0, SNAPSHOT_TEXT_LIMIT)}`;
 
           const safeAttachments = Array.isArray(attachments)
             ? attachments
@@ -499,7 +538,9 @@ ${JSON.stringify(enrichedSnapshot).slice(0, 50000)}`;
                 )
                 .slice(0, 4)
             : [];
-          const normalizedMessages = Array.isArray(messages) ? [...messages] : [];
+          const normalizedMessages = Array.isArray(messages)
+            ? normalizeMessagesForModel(messages)
+            : [];
           if (safeAttachments.length > 0 && normalizedMessages.length > 0) {
             const lastUserIndex = normalizedMessages
               .map((message: any, index: number) => ({ message, index }))

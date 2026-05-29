@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Building2, CheckCircle2, ClipboardList, Plus, RefreshCw, Truck } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
   createSupplierFulfillmentRequestRecord,
@@ -620,10 +621,14 @@ function SuppliersPage() {
                 ["service", "Service"],
               ]}
             />
-            <Select
+            <MemberSearchSelect
+              members={members}
               value={requestForm.memberId}
               onChange={(memberId) => setRequestForm({ ...requestForm, memberId, loanId: "" })}
-              options={members.map((member: any) => [member.id, `${member.name} (${member.id})`])}
+              emptyLabel="Select member"
+              describeMember={(member: any) =>
+                `${member.id} - ${member.name} - ${member.phone ?? ""}`
+              }
             />
             <Select
               value={requestForm.loanId}

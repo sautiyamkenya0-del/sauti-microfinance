@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ArrowDownCircle, ArrowUpCircle, ListOrdered, Scale } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, DirectorOnly, Section, StatCard } from "@/components/ui-bits";
 import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
@@ -325,18 +326,15 @@ function TxPage() {
             <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Member
             </span>
-            <select
-              value={memberFilter}
-              onChange={(event) => setMemberFilter(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            >
-              <option value="">All members</option>
-              {members.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.id} - {member.name}
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <MemberSearchSelect
+                members={members}
+                value={memberFilter}
+                onChange={setMemberFilter}
+                emptyLabel="All members"
+                describeMember={(member) => `${member.id} - ${member.name} - ${member.phone ?? ""}`}
+              />
+            </div>
           </label>
         </div>
 
