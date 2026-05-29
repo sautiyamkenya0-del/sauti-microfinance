@@ -43,7 +43,10 @@ async function readGroqError(response: Response) {
 }
 
 export async function streamGroqChat(messages: GroqMessage[]) {
-  const model = (await getSecret("GROQ_MODEL")) || DEFAULT_GROQ_TEXT_MODEL;
+  const hasVisionContent = messages.some((message) => Array.isArray(message.content));
+  const model = hasVisionContent
+    ? (await getSecret("GROQ_VISION_MODEL")) || DEFAULT_GROQ_VISION_MODEL
+    : (await getSecret("GROQ_MODEL")) || DEFAULT_GROQ_TEXT_MODEL;
   const response = await groqFetch({ model, messages, stream: true });
   if (!response.ok || !response.body) {
     throw new Error(await readGroqError(response));

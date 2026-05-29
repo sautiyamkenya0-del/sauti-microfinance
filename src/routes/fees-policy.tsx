@@ -352,6 +352,9 @@ function PolicyCenterPage() {
   );
   const feeRows = feePolicies.length > 0 ? feePolicies : DEFAULT_FEE_POLICIES;
   const activeFees = feeRows.filter(isFeeActive);
+  const nonLoanServiceDeductionFees = activeFees.filter(
+    (fee) => fee.scope !== "loan_holders" && fee.scope !== "investors",
+  );
   const membershipAmount = feeRows.find((fee) => fee.key === "membership")?.amount ?? 0;
   const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
   const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
@@ -758,6 +761,25 @@ function PolicyCenterPage() {
     } finally {
       setServiceBusy(false);
     }
+  }
+
+  function updateServiceDeductionOverride(fee: FeePolicy, checked: boolean, amount?: number) {
+    setServiceDraft((current) => {
+      const overrides = parseServiceOverridesDraft(current.feeOverridesText);
+      const deductions = {
+        ...((overrides.deductions as Record<string, unknown> | undefined) ?? {}),
+      };
+      if (!checked) {
+        delete deductions[fee.key];
+      } else {
+        deductions[fee.key] = {
+          label: fee.label,
+          amount: Math.max(0, Number(amount ?? fee.amount) || 0),
+        };
+      }
+      const nextOverrides = { ...overrides, deductions };
+      return { ...current, feeOverridesText: JSON.stringify(nextOverrides, null, 2) };
+    });
   }
 
   async function persistPolicySettings(
@@ -1711,6 +1733,60 @@ function PolicyCenterPage() {
                           </label>
                         );
                       })}
+                    </div>
+                  </Field>
+                ) : null}
+                {serviceDraft.deductionMode !== "normal" ? (
+                  <Field label="Override deductions" className="sm:col-span-2">
+                    <div className="rounded-md border border-border bg-muted/20 p-3">
+                      <div className="mb-3 text-xs text-muted-foreground">
+                        Tick the normal non-loan deductions this service should include, then set
+                        the amount to increase or reduce what the service removes.
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {nonLoanServiceDeductionFees.map((fee) => {
+                          const overrides = parseServiceOverridesDraft(serviceDraft.feeOverridesText);
+                          const deductions =
+                            (overrides.deductions as Record<string, any> | undefined) ?? {};
+                          const checked = deductions[fee.key] != null;
+                          const amount = Number(deductions[fee.key]?.amount ?? fee.amount);
+                          return (
+                            <label
+                              key={fee.key}
+                              className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm"
+                            >
+                              <span className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    updateServiceDeductionOverride(
+                                      fee,
+                                      event.target.checked,
+                                      amount,
+                                    )
+                                  }
+                                />
+                                <span className="font-medium">{fee.label}</span>
+                              </span>
+                              <input
+                                type="number"
+                                min={0}
+                                value={amount}
+                                disabled={!checked}
+                                onChange={(event) =>
+                                  updateServiceDeductionOverride(
+                                    fee,
+                                    true,
+                                    Number(event.target.value),
+                                  )
+                                }
+                                className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs disabled:opacity-50"
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   </Field>
                 ) : null}
@@ -3739,6 +3815,15 @@ function blankServiceDraft(): ServiceDraft {
     feeOverridesText: "{}",
     active: true,
   };
+}
+
+function parseServiceOverridesDraft(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function describeFeeScope(fee: FeePolicy, members: Array<{ id: string }>) {

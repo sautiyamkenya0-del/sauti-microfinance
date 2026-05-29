@@ -237,6 +237,59 @@ async function buildStaffAiSnapshot(clientSnapshot: unknown) {
       build: (query) => query.order("created_at", { ascending: false }),
     },
     {
+      key: "aiConversations",
+      table: "ai_conversations",
+      limit: 500,
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    {
+      key: "aiMemories",
+      table: "ai_memories",
+      limit: 1000,
+      build: (query) => query.order("updated_at", { ascending: false }),
+    },
+    {
+      key: "aiObservations",
+      table: "ai_observations",
+      limit: 1000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "aiFiles",
+      table: "ai_files",
+      limit: 500,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "aiFileChunks",
+      table: "ai_file_chunks",
+      limit: 1000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "aiKnowledgeLinks",
+      table: "ai_knowledge_links",
+      limit: 1000,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "aiResearchLogs",
+      table: "ai_research_logs",
+      limit: 500,
+      build: (query) => query.order("created_at", { ascending: false }),
+    },
+    {
+      key: "aiAgents",
+      table: "ai_agents",
+      build: (query) => query.eq("enabled", true).order("name", { ascending: true }),
+    },
+    {
+      key: "aiToolPermissions",
+      table: "ai_tool_permissions",
+      limit: 200,
+      build: (query) => query.order("tool_key", { ascending: true }),
+    },
+    {
       key: "mpesaCallbackErrors",
       table: "mpesa_callback_errors",
       limit: 10000,
@@ -358,7 +411,7 @@ export const Route = createFileRoute("/api/ai/chat")({
       POST: async ({ request }) => {
         try {
           const session = await requireSignedInSession();
-          const { messages, snapshot, role, mode } = await request.json();
+          const { messages, snapshot, role, mode, attachments, agentKey } = await request.json();
           const safeMode = session.authMode === "member" ? "customer" : mode;
           const safeRole = session.authMode === "member" ? "member" : role;
           const enrichedSnapshot =
@@ -407,6 +460,11 @@ Voice and style:
 
 Working rules:
 - Use the server-built snapshot below as your source for Sauti data. It includes members, investors, loans, transactions, M-Pesa records, suppliers, stock, fuel/service requests, every available money docket, outflows, payroll, approvals, support, policy settings, staff messages, report snapshots, callback errors, and audit history when those tables exist.
+- If selectedAgent is present in the snapshot, behave as that specialist agent while still respecting Sauti governance. Current selected agent key: ${String(agentKey ?? "operations")}.
+- If the snapshot includes sautiMemories, treat them as staff observations and preferences. Use them as context, but do not treat them as verified ledger facts unless the system tables confirm them.
+- If the snapshot includes AI memory, observation, file, research, conversation, or call-session tables, use them as long-term organizational context. Mark uncertain memories as observations, not facts.
+- If an image is attached, inspect it carefully and relate what you see to the user's question and Sauti operations. Say when visual details are uncertain.
+- If file notes are attached, summarize them, suggest tags, and connect them to Sauti members, loans, suppliers, services, policies, or workflow issues only when there is evidence.
 - When asked about a member, loan, or transaction, find it by id, name, or phone.
 - When asked about money movement dockets, remember Full purpose pool as a source excludes Operations/Admin, while Full purpose pool as a receiver includes Operations/Admin.
 - Purpose pool is Levies & Permits 40%, Welfare 15%, Legal 20%, Operations/Admin 25%.
@@ -417,13 +475,47 @@ Working rules:
 - Respect role: the current role is ${safeRole}. If a request reaches beyond that role, say so plainly.
 
 Off-topic handling:
-- If the request needs live external information such as weather, breaking news, or political officeholders, say you cannot verify live outside data from inside SautiAI.
+- If the request needs live external information such as weather, breaking news, political officeholders, prices, or current law, say controlled browsing/research must be logged and verified before adding it to organizational memory.
 - If the request is general non-time-sensitive knowledge, answer briefly, then pivot back naturally.
+
+Governance:
+- Never silently learn sensitive data. Suggest saving memory only when it is useful, scoped, and permission-safe.
+- Do not claim to train or self-modify a model. Explain that Sauti AI grows through governed memories, observations, files, research logs, and reviewed workflow patterns.
+- For action requests such as writing records, approvals, money movement, or browsing, propose the step and wait for a human-controlled system action.
 
 Snapshot:
 ${JSON.stringify(enrichedSnapshot).slice(0, 50000)}`;
 
-          const fullMessages = [{ role: "system", content: system }, ...messages];
+          const safeAttachments = Array.isArray(attachments)
+            ? attachments
+                .filter(
+                  (attachment) =>
+                    typeof attachment?.dataUrl === "string" &&
+                    String(attachment.dataUrl).startsWith("data:image/"),
+                )
+                .slice(0, 4)
+            : [];
+          const normalizedMessages = Array.isArray(messages) ? [...messages] : [];
+          if (safeAttachments.length > 0 && normalizedMessages.length > 0) {
+            const lastUserIndex = normalizedMessages
+              .map((message: any, index: number) => ({ message, index }))
+              .reverse()
+              .find((entry) => entry.message?.role === "user")?.index;
+            if (lastUserIndex != null) {
+              const original = normalizedMessages[lastUserIndex] as any;
+              normalizedMessages[lastUserIndex] = {
+                ...original,
+                content: [
+                  { type: "text", text: String(original.content ?? "") },
+                  ...safeAttachments.map((attachment: any) => ({
+                    type: "image_url",
+                    image_url: { url: attachment.dataUrl },
+                  })),
+                ],
+              };
+            }
+          }
+          const fullMessages = [{ role: "system", content: system }, ...normalizedMessages];
           return await streamGroqChat(fullMessages);
         } catch (e: unknown) {
           return Response.json(

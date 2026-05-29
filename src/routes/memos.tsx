@@ -10,7 +10,7 @@ import { useStaffMemos } from "@/lib/memos-board";
 import { useReadIds } from "@/lib/read-state";
 import { useServerFn } from "@tanstack/react-start";
 import { listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
-import { polishMemberLetterRecord } from "@/lib/app-data.functions";
+import { polishMemberLetterRecord, polishStaffMemoRecord } from "@/lib/app-data.functions";
 import {
   downloadLetterheadHtml,
   LetterheadDocument,
@@ -52,6 +52,7 @@ function MemosPage() {
   const { markRead } = useReadIds();
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const polishLetter = useServerFn(polishMemberLetterRecord);
+  const polishMemo = useServerFn(polishStaffMemoRecord);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [audience, setAudience] = useState<MemoAudience>("staff");
@@ -192,26 +193,36 @@ function MemosPage() {
   }
 
   async function polishDraft() {
-    if (!targetMemberId) return toast.error("Choose a member before polishing the letter.");
     if (!body.trim()) return toast.error("Write the draft details first.");
+    if (documentKind === "letter" && !targetMemberId) {
+      return toast.error("Choose a member before polishing the letter.");
+    }
     setPolishing(true);
     try {
-      const result = await polishLetter({
-        data: {
-          memberId: targetMemberId,
-          intent: letterIntent,
-          draft: body,
-          includedFacts: {
-            facts: selectedLetterFacts,
-            title,
+      if (documentKind === "letter") {
+        const result = await polishLetter({
+          data: {
+            memberId: targetMemberId,
+            intent: letterIntent,
+            draft: body,
+            includedFacts: {
+              facts: selectedLetterFacts,
+              title,
+            },
           },
-        },
+        });
+        setBody(result.body);
+        if (!title.trim()) setTitle("Member Notice");
+        toast.success("Letter polished. Review it before sending.");
+        return;
+      }
+      const result = await polishMemo({
+        data: { intent: letterIntent, title, draft: body, audience },
       });
       setBody(result.body);
-      if (!title.trim()) setTitle("Member Notice");
-      toast.success("Letter polished. Review it before sending.");
+      toast.success("Memo polished. Review it before posting.");
     } catch (error: any) {
-      toast.error(error?.message ?? "AI could not polish this letter.");
+      toast.error(error?.message ?? "AI could not polish this draft.");
     } finally {
       setPolishing(false);
     }
@@ -323,7 +334,11 @@ function MemosPage() {
                   className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
                 >
                   <Sparkles className="h-4 w-4" />
-                  {polishing ? "Polishing..." : "Polish letter with AI"}
+                  {polishing
+                    ? "Polishing..."
+                    : documentKind === "letter"
+                      ? "Polish letter with AI"
+                      : "Polish memo with AI"}
                 </button>
                 <button
                   onClick={() =>

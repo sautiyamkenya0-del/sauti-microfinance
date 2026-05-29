@@ -680,6 +680,7 @@ async function liveLoanAccountingSummary(
     asOfDate?: string;
     payments?: LoanRepaymentPayment[];
     fallbackPaid?: number;
+    overridePaid?: number;
   },
 ) {
   const base = loanBalanceSummary(loan as any);
@@ -695,12 +696,10 @@ async function liveLoanAccountingSummary(
   const loanId = String(loan.id ?? "").trim();
   const payments = options?.payments ?? (await fetchLoanRepaymentPayments(runtimeDb, loanId));
   const transactionPaid = payments.reduce((sum, payment) => roundMoney(sum + payment.amount), 0);
-  const fallbackPaid = Math.max(
-    0,
-    toNumber(loan.paid),
-    transactionPaid,
-    Number(options?.fallbackPaid ?? 0),
-  );
+  const fallbackPaid =
+    options?.overridePaid == null
+      ? Math.max(0, toNumber(loan.paid), transactionPaid, Number(options?.fallbackPaid ?? 0))
+      : Math.max(0, Number(options.overridePaid) || 0);
   const asOfDate = String(loan.frozen_at ?? options?.asOfDate ?? new Date().toISOString()).slice(
     0,
     10,
@@ -8116,6 +8115,620 @@ export const polishMemberLetterRecord = createServerFn({ method: "POST" })
     return { body: String(answer ?? "").trim() };
   });
 
+export const polishStaffMemoRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { intent?: string; title?: string; draft: string; audience?: string } | undefined) => ({
+      intent: String(data?.intent ?? "").trim(),
+      title: String(data?.title ?? "").trim(),
+      draft: String(data?.draft ?? "").trim(),
+      audience: String(data?.audience ?? "staff").trim(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.draft) throw new Error("Write the memo draft first.");
+    const { completeGroqChat } = await import("@/lib/groq.server");
+    const answer = await completeGroqChat([
+      {
+        role: "system",
+        content:
+          "You polish Sauti Microfinance internal and member-facing memos. Write plain text only, no markdown. Keep the tone clear, professional, concise, and action-oriented. Do not invent facts.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          instruction: data.intent || "Polish this memo.",
+          title: data.title,
+          audience: data.audience,
+          draft: data.draft,
+        }),
+      },
+    ]);
+    await auditAction({
+      actor,
+      action: "memo.polished",
+      targetType: "staff_memo",
+      summary: `${actor.name} polished a memo draft`,
+      details: {
+        title: clipAuditText(data.title, 120),
+        intent: clipAuditText(data.intent, 160),
+      },
+    });
+    return { body: String(answer ?? "").trim() };
+  });
+
+async function readOptionalAiRows(runtimeDb: any, table: string, queryBuilder?: (query: any) => any) {
+  let query = runtimeDb.from(table).select("*");
+  if (queryBuilder) query = queryBuilder(query);
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw new Error(error.message);
+  }
+  return data ?? [];
+}
+
+function normalizeAiTags(tags: unknown) {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .map((tag) => String(tag ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function normalizeAiMessages(messages: unknown) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .map((message) => {
+      const role = String((message as any)?.role ?? "user");
+      return {
+        id: String((message as any)?.id ?? makeId("AIM")),
+        role:
+          role === "assistant" || role === "system" || role === "tool" || role === "user"
+            ? role
+            : "user",
+        content: String((message as any)?.content ?? "").slice(0, 20000),
+        attachments: Array.isArray((message as any)?.attachments)
+          ? (message as any).attachments.slice(0, 8)
+          : [],
+        metadata: asJsonObject((message as any)?.metadata),
+      };
+    })
+    .filter((message) => message.content || message.attachments.length > 0)
+    .slice(-80);
+}
+
+function chunkAiText(text: string, maxLength: number) {
+  const clean = String(text ?? "").trim();
+  if (!clean) return [];
+  const chunks: string[] = [];
+  for (let index = 0; index < clean.length; index += maxLength) {
+    chunks.push(clean.slice(index, index + maxLength));
+  }
+  return chunks.slice(0, 80);
+}
+
+function inferAiKnowledgeLinks(args: {
+  sourceType: string;
+  sourceId: string;
+  text: string;
+  createdBy: string;
+}) {
+  const rows: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  const text = String(args.text ?? "");
+  const patterns = [
+    { targetType: "member", regex: /\bSBC\d{3,5}[A-Z]?\b/gi },
+    { targetType: "loan", regex: /\b(?:LN|LLN|LW-FUEL)[A-Z0-9-]+\b/gi },
+    { targetType: "supplier", regex: /\bSUP[A-Z0-9-]+\b/gi },
+    { targetType: "mpesa", regex: /\b[A-Z0-9]{10}\b/g },
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern.regex)) {
+      const targetId = String(match[0] ?? "").toUpperCase();
+      const key = `${pattern.targetType}:${targetId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        id: makeId("AIKL"),
+        source_type: args.sourceType,
+        source_id: args.sourceId,
+        target_type: pattern.targetType,
+        target_id: targetId,
+        relation: "mentions",
+        confidence: 0.75,
+        created_by: args.createdBy,
+        metadata: { inferred: true },
+      });
+    }
+  }
+
+  return rows.slice(0, 40);
+}
+
+export const listSautiAiWorkspaceRecord = createServerFn({ method: "GET" }).handler(async () => {
+  const actor = await requireStaffActor();
+  const runtimeDb = (await requireSupabaseAdmin()) as any;
+  const ownerFilter = (query: any) =>
+    query.or(`owner_id.eq.${actor.id},owner_id.is.null,owner_kind.eq.organization`);
+
+  const [
+    conversations,
+    messages,
+    memories,
+    observations,
+    files,
+    fileChunks,
+    knowledgeLinks,
+    researchLogs,
+    agents,
+    toolPermissions,
+    callSessions,
+  ] = await Promise.all([
+      readOptionalAiRows(runtimeDb, "ai_conversations", (query) =>
+        ownerFilter(query).order("updated_at", { ascending: false }).limit(80),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_messages", (query) =>
+        query.order("created_at", { ascending: true }).limit(5000),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_memories", (query) =>
+        query
+          .or(`created_by.eq.${actor.id},owner_id.eq.${actor.id},scope.in.(team,organization)`)
+          .order("updated_at", { ascending: false })
+          .limit(120),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_observations", (query) =>
+        query.order("created_at", { ascending: false }).limit(80),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_files", (query) =>
+        query.order("created_at", { ascending: false }).limit(60),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_file_chunks", (query) =>
+        query.order("created_at", { ascending: false }).limit(500),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_knowledge_links", (query) =>
+        query.order("created_at", { ascending: false }).limit(500),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_research_logs", (query) =>
+        query.order("created_at", { ascending: false }).limit(80),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_agents", (query) =>
+        query.eq("enabled", true).order("name", { ascending: true }),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_tool_permissions", (query) =>
+        query.order("tool_key", { ascending: true }).limit(200),
+      ),
+      readOptionalAiRows(runtimeDb, "ai_call_sessions", (query) =>
+        query.eq("owner_id", actor.id).order("started_at", { ascending: false }).limit(30),
+      ),
+    ]);
+
+  return {
+    actor: { id: actor.id, name: actor.name, role: actor.role },
+    conversations,
+    messages,
+    memories,
+    observations,
+    files,
+    fileChunks,
+    knowledgeLinks,
+    researchLogs,
+    agents,
+    toolPermissions,
+    callSessions,
+  };
+});
+
+export const recordSautiAiConversationRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      title?: string;
+      folder?: string;
+      pinned?: boolean;
+      mode?: string;
+      agentKey?: string;
+      visibility?: string;
+      messages?: unknown[];
+      metadata?: Record<string, unknown>;
+    }) => ({
+      id: String(data?.id ?? "").trim() || makeId("AIC"),
+      title: String(data?.title ?? "New SautiAI chat").trim().slice(0, 160),
+      folder: String(data?.folder ?? "").trim().slice(0, 80) || undefined,
+      pinned: data?.pinned === true,
+      mode: ["chat", "call", "research", "file", "agent"].includes(String(data?.mode ?? "chat"))
+        ? String(data?.mode ?? "chat")
+        : "chat",
+      agentKey: String(data?.agentKey ?? "").trim().slice(0, 60) || undefined,
+      visibility: ["private", "team", "organization"].includes(String(data?.visibility ?? "private"))
+        ? String(data?.visibility ?? "private")
+        : "private",
+      messages: normalizeAiMessages(data?.messages),
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const lastMessage = data.messages.at(-1);
+    const { error } = await runtimeDb.from("ai_conversations").upsert({
+      id: data.id,
+      owner_kind: "staff",
+      owner_id: actor.id,
+      title: data.title || "New SautiAI chat",
+      folder: data.folder ?? null,
+      pinned: data.pinned,
+      mode: data.mode,
+      agent_key: data.agentKey ?? null,
+      visibility: data.visibility,
+      last_message_at: lastMessage ? new Date().toISOString() : null,
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id: data.id, persisted: false };
+      throw new Error(error.message);
+    }
+
+    if (data.messages.length > 0) {
+      const { error: deleteError } = await runtimeDb
+        .from("ai_messages")
+        .delete()
+        .eq("conversation_id", data.id);
+      if (deleteError && !isMissingRelationError(deleteError)) throw new Error(deleteError.message);
+      const rows = data.messages.map((message, index) => ({
+        id: message.id || makeId("AIM"),
+        conversation_id: data.id,
+        role: message.role,
+        content: message.content,
+        attachments: message.attachments,
+        metadata: { ...message.metadata, order: index },
+      }));
+      const { error: insertError } = await runtimeDb.from("ai_messages").insert(rows);
+      if (insertError && !isMissingRelationError(insertError)) throw new Error(insertError.message);
+    }
+
+    await auditAction({
+      actor,
+      action: "sauti_ai.conversation.saved",
+      targetType: "ai_conversation",
+      targetId: data.id,
+      summary: `${actor.name} saved Sauti AI conversation ${data.title}`,
+      details: { mode: data.mode, agentKey: data.agentKey ?? null, messageCount: data.messages.length },
+    });
+    return { id: data.id, persisted: true };
+  });
+
+export const upsertSautiAiMemoryRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      content: string;
+      memoryType?: string;
+      scope?: string;
+      source?: string;
+      tags?: unknown[];
+      metadata?: Record<string, unknown>;
+    }) => ({
+      id: String(data?.id ?? "").trim() || makeId("AIMEM"),
+      content: String(data?.content ?? "").trim().slice(0, 8000),
+      memoryType: ["user", "operational", "contextual", "governance"].includes(
+        String(data?.memoryType ?? "user"),
+      )
+        ? String(data?.memoryType ?? "user")
+        : "user",
+      scope: ["private", "team", "organization", "member"].includes(String(data?.scope ?? "private"))
+        ? String(data?.scope ?? "private")
+        : "private",
+      source: String(data?.source ?? "manual").trim().slice(0, 80) || "manual",
+      tags: normalizeAiTags(data?.tags),
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.content) throw new Error("Memory content is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const approved = actor.role === "director" || actor.role === "manager";
+    const { error } = await runtimeDb.from("ai_memories").upsert({
+      id: data.id,
+      owner_kind: data.scope === "organization" ? "organization" : "staff",
+      owner_id: data.scope === "organization" ? null : actor.id,
+      memory_type: data.memoryType,
+      scope: data.scope,
+      source: data.source,
+      content: data.content,
+      tags: data.tags,
+      confidence: Number((data.metadata as any)?.confidence ?? 0.7),
+      approved,
+      approved_by: approved ? actor.id : null,
+      created_by: actor.id,
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id: data.id, persisted: false };
+      throw new Error(error.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.memory.saved",
+      targetType: "ai_memory",
+      targetId: data.id,
+      summary: `${actor.name} saved Sauti AI memory`,
+      details: { memoryType: data.memoryType, scope: data.scope, content: clipAuditText(data.content, 180) },
+    });
+    return { id: data.id, persisted: true, approved };
+  });
+
+export const createSautiAiObservationRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      title: string;
+      detail?: string;
+      observationType?: string;
+      severity?: string;
+      entityType?: string;
+      entityId?: string;
+      metadata?: Record<string, unknown>;
+    }) => ({
+      title: String(data?.title ?? "").trim().slice(0, 180),
+      detail: String(data?.detail ?? "").trim().slice(0, 12000),
+      observationType: String(data?.observationType ?? "workflow").trim().slice(0, 80) || "workflow",
+      severity: ["low", "medium", "high", "critical"].includes(String(data?.severity ?? "low"))
+        ? String(data?.severity ?? "low")
+        : "low",
+      entityType: String(data?.entityType ?? "").trim().slice(0, 80) || undefined,
+      entityId: String(data?.entityId ?? "").trim().slice(0, 120) || undefined,
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.title) throw new Error("Observation title is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("AIO");
+    const { error } = await runtimeDb.from("ai_observations").insert({
+      id,
+      observation_type: data.observationType,
+      title: data.title,
+      detail: data.detail,
+      severity: data.severity,
+      entity_type: data.entityType ?? null,
+      entity_id: data.entityId ?? null,
+      created_by: actor.id,
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id, persisted: false };
+      throw new Error(error.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.observation.created",
+      targetType: "ai_observation",
+      targetId: id,
+      summary: `${actor.name} recorded Sauti AI observation ${data.title}`,
+      details: { severity: data.severity, observationType: data.observationType },
+    });
+    return { id, persisted: true };
+  });
+
+export const createSautiAiCallSessionRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { conversationId?: string; mode?: string; metadata?: Record<string, unknown> }) => ({
+      conversationId: String(data?.conversationId ?? "").trim() || undefined,
+      mode: ["audio", "video", "screen"].includes(String(data?.mode ?? "audio"))
+        ? String(data?.mode ?? "audio")
+        : "audio",
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("AICALL");
+    const { error } = await runtimeDb.from("ai_call_sessions").insert({
+      id,
+      owner_kind: "staff",
+      owner_id: actor.id,
+      conversation_id: data.conversationId ?? null,
+      mode: data.mode,
+      status: "active",
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id, persisted: false };
+      throw new Error(error.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.call.started",
+      targetType: "ai_call_session",
+      targetId: id,
+      summary: `${actor.name} started Sauti AI ${data.mode} session`,
+    });
+    return { id, persisted: true };
+  });
+
+export const endSautiAiCallSessionRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id: string;
+      transcript?: unknown[];
+      sceneNotes?: unknown[];
+      metadata?: Record<string, unknown>;
+    }) => ({
+      id: String(data?.id ?? "").trim(),
+      transcript: Array.isArray(data?.transcript) ? data.transcript.slice(-200) : [],
+      sceneNotes: Array.isArray(data?.sceneNotes) ? data.sceneNotes.slice(-200) : [],
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.id) throw new Error("Call session id is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { error } = await runtimeDb
+      .from("ai_call_sessions")
+      .update({
+        status: "ended",
+        ended_at: new Date().toISOString(),
+        transcript: data.transcript,
+        scene_notes: data.sceneNotes,
+        metadata: data.metadata,
+      })
+      .eq("id", data.id)
+      .eq("owner_id", actor.id);
+    if (error) {
+      if (isMissingRelationError(error)) return { id: data.id, persisted: false };
+      throw new Error(error.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.call.ended",
+      targetType: "ai_call_session",
+      targetId: data.id,
+      summary: `${actor.name} ended Sauti AI call session`,
+    });
+    return { id: data.id, persisted: true };
+  });
+
+export const createSautiAiResearchLogRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      query: string;
+      sourceUrl?: string;
+      sourceTitle?: string;
+      summary?: string;
+      trusted?: boolean;
+      metadata?: Record<string, unknown>;
+    }) => ({
+      query: String(data?.query ?? "").trim().slice(0, 1000),
+      sourceUrl: String(data?.sourceUrl ?? "").trim().slice(0, 2000) || undefined,
+      sourceTitle: String(data?.sourceTitle ?? "").trim().slice(0, 300) || undefined,
+      summary: String(data?.summary ?? "").trim().slice(0, 12000),
+      trusted: data?.trusted === true,
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.query) throw new Error("Research query is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("AIR");
+    const { error } = await runtimeDb.from("ai_research_logs").insert({
+      id,
+      query: data.query,
+      source_url: data.sourceUrl ?? null,
+      source_title: data.sourceTitle ?? null,
+      summary: data.summary,
+      trusted: data.trusted,
+      requested_by: actor.id,
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id, persisted: false };
+      throw new Error(error.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.research.logged",
+      targetType: "ai_research_log",
+      targetId: id,
+      summary: `${actor.name} logged Sauti AI research`,
+      details: { query: clipAuditText(data.query, 180), trusted: data.trusted },
+    });
+    return { id, persisted: true };
+  });
+
+export const createSautiAiFileRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      filename: string;
+      mimeType?: string;
+      sizeBytes?: number;
+      textContent?: string;
+      summary?: string;
+      tags?: unknown[];
+      status?: string;
+      metadata?: Record<string, unknown>;
+    }) => ({
+      filename: String(data?.filename ?? "").trim().slice(0, 260),
+      mimeType: String(data?.mimeType ?? "").trim().slice(0, 120) || undefined,
+      sizeBytes: Math.max(0, Math.floor(Number(data?.sizeBytes ?? 0) || 0)),
+      textContent: String(data?.textContent ?? "").slice(0, 80000) || undefined,
+      summary: String(data?.summary ?? "").trim().slice(0, 12000) || undefined,
+      tags: normalizeAiTags(data?.tags),
+      status: ["uploaded", "processed", "failed"].includes(String(data?.status ?? "uploaded"))
+        ? String(data?.status ?? "uploaded")
+        : "uploaded",
+      metadata: asJsonObject(data?.metadata),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.filename) throw new Error("File name is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = makeId("AIF");
+    const { error } = await runtimeDb.from("ai_files").insert({
+      id,
+      owner_kind: "staff",
+      owner_id: actor.id,
+      filename: data.filename,
+      mime_type: data.mimeType ?? null,
+      size_bytes: data.sizeBytes,
+      text_content: data.textContent ?? null,
+      summary: data.summary ?? null,
+      tags: data.tags,
+      status: data.status,
+      created_by: actor.id,
+      metadata: data.metadata,
+    });
+    if (error) {
+      if (isMissingRelationError(error)) return { id, persisted: false };
+      throw new Error(error.message);
+    }
+    if (data.textContent) {
+      const chunks = chunkAiText(data.textContent, 2500).map((content, index) => ({
+        id: makeId("AIFC"),
+        file_id: id,
+        chunk_index: index,
+        content,
+        summary: index === 0 ? data.summary ?? null : null,
+        tags: data.tags,
+        metadata: data.metadata,
+      }));
+      if (chunks.length > 0) {
+        const { error: chunkError } = await runtimeDb.from("ai_file_chunks").insert(chunks);
+        if (chunkError && !isMissingRelationError(chunkError)) throw new Error(chunkError.message);
+      }
+    }
+    const linkRows = inferAiKnowledgeLinks({
+      sourceType: "ai_file",
+      sourceId: id,
+      text: `${data.filename}\n${data.textContent ?? ""}`,
+      createdBy: actor.id,
+    });
+    if (linkRows.length > 0) {
+      const { error: linkError } = await runtimeDb.from("ai_knowledge_links").insert(linkRows);
+      if (linkError && !isMissingRelationError(linkError)) throw new Error(linkError.message);
+    }
+    await auditAction({
+      actor,
+      action: "sauti_ai.file.created",
+      targetType: "ai_file",
+      targetId: id,
+      summary: `${actor.name} added Sauti AI file ${data.filename}`,
+      details: {
+        filename: data.filename,
+        mimeType: data.mimeType ?? null,
+        sizeBytes: data.sizeBytes,
+        status: data.status,
+      },
+    });
+    return { id, persisted: true };
+  });
+
 export const deleteStaffMemoRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
   .handler(async ({ data }) => {
@@ -11308,7 +11921,6 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
   };
 
   const transactionsByMember = new Map<string, Record<string, unknown>[]>();
-  const repaymentByLiveLoan = new Map<string, number>();
   const repaymentRowsByLiveLoan = new Map<string, Record<string, unknown>[]>();
   const transactionMemberPatches: Array<{ id: string; memberId: string }> = [];
 
@@ -11333,10 +11945,6 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
         const group = repaymentRowsByLiveLoan.get(loanId) ?? [];
         group.push(transaction);
         repaymentRowsByLiveLoan.set(loanId, group);
-        repaymentByLiveLoan.set(
-          loanId,
-          roundMoney((repaymentByLiveLoan.get(loanId) ?? 0) + toNumber(transaction.amount as any)),
-        );
       }
     }
   }
@@ -11430,24 +12038,63 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     }
   }
 
-  let liveLoansUpdated = 0;
+  const liveLoansByMember = new Map<string, Record<string, unknown>[]>();
   for (const loan of liveLoans) {
-    const loanId = String(loan.id ?? "").trim();
-    if (!loanId) continue;
+    const memberId = String(loan.member_id ?? "").trim();
     const currentStatus = String(loan.status ?? "active");
-    if (currentStatus === "pending" || currentStatus === "rejected") continue;
-    const payments = mapLoanRepaymentPayments(repaymentRowsByLiveLoan.get(loanId) ?? []);
-    const summary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
-      payments,
-      fallbackPaid: repaymentByLiveLoan.get(loanId) ?? toNumber(loan.paid as any),
+    if (!memberId || currentStatus === "pending" || currentStatus === "rejected") continue;
+    const group = liveLoansByMember.get(memberId) ?? [];
+    group.push(loan);
+    liveLoansByMember.set(memberId, group);
+  }
+
+  let liveLoansUpdated = 0;
+  for (const [memberId, memberLoans] of liveLoansByMember) {
+    const memberTransactions = transactionsByMember.get(memberId) ?? [];
+    const inflow = memberTransactions
+      .filter((transaction) =>
+        [
+          "deposit",
+          "loan_repayment",
+          "share_purchase",
+          "fee_payment",
+          "investor_contribution",
+        ].includes(String(transaction.type ?? "")),
+      )
+      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
+    const outflow = memberTransactions
+      .filter((transaction) =>
+        ["withdrawal", "loan_disbursement"].includes(String(transaction.type ?? "")),
+      )
+      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
+    let lifetimeRemaining = Math.max(0, roundMoney(inflow - outflow));
+    const sortedLoans = [...(memberLoans as any[])].sort((left, right) => {
+      const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
+      if (byDate !== 0) return byDate;
+      return String(left.id ?? "").localeCompare(String(right.id ?? ""));
     });
-    const nextStatus = nextLiveLoanStatus(currentStatus, summary);
-    const { error } = await runtimeDb
-      .from("loans")
-      .update({ paid: summary.totalPaid, status: nextStatus })
-      .eq("id", loanId);
-    if (error) throw new Error(error.message);
-    liveLoansUpdated += 1;
+
+    for (const loan of sortedLoans) {
+      const loanId = String(loan.id ?? "").trim();
+      if (!loanId) continue;
+      const zeroPaidSummary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
+        payments: [],
+        overridePaid: 0,
+      });
+      const applied = Math.min(lifetimeRemaining, zeroPaidSummary.totalExpectedCollected);
+      lifetimeRemaining = roundMoney(lifetimeRemaining - applied);
+      const summary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
+        payments: mapLoanRepaymentPayments(repaymentRowsByLiveLoan.get(loanId) ?? []),
+        overridePaid: applied,
+      });
+      const nextStatus = nextLiveLoanStatus(String(loan.status ?? "active"), summary);
+      const { error } = await runtimeDb
+        .from("loans")
+        .update({ paid: summary.totalPaid, status: nextStatus })
+        .eq("id", loanId);
+      if (error) throw new Error(error.message);
+      liveLoansUpdated += 1;
+    }
   }
 
   const carryoverByMember = new Map<string, Record<string, unknown>[]>();

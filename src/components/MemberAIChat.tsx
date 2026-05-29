@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Send, UserCog } from "lucide-react";
+import { Plus, Sparkles, Send, UserCog } from "lucide-react";
 import { toast } from "sonner";
 
 import { plainAiText } from "@/lib/ai-text";
@@ -8,6 +8,7 @@ import type { Member } from "@/lib/store";
 import { useSupportInboxActions } from "@/lib/support-inbox";
 
 type Msg = { role: "user" | "assistant"; content: string };
+type MemberChatSession = { id: string; title: string; updatedAt: string; messages: Msg[] };
 
 /**
  * Member-facing AI customer care assistant. Lives in the Member Portal.
@@ -20,12 +21,12 @@ export function MemberAIChat({ member }: { member: Member }) {
   const { rows: threads, createThread, appendMessage } = useSupportInboxActions();
   const myThread = threads.find((t) => t.memberId === member.id && t.status !== "closed");
 
-  const [msgs, setMsgs] = useState<Msg[]>([
-    {
-      role: "assistant",
-      content: `Hi ${member.firstName ?? member.name.split(" ")[0]}! I'm SautiAI. Ask me about your daily compliance contribution, loans, M-Pesa Paybill, fees, or anything about Sauti Microfinance. If you want a real person, tap Talk to a real person any time.`,
-    },
-  ]);
+  const initialMessage = memberInitialMessage(member);
+  const [sessions, setSessions] = useState<MemberChatSession[]>(() =>
+    loadMemberAiSessions(member.id),
+  );
+  const [sessionId, setSessionId] = useState(() => sessions[0]?.id ?? newMemberChatId());
+  const [msgs, setMsgs] = useState<Msg[]>(() => sessions[0]?.messages ?? [initialMessage]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [forwarding, setForwarding] = useState(false);
@@ -34,6 +35,32 @@ export function MemberAIChat({ member }: { member: Member }) {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs]);
+
+  useEffect(() => {
+    const nextSessions = loadMemberAiSessions(member.id);
+    setSessions(nextSessions);
+    setSessionId(nextSessions[0]?.id ?? newMemberChatId());
+    setMsgs(nextSessions[0]?.messages ?? [memberInitialMessage(member)]);
+  }, [member.id]);
+
+  useEffect(() => {
+    if (myThread && myThread.status !== "ai") return;
+    const title =
+      msgs.find((message) => message.role === "user")?.content.slice(0, 48) ||
+      "New SautiAI chat";
+    const nextSession = {
+      id: sessionId,
+      title,
+      updatedAt: new Date().toISOString(),
+      messages: msgs,
+    };
+    setSessions((current) =>
+      saveMemberAiSessions(member.id, [
+        nextSession,
+        ...current.filter((session) => session.id !== sessionId),
+      ]),
+    );
+  }, [member.id, msgs, myThread, sessionId]);
 
   const staffReplies = myThread?.messages.filter((m) => m.from === "staff").length ?? 0;
 
@@ -83,6 +110,21 @@ export function MemberAIChat({ member }: { member: Member }) {
     } finally {
       setForwarding(false);
     }
+  }
+
+  function startNewChat() {
+    const id = newMemberChatId();
+    setSessionId(id);
+    setMsgs([memberInitialMessage(member)]);
+    setInput("");
+  }
+
+  function openChat(id: string) {
+    const session = sessions.find((item) => item.id === id);
+    if (!session) return;
+    setSessionId(session.id);
+    setMsgs(session.messages.length ? session.messages : [memberInitialMessage(member)]);
+    setInput("");
   }
 
   async function send() {
@@ -241,6 +283,33 @@ export function MemberAIChat({ member }: { member: Member }) {
         )}
       </div>
 
+      {!myThread || myThread.status === "ai" ? (
+        <div className="flex flex-wrap gap-2 border-b border-border px-3 py-2">
+          <select
+            value={sessionId}
+            onChange={(event) => openChat(event.target.value)}
+            className="max-w-[220px] rounded-md border border-border bg-muted px-2 py-1.5 text-xs"
+          >
+            {sessions.map((session) => (
+              <option key={session.id} value={session.id}>
+                {session.title} - {new Date(session.updatedAt).toLocaleDateString()}
+              </option>
+            ))}
+            {!sessions.some((session) => session.id === sessionId) ? (
+              <option value={sessionId}>New SautiAI chat</option>
+            ) : null}
+          </select>
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs hover:bg-muted"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New chat
+          </button>
+        </div>
+      ) : null}
+
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {visibleMsgs.map((m, i) => (
           <div key={i} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
@@ -279,4 +348,37 @@ export function MemberAIChat({ member }: { member: Member }) {
       </form>
     </div>
   );
+}
+
+function memberInitialMessage(member: Member): Msg {
+  return {
+    role: "assistant",
+    content: `Hi ${member.firstName ?? member.name.split(" ")[0]}! I'm SautiAI. Ask me about your daily compliance contribution, loans, M-Pesa Paybill, fees, or anything about Sauti Microfinance. If you want a real person, tap Talk to a real person any time.`,
+  };
+}
+
+function newMemberChatId() {
+  return `member-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function memberAiStorageKey(memberId: string) {
+  return `sauti-member-ai:sessions:${memberId}`;
+}
+
+function loadMemberAiSessions(memberId: string): MemberChatSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(memberAiStorageKey(memberId)) ?? "[]");
+    return Array.isArray(parsed) ? parsed.slice(0, 30) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMemberAiSessions(memberId: string, sessions: MemberChatSession[]) {
+  const next = sessions.slice(0, 30);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(memberAiStorageKey(memberId), JSON.stringify(next));
+  }
+  return next;
 }

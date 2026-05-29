@@ -500,6 +500,7 @@ function SecretKeysPage() {
 
 /* ---------------- M-Pesa audit tab ---------------- */
 function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
+  const [historyDate, setHistoryDate] = useState(() => localDateKey());
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["secret-mpesa-balance"],
     queryFn: () => fetchMpesaAudit({ data: {} }),
@@ -539,12 +540,37 @@ function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
     const openingBalance =
       currentBalance === undefined ? undefined : currentBalance - depositsToday + withdrawalsToday;
 
+    const balanceHistory = Array.from(
+      datedRows
+        .filter((item) => item.paybillBalance !== undefined && item.dateKey)
+        .reduce((map, item) => {
+          const current = map.get(item.dateKey);
+          if (!current || item.time > current.time) map.set(item.dateKey, item);
+          return map;
+        }, new Map<string, (typeof datedRows)[number]>())
+        .entries(),
+    )
+      .map(([dateKey, item]) => ({
+        dateKey,
+        balance: item.paybillBalance,
+        lastUpdatedAt: Number.isFinite(item.time) ? new Date(item.time).toLocaleString() : "-",
+        reference: item.row.mpesaRef,
+        deposits: datedRows
+          .filter((row) => row.dateKey === dateKey && row.row.direction !== "out")
+          .reduce((sum, row) => sum + row.amount, 0),
+        withdrawals: datedRows
+          .filter((row) => row.dateKey === dateKey && row.row.direction === "out")
+          .reduce((sum, row) => sum + row.amount, 0),
+      }))
+      .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+
     return {
       currentBalance,
       openingBalance,
       depositsToday,
       withdrawalsToday,
       netMovementToday: depositsToday - withdrawalsToday,
+      balanceHistory,
       lastUpdatedAt:
         latestBalanceRow && Number.isFinite(latestBalanceRow.time)
           ? new Date(latestBalanceRow.time).toLocaleString()
@@ -552,6 +578,7 @@ function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
       lastReference: latestBalanceRow?.row.mpesaRef,
     };
   }, [rows, todayKey]);
+  const selectedHistory = summary.balanceHistory.find((row) => row.dateKey === historyDate);
 
   const balanceText = (value: number | undefined) =>
     value === undefined ? "Awaiting Safaricom" : fmtKES(value);
@@ -614,9 +641,85 @@ function MpesaAuditTab({ fetchMpesaAudit }: { fetchMpesaAudit: any }) {
           OrgAccountBalance will update this balance.
         </div>
       ) : (
-        <div className="p-5 text-xs text-muted-foreground">
-          Last Safaricom balance update: {summary.lastUpdatedAt ?? "-"}
-          {summary.lastReference ? ` (${summary.lastReference})` : ""}
+        <div className="space-y-4 p-5">
+          <div className="text-xs text-muted-foreground">
+            Last Safaricom balance update: {summary.lastUpdatedAt ?? "-"}
+            {summary.lastReference ? ` (${summary.lastReference})` : ""}
+          </div>
+          <div className="rounded-lg border border-border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold">Paybill balance history</div>
+                <div className="text-xs text-muted-foreground">
+                  Daily balances are the last real Safaricom callback balance received on that date.
+                </div>
+              </div>
+              <input
+                type="date"
+                value={historyDate}
+                onChange={(event) => setHistoryDate(event.target.value)}
+                className="rounded-md border border-border bg-card px-3 py-1.5 text-xs"
+              />
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-4">
+              <div className="rounded-md bg-card px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Real balance
+                </div>
+                <div className="text-sm font-semibold">
+                  {balanceText(selectedHistory?.balance)}
+                </div>
+              </div>
+              <div className="rounded-md bg-card px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Deposits
+                </div>
+                <div className="text-sm font-semibold">
+                  {fmtKES(selectedHistory?.deposits ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-md bg-card px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Withdrawals
+                </div>
+                <div className="text-sm font-semibold">
+                  {fmtKES(selectedHistory?.withdrawals ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-md bg-card px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Last callback
+                </div>
+                <div className="text-sm font-semibold">
+                  {selectedHistory?.lastUpdatedAt ?? "-"}
+                </div>
+              </div>
+            </div>
+            {summary.balanceHistory.length > 0 ? (
+              <div className="mt-3 max-h-52 overflow-y-auto rounded-md border border-border">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Date</th>
+                      <th className="px-3 py-2 text-right">Real balance</th>
+                      <th className="px-3 py-2 text-left">Ref</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border bg-card">
+                    {summary.balanceHistory.map((row) => (
+                      <tr key={row.dateKey}>
+                        <td className="px-3 py-2">{row.dateKey}</td>
+                        <td className="px-3 py-2 text-right font-semibold">
+                          {balanceText(row.balance)}
+                        </td>
+                        <td className="px-3 py-2 font-mono">{row.reference ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
     </section>
