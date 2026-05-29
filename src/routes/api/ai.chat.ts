@@ -21,8 +21,12 @@ function missingTableOrColumn(error: any) {
   return (
     error?.code === "42P01" ||
     error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205" ||
     message.includes("does not exist") ||
-    message.includes("column")
+    message.includes("column") ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table")
   );
 }
 

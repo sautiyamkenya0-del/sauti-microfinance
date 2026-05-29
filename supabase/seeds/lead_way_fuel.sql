@@ -179,35 +179,19 @@ values
 -- Remove legacy Lead Way rows whose IDs collapsed transactions by member/date only.
 delete from public.system_outflows
 where supplier_id = 'SUP-LEAD-WAY-PETROL'
-  and note like 'Sauti payment to Lead Way%'
-  and id !~ '-[0-9]{4}$';
+  and note like 'Sauti payment to Lead Way%';
 
 delete from public.supplier_fulfillment_requests
 where supplier_id = 'SUP-LEAD-WAY-PETROL'
-  and detail->>'sourceWorkbook' = 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx'
-  and id !~ '-[0-9]{4}$';
+  and detail->>'sourceWorkbook' = 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx';
 
 delete from public.loans
 where supplier_id = 'SUP-LEAD-WAY-PETROL'
-  and supplier_payload->>'sourceWorkbook' = 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx'
-  and id !~ '-[0-9]{4}$';
-
-do $$
-begin
-  if exists (
-    select 1
-    from pg_trigger
-    where tgrelid = 'public.loans'::regclass
-      and tgname = 'trg_loans_reject_duplicate_open'
-      and not tgisinternal
-  ) then
-    alter table public.loans disable trigger trg_loans_reject_duplicate_open;
-  end if;
-end $$;
+  and supplier_payload->>'sourceWorkbook' = 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx';
 
 with prepared as (
   select
-    'LW-FUEL-' || member_id || '-' || to_char(entry_date,'YYYYMMDD') || '-' || lpad(row_order::text, 4, '0') as loan_id,
+    'LW-FUEL-' || member_id || '-ACCOUNT' as loan_id,
     row_order,
     member_id,
     member_name,
@@ -216,6 +200,30 @@ with prepared as (
     entry_date,
     100.00::numeric(12,2) as fuel_charge
   from lead_way_fuel_seed
+),
+grouped as (
+  select
+    loan_id,
+    member_id,
+    min(entry_date) as first_entry_date,
+    max(entry_date) as last_entry_date,
+    sum(fuel_amount)::numeric(12,2) as fuel_amount,
+    sum(fuel_charge)::numeric(12,2) as fuel_charge,
+    jsonb_agg(
+      jsonb_build_object(
+        'date', entry_date,
+        'fuelType', 'Fuel',
+        'total', fuel_amount,
+        'fuelCharge', fuel_charge,
+        'vehiclePlate', plate,
+        'attendantName', 'LEAD WAY PETROL STATION',
+        'seedRow', row_order
+      )
+      order by entry_date, row_order
+    ) as fuel_rows,
+    jsonb_agg(row_order order by entry_date, row_order) as seed_rows
+  from prepared
+  group by loan_id, member_id
 )
 insert into public.loans (
   id, member_id, principal, approved_amount, financed_principal_amount,
@@ -239,8 +247,8 @@ select
   'paid',
   0,
   0,
-  30,
-  entry_date,
+  1,
+  first_entry_date,
   'active',
   'S1',
   0,
@@ -250,27 +258,19 @@ select
   'paid',
   jsonb_build_object(
     'supplierName', 'LEAD WAY PETROL STATION',
-    'vehiclePlate', plate,
+    'vehiclePlate', null,
     'estimatedTotal', fuel_amount,
     'fuelCharge', fuel_charge,
     'productChargeAmount', fuel_charge,
     'sourceWorkbook', 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx',
-    'entryDate', entry_date,
-    'seedRow', row_order,
-    'jobCard', jsonb_build_object(
-      'rows', jsonb_build_array(jsonb_build_object(
-        'date', entry_date,
-        'fuelType', 'Fuel',
-        'total', fuel_amount,
-        'fuelCharge', fuel_charge,
-        'vehiclePlate', plate,
-        'attendantName', 'LEAD WAY PETROL STATION'
-      ))
-    )
+    'entryDate', first_entry_date,
+    'lastEntryDate', last_entry_date,
+    'seedRows', seed_rows,
+    'jobCard', jsonb_build_object('rows', fuel_rows)
   ),
   'S1',
   'Seeded from Lead Way reconciliation workbook'
-from prepared
+from grouped
 on conflict (id) do update set
   principal = excluded.principal,
   approved_amount = excluded.approved_amount,
@@ -278,22 +278,9 @@ on conflict (id) do update set
   supplier_payload = excluded.supplier_payload,
   updated_at = now();
 
-do $$
-begin
-  if exists (
-    select 1
-    from pg_trigger
-    where tgrelid = 'public.loans'::regclass
-      and tgname = 'trg_loans_reject_duplicate_open'
-      and not tgisinternal
-  ) then
-    alter table public.loans enable trigger trg_loans_reject_duplicate_open;
-  end if;
-end $$;
-
 with prepared as (
   select
-    'LW-FUEL-' || member_id || '-' || to_char(entry_date,'YYYYMMDD') || '-' || lpad(row_order::text, 4, '0') as loan_id,
+    'LW-FUEL-' || member_id || '-ACCOUNT' as loan_id,
     'SFR-' || member_id || '-' || to_char(entry_date,'YYYYMMDD') || '-' || lpad(row_order::text, 4, '0') as request_id,
     row_order,
     member_id,
@@ -343,7 +330,7 @@ on conflict (id) do update set
 
 with prepared as (
   select
-    'LW-FUEL-' || member_id || '-' || to_char(entry_date,'YYYYMMDD') || '-' || lpad(row_order::text, 4, '0') as loan_id,
+    'LW-FUEL-' || member_id || '-ACCOUNT' as loan_id,
     'OUT-LEADWAY-' || member_id || '-' || to_char(entry_date,'YYYYMMDD') || '-' || lpad(row_order::text, 4, '0') as outflow_id,
     row_order,
     member_id,

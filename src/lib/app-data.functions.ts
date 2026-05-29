@@ -280,7 +280,13 @@ function isMissingColumnError(error: any, column: string) {
 
 function isMissingRelationError(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
-  return error?.code === "42P01" || message.includes("does not exist");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table")
+  );
 }
 
 type AuditActor = {

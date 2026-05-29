@@ -358,3 +358,5 @@ on conflict (tool_key, role) do update set
   requires_approval = excluded.requires_approval,
   metadata = excluded.metadata,
   updated_at = now();
+
+notify pgrst, 'reload schema';
