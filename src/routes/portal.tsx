@@ -37,7 +37,7 @@ import { downloadLetterheadHtml, LetterheadDocument } from "@/components/Letterh
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
-import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
+import { createMemberLoanApplicationRecord, listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   listClientNotices,
   listMemberSelfServiceWorkspaceRecord,
@@ -185,6 +185,7 @@ function Portal() {
   const loadCarryoverLoans = useServerFn(listPortalCarryoverLoans);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
+  const createMemberLoanApplication = useServerFn(createMemberLoanApplicationRecord);
   const navigate = useNavigate();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
@@ -459,21 +460,15 @@ function Portal() {
     const days = Math.max(1, Number(loanRequestDays) || 30);
     if (amount <= 0) return toast.error("Enter the loan amount.");
     if (!loanRequestPurpose.trim()) return toast.error("Enter the loan purpose.");
-    await submit({
-      kind: "other",
-      title: `${loanRequestKind === "financial" ? "Loan" : loanRequestKind} application`,
-      detail: `${member.name} requests ${fmtKES(amount)} for ${days} days. Purpose: ${loanRequestPurpose}.`,
-      requestedBy: member.id,
-      requestedByName: member.name,
-      payload: {
-        requestType: "loan",
+    const result = await createMemberLoanApplication({
+      data: {
         loanKind: loanRequestKind,
-        amount,
+        principal: amount,
         termDays: days,
         purpose: loanRequestPurpose,
       },
     });
-    toast.success("Loan application submitted for staff review");
+    toast.success(`Loan application ${result.id} submitted for staff review`);
     setLoanRequestAmount("");
     setLoanRequestDays("30");
     setLoanRequestPurpose("");
@@ -583,10 +578,19 @@ function Portal() {
               <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
                 {isStaffView ? "View member" : "Member sign-in"}
               </span>
+              <div className="mt-1">
+                <MemberSearchSelect
+                  members={members}
+                  value={memberId}
+                  onChange={setMemberId}
+                  emptyLabel="Choose member"
+                  describeMember={(m) => `${m.id} - ${m.name}`}
+                />
+              </div>
               <select
                 value={memberId}
                 onChange={(e) => setMemberId(e.target.value)}
-                className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                className="hidden"
               >
                 {members.map((m) => (
                   <option key={m.id} value={m.id}>

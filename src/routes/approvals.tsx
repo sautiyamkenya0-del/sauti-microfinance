@@ -16,7 +16,7 @@ export const Route = createFileRoute("/approvals")({
 });
 
 function ApprovalsPage() {
-  const { currentUser, loans, members, approveLoan, rejectLoan } = useStore();
+  const { currentUser, loans, members, appraisals, approveLoan, rejectLoan } = useStore();
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const { items, decide } = useApprovals();
   const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
@@ -70,7 +70,7 @@ function ApprovalsPage() {
                 <tr>
                   <th className="px-5 py-2.5 text-left">Loan</th>
                   <th className="text-left">Member</th>
-                  <th className="text-right">Principal</th>
+                  <th className="text-right">Amount</th>
                   <th className="text-left pl-4">Repayment Days</th>
                   <th className="text-left pl-4">Officer</th>
                   <th className="text-right pr-5">Action</th>
@@ -84,67 +84,107 @@ function ApprovalsPage() {
                     </td>
                   </tr>
                 )}
-                {pendingLoans.map((l) => (
-                  <tr key={l.id} className="hover:bg-muted/30">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-2">
-                        <Banknote className="h-4 w-4 text-primary" />
-                        <span className="font-mono text-xs">{l.id}</span>
-                      </div>
-                    </td>
-                    <td>{memberName(l.memberId)}</td>
-                    <td className="text-right font-medium">{fmtKES(l.principal)}</td>
-                    <td className="pl-4">
-                      <input
-                        type="number"
-                        min={1}
-                        value={repaymentDays[l.id] ?? l.termDays ?? 30}
-                        onChange={(event) =>
-                          setRepaymentDays((current) => ({
-                            ...current,
-                            [l.id]: Math.max(1, Number(event.target.value) || 1),
-                          }))
-                        }
-                        className="w-24 rounded-md border border-border bg-card px-2 py-1 text-xs"
-                        disabled={!canDecide}
-                      />
-                    </td>
-                    <td className="pl-4 text-xs text-muted-foreground">{l.officerId}</td>
-                    <td className="text-right pr-5 space-x-2">
-                      <Link to="/loans" className="text-xs text-primary hover:underline">
-                        Open in Loans
-                      </Link>
-                      {canDecide && (
-                        <>
-                          <button
-                            onClick={async () => {
-                              await approveLoan(
-                                l.id,
-                                l.principal,
-                                currentUser.id,
-                                "Approved from queue",
-                                repaymentDays[l.id] ?? l.termDays ?? 30,
-                              );
-                              toast.success("Loan approved and payout requested");
-                            }}
-                            className="text-xs px-2 py-1 rounded-md bg-success/15 text-success hover:bg-success/25"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await rejectLoan(l.id, currentUser.id, "Rejected from queue");
-                              toast.warning("Loan rejected");
-                            }}
-                            className="text-xs px-2 py-1 rounded-md bg-destructive/15 text-destructive hover:bg-destructive/25"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {pendingLoans.map((l) => {
+                  const appraisal = appraisals.find((row) => row.loanId === l.id);
+                  const canApproveLoan =
+                    !!appraisal &&
+                    !!l.reviewedBy &&
+                    String(appraisal.decision ?? "").toLowerCase() !== "reject";
+                  const reviewedAmount = l.approvedAmount ?? l.principal;
+                  return (
+                    <tr key={l.id} className="hover:bg-muted/30">
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          <Banknote className="h-4 w-4 text-primary" />
+                          <span className="font-mono text-xs">{l.id}</span>
+                        </div>
+                        {!appraisal ? (
+                          <div className="mt-1 text-[11px] text-warning-foreground">
+                            Appraisal required before approval
+                          </div>
+                        ) : !l.reviewedBy ? (
+                          <div className="mt-1 text-[11px] text-warning-foreground">
+                            Director review required before approval
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            Reviewed: {fmtKES(reviewedAmount)} / {l.termDays ?? 30} days
+                          </div>
+                        )}
+                      </td>
+                      <td>{memberName(l.memberId)}</td>
+                      <td className="text-right font-medium">
+                        <div>{fmtKES(reviewedAmount)}</div>
+                        {reviewedAmount !== l.principal ? (
+                          <div className="text-[11px] font-normal text-muted-foreground">
+                            applied {fmtKES(l.principal)}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="pl-4">
+                        <input
+                          type="number"
+                          min={1}
+                          value={repaymentDays[l.id] ?? l.termDays ?? 30}
+                          onChange={(event) =>
+                            setRepaymentDays((current) => ({
+                              ...current,
+                              [l.id]: Math.max(1, Number(event.target.value) || 1),
+                            }))
+                          }
+                          className="w-24 rounded-md border border-border bg-card px-2 py-1 text-xs"
+                          disabled={!canDecide || !canApproveLoan}
+                        />
+                      </td>
+                      <td className="pl-4 text-xs text-muted-foreground">{l.officerId}</td>
+                      <td className="space-x-2 pr-5 text-right">
+                        <Link to="/loans" className="text-xs text-primary hover:underline">
+                          Open in Loans
+                        </Link>
+                        {canDecide && (
+                          <>
+                            <button
+                              disabled={!canApproveLoan}
+                              title={
+                                canApproveLoan
+                                  ? "Approve loan"
+                                  : "Complete appraisal and director review before approval"
+                              }
+                              onClick={async () => {
+                                if (!canApproveLoan) {
+                                  toast.error(
+                                    "Complete the loan appraisal and save the director review before approval.",
+                                  );
+                                  return;
+                                }
+                                await approveLoan(
+                                  l.id,
+                                  reviewedAmount,
+                                  currentUser.id,
+                                  "Approved from queue",
+                                  repaymentDays[l.id] ?? l.termDays ?? 30,
+                                );
+                                toast.success("Loan approved and payout requested");
+                              }}
+                              className="rounded-md bg-success/15 px-2 py-1 text-xs text-success hover:bg-success/25 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await rejectLoan(l.id, currentUser.id, "Rejected from queue");
+                                toast.warning("Loan rejected");
+                              }}
+                              className="rounded-md bg-destructive/15 px-2 py-1 text-xs text-destructive hover:bg-destructive/25"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -262,11 +302,7 @@ function RequestRow({
 }: {
   req: ApprovalRequest;
   canDecide: boolean;
-  onDecide: (
-    d: "approved" | "rejected",
-    note?: string,
-    adjustedAmount?: number,
-  ) => Promise<void>;
+  onDecide: (d: "approved" | "rejected", note?: string, adjustedAmount?: number) => Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const [adjustedAmount, setAdjustedAmount] = useState("");

@@ -5397,7 +5397,10 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       const { data: existingServiceMembers, error: serviceNumberError } = await supabaseAdmin
         .from("members")
         .select("service_member_number");
-      if (serviceNumberError && !isMissingColumnError(serviceNumberError, "service_member_number")) {
+      if (
+        serviceNumberError &&
+        !isMissingColumnError(serviceNumberError, "service_member_number")
+      ) {
         throw new Error(serviceNumberError.message);
       }
       serviceMemberNumber = serviceNumberError
@@ -5660,7 +5663,10 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       const { data: existingServiceMembers, error: serviceNumberError } = await supabaseAdmin
         .from("members")
         .select("service_member_number");
-      if (serviceNumberError && !isMissingColumnError(serviceNumberError, "service_member_number")) {
+      if (
+        serviceNumberError &&
+        !isMissingColumnError(serviceNumberError, "service_member_number")
+      ) {
         throw new Error(serviceNumberError.message);
       }
       serviceMemberNumber = serviceNumberError
@@ -6524,6 +6530,222 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     return { id };
   });
 
+export const createMemberLoanApplicationRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      principal: number;
+      termDays?: number;
+      purpose?: string;
+      loanKind?: "financial" | "fuel" | "stock" | "service";
+    }) => ({
+      principal: Math.max(0, Number(data?.principal ?? 0)),
+      termDays:
+        data?.termDays == null ? undefined : Math.max(1, Math.floor(Number(data.termDays ?? 1))),
+      purpose: data?.purpose?.trim().slice(0, 300) || undefined,
+      loanKind:
+        data?.loanKind === "fuel" || data?.loanKind === "stock" || data?.loanKind === "service"
+          ? data.loanKind
+          : "financial",
+    }),
+  )
+  .handler(async ({ data }) => {
+    const member = await requireMemberActor();
+    if (data.principal <= 0) throw new Error("Loan amount must be above zero.");
+
+    const supabaseAdmin = await requireSupabaseAdmin();
+    await assertNoDuplicateOpenLoanKind(supabaseAdmin, {
+      memberId: member.id,
+      loanKind: data.loanKind,
+    });
+
+    const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+    const termDays = normalizeLoanKindTermDays(data.loanKind, data.termDays, undefined);
+    const termMonths = termPeriodsForLoanKind(data.loanKind, termDays, undefined);
+    const pricing = computeLoanPricing({
+      netAmount: data.principal,
+      termDays,
+      termMonths,
+      loanKind: data.loanKind,
+      settings: policySettings,
+    });
+    const id = await nextPrefixedId("loans", "L", 1001);
+    const { error } = await supabaseAdmin.from("loans").insert({
+      id,
+      member_id: member.id,
+      principal: data.principal,
+      approved_amount: null,
+      financed_principal_amount: pricing.financedPrincipal,
+      net_disbursed_amount: 0,
+      processing_fee_amount: data.loanKind === "financial" ? pricing.processing : 0,
+      insurance_fee_amount: data.loanKind === "financial" ? pricing.insurance : 0,
+      transaction_fee_amount: data.loanKind === "financial" ? pricing.transactionFee : 0,
+      processing_fee_mode: data.loanKind === "financial" ? "financed" : "upfront",
+      insurance_fee_mode: data.loanKind === "financial" ? "financed" : "upfront",
+      disbursement_status: "not_requested",
+      rate: pricing.ratePct,
+      term_months: termMonths,
+      term_days: termDays,
+      start_date: todayInKenya(),
+      status: "pending",
+      officer_id: null,
+      paid: 0,
+      purpose: data.purpose ?? "Member portal loan application",
+      loan_kind: data.loanKind,
+      supplier_request_status: data.loanKind === "financial" ? null : "not_requested",
+      supplier_payload: {
+        application: {
+          source: "member_portal",
+          submittedAt: new Date().toISOString(),
+          requestedAmount: data.principal,
+          requestedTermDays: termDays,
+          purpose: data.purpose ?? null,
+        },
+      },
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor: { id: member.id, name: member.name, role: "member" },
+      action: "loan.member_application.created",
+      targetType: "loan",
+      targetId: id,
+      summary: `${member.name} submitted loan application ${id} from the member portal`,
+      details: {
+        memberId: member.id,
+        amount: data.principal,
+        termDays,
+        loanKind: data.loanKind,
+        purpose: clipAuditText(data.purpose, 180),
+      },
+    });
+
+    return { id, termDays, ratePct: pricing.ratePct };
+  });
+
+export const saveLoanReviewRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      loanId: string;
+      approvedAmount?: number;
+      principal?: number;
+      termDays?: number;
+      reviewedBy: string;
+      purpose?: string;
+      note?: string;
+    }) => ({
+      loanId: String(data?.loanId ?? "").trim(),
+      approvedAmount:
+        data?.approvedAmount == null ? undefined : Math.max(0, Number(data.approvedAmount ?? 0)),
+      principal: data?.principal == null ? undefined : Math.max(0, Number(data.principal ?? 0)),
+      termDays: data?.termDays == null ? undefined : Math.max(1, Math.floor(Number(data.termDays))),
+      reviewedBy: String(data?.reviewedBy ?? "").trim(),
+      purpose: data?.purpose?.trim() || undefined,
+      note: data?.note?.trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.loanId) throw new Error("Loan id is required.");
+
+    const supabaseAdmin = await requireSupabaseAdmin();
+    const { data: loan, error: loanError } = await supabaseAdmin
+      .from("loans")
+      .select("*")
+      .eq("id", data.loanId)
+      .maybeSingle();
+    if (loanError) throw new Error(loanError.message);
+    if (!loan) throw new Error("Loan not found.");
+    if (loan.status !== "pending") throw new Error("Only pending loans can be reviewed.");
+    if (loan.supplier_request_status === "approved") {
+      throw new Error("This supplier-backed loan has already been approved for fulfillment.");
+    }
+
+    const { data: appraisal, error: appraisalError } = await supabaseAdmin
+      .from("appraisals")
+      .select("id, decision, total_score")
+      .eq("loan_id", data.loanId)
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (appraisalError) throw new Error(appraisalError.message);
+    if (!appraisal) throw new Error("This loan must be appraised before it can be reviewed.");
+    if (String(appraisal.decision ?? "").toLowerCase() === "reject") {
+      throw new Error("This appraisal recommends rejection. Reject the loan or update appraisal.");
+    }
+
+    const principal = data.principal ?? Number(loan.principal ?? 0);
+    if (principal <= 0) throw new Error("Applied amount must be above zero.");
+    const approvedAmount = data.approvedAmount ?? Number(loan.approved_amount ?? principal);
+    if (approvedAmount <= 0) throw new Error("Reviewed amount must be above zero.");
+    if (approvedAmount > principal) {
+      throw new Error("Reviewed amount cannot exceed the applied amount.");
+    }
+
+    const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+    const loanKind = String(loan.loan_kind ?? "financial");
+    const supplierBacked = loanKind !== "financial";
+    const shouldUsePolicyRate =
+      loanKind === "financial" && (data.termDays != null || data.approvedAmount != null);
+    const pricing = computeLoanPricing({
+      netAmount: approvedAmount,
+      ratePct: shouldUsePolicyRate ? undefined : Number(loan.rate ?? 0),
+      termDays: data.termDays ?? (Number(loan.term_days ?? 0) || undefined),
+      termMonths: Number(loan.term_months ?? 0) || undefined,
+      processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
+      insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
+      loanKind,
+      supplierPayload: asJsonObject(loan.supplier_payload),
+      settings: policySettings,
+    });
+
+    const { error: updateError } = await supabaseAdmin
+      .from("loans")
+      .update({
+        principal,
+        approved_amount: approvedAmount,
+        financed_principal_amount: pricing.financedPrincipal,
+        processing_fee_amount: supplierBacked ? 0 : pricing.processing,
+        insurance_fee_amount: supplierBacked ? 0 : pricing.insurance,
+        transaction_fee_amount: supplierBacked ? 0 : pricing.transactionFee,
+        processing_fee_mode: supplierBacked
+          ? "upfront"
+          : loan.processing_fee_mode === "upfront"
+            ? "upfront"
+            : "financed",
+        insurance_fee_mode: supplierBacked
+          ? "upfront"
+          : loan.insurance_fee_mode === "upfront"
+            ? "upfront"
+            : "financed",
+        rate: supplierBacked ? 0 : pricing.ratePct,
+        term_days: pricing.termDays,
+        term_months: pricing.termMonths,
+        purpose: data.purpose ?? loan.purpose ?? null,
+        reviewed_by: actor.id,
+        review_note: data.note ?? null,
+      })
+      .eq("id", data.loanId);
+    if (updateError) throw new Error(updateError.message);
+
+    await auditAction({
+      actor,
+      action: "loan.reviewed",
+      targetType: "loan",
+      targetId: data.loanId,
+      summary: `${actor.name} reviewed loan ${data.loanId}`,
+      details: {
+        memberId: loan.member_id,
+        principal,
+        approvedAmount,
+        termDays: pricing.termDays,
+        appraisalId: appraisal.id,
+        note: clipAuditText(data.note, 160),
+      },
+    });
+
+    return { ok: true, approvedAmount, termDays: pricing.termDays };
+  });
+
 type SystemPayoutPurpose = "loan_disbursement" | "staff_payroll";
 
 function supplierPayloadOwnManualPenaltyAmount(payload?: Record<string, unknown> | null) {
@@ -6899,6 +7121,28 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       throw new Error("This supplier-backed loan is already approved and waiting for fulfillment.");
     }
 
+    if (data.decision === "approved") {
+      if (!loan.reviewed_by) {
+        throw new Error("This loan must be reviewed before it can be approved.");
+      }
+      const { data: appraisal, error: appraisalError } = await supabaseAdmin
+        .from("appraisals")
+        .select("id, decision, total_score")
+        .eq("loan_id", data.loanId)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (appraisalError) throw new Error(appraisalError.message);
+      if (!appraisal) {
+        throw new Error("This loan must be appraised before it can be approved.");
+      }
+      if (String(appraisal.decision ?? "").toLowerCase() === "reject") {
+        throw new Error(
+          "This loan appraisal recommends rejection. Review the appraisal before approving.",
+        );
+      }
+    }
+
     if (data.decision === "rejected") {
       const { error } = await supabaseAdmin
         .from("loans")
@@ -6923,7 +7167,8 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
-    const approvedAmount = data.approvedAmount ?? Number(loan.principal ?? 0);
+    const approvedAmount =
+      data.approvedAmount ?? Number(loan.approved_amount ?? loan.principal ?? 0);
     if (approvedAmount <= 0) throw new Error("Approved amount must be above zero.");
     await assertNoDuplicateOpenLoanKind(supabaseAdmin, {
       memberId: String(loan.member_id ?? ""),
@@ -6931,18 +7176,20 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       excludeLoanId: data.loanId,
     });
     const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+    const loanKind = String(loan.loan_kind ?? "financial");
+    const shouldUsePolicyRate =
+      loanKind === "financial" && (data.termDays != null || data.approvedAmount != null);
     const pricing = computeLoanPricing({
       netAmount: approvedAmount,
-      ratePct: Number(loan.rate ?? 0),
+      ratePct: shouldUsePolicyRate ? undefined : Number(loan.rate ?? 0),
       termDays: data.termDays ?? (Number(loan.term_days ?? 0) || undefined),
       termMonths: Number(loan.term_months ?? 0) || undefined,
       processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
-      loanKind: String(loan.loan_kind ?? "financial"),
+      loanKind,
       supplierPayload: asJsonObject(loan.supplier_payload),
       settings: policySettings,
     });
-    const loanKind = String(loan.loan_kind ?? "financial");
     if (loanKind !== "financial") {
       const { error } = await supabaseAdmin
         .from("loans")
@@ -8287,7 +8534,11 @@ export const polishStaffMemoRecord = createServerFn({ method: "POST" })
     return { body: String(answer ?? "").trim() };
   });
 
-async function readOptionalAiRows(runtimeDb: any, table: string, queryBuilder?: (query: any) => any) {
+async function readOptionalAiRows(
+  runtimeDb: any,
+  table: string,
+  queryBuilder?: (query: any) => any,
+) {
   let query = runtimeDb.from(table).select("*");
   if (queryBuilder) query = queryBuilder(query);
   const { data, error } = await query;
@@ -8396,43 +8647,43 @@ export const listSautiAiWorkspaceRecord = createServerFn({ method: "GET" }).hand
     toolPermissions,
     callSessions,
   ] = await Promise.all([
-      readOptionalAiRows(runtimeDb, "ai_conversations", (query) =>
-        ownerFilter(query).order("updated_at", { ascending: false }).limit(80),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_messages", (query) =>
-        query.order("created_at", { ascending: true }).limit(5000),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_memories", (query) =>
-        query
-          .or(`created_by.eq.${actor.id},owner_id.eq.${actor.id},scope.in.(team,organization)`)
-          .order("updated_at", { ascending: false })
-          .limit(120),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_observations", (query) =>
-        query.order("created_at", { ascending: false }).limit(80),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_files", (query) =>
-        query.order("created_at", { ascending: false }).limit(60),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_file_chunks", (query) =>
-        query.order("created_at", { ascending: false }).limit(500),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_knowledge_links", (query) =>
-        query.order("created_at", { ascending: false }).limit(500),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_research_logs", (query) =>
-        query.order("created_at", { ascending: false }).limit(80),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_agents", (query) =>
-        query.eq("enabled", true).order("name", { ascending: true }),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_tool_permissions", (query) =>
-        query.order("tool_key", { ascending: true }).limit(200),
-      ),
-      readOptionalAiRows(runtimeDb, "ai_call_sessions", (query) =>
-        query.eq("owner_id", actor.id).order("started_at", { ascending: false }).limit(30),
-      ),
-    ]);
+    readOptionalAiRows(runtimeDb, "ai_conversations", (query) =>
+      ownerFilter(query).order("updated_at", { ascending: false }).limit(80),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_messages", (query) =>
+      query.order("created_at", { ascending: true }).limit(5000),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_memories", (query) =>
+      query
+        .or(`created_by.eq.${actor.id},owner_id.eq.${actor.id},scope.in.(team,organization)`)
+        .order("updated_at", { ascending: false })
+        .limit(120),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_observations", (query) =>
+      query.order("created_at", { ascending: false }).limit(80),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_files", (query) =>
+      query.order("created_at", { ascending: false }).limit(60),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_file_chunks", (query) =>
+      query.order("created_at", { ascending: false }).limit(500),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_knowledge_links", (query) =>
+      query.order("created_at", { ascending: false }).limit(500),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_research_logs", (query) =>
+      query.order("created_at", { ascending: false }).limit(80),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_agents", (query) =>
+      query.eq("enabled", true).order("name", { ascending: true }),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_tool_permissions", (query) =>
+      query.order("tool_key", { ascending: true }).limit(200),
+    ),
+    readOptionalAiRows(runtimeDb, "ai_call_sessions", (query) =>
+      query.eq("owner_id", actor.id).order("started_at", { ascending: false }).limit(30),
+    ),
+  ]);
 
   return {
     actor: { id: actor.id, name: actor.name, role: actor.role },
@@ -8464,14 +8715,24 @@ export const recordSautiAiConversationRecord = createServerFn({ method: "POST" }
       metadata?: Record<string, unknown>;
     }) => ({
       id: String(data?.id ?? "").trim() || makeId("AIC"),
-      title: String(data?.title ?? "New SautiAI chat").trim().slice(0, 160),
-      folder: String(data?.folder ?? "").trim().slice(0, 80) || undefined,
+      title: String(data?.title ?? "New SautiAI chat")
+        .trim()
+        .slice(0, 160),
+      folder:
+        String(data?.folder ?? "")
+          .trim()
+          .slice(0, 80) || undefined,
       pinned: data?.pinned === true,
       mode: ["chat", "call", "research", "file", "agent"].includes(String(data?.mode ?? "chat"))
         ? String(data?.mode ?? "chat")
         : "chat",
-      agentKey: String(data?.agentKey ?? "").trim().slice(0, 60) || undefined,
-      visibility: ["private", "team", "organization"].includes(String(data?.visibility ?? "private"))
+      agentKey:
+        String(data?.agentKey ?? "")
+          .trim()
+          .slice(0, 60) || undefined,
+      visibility: ["private", "team", "organization"].includes(
+        String(data?.visibility ?? "private"),
+      )
         ? String(data?.visibility ?? "private")
         : "private",
       messages: normalizeAiMessages(data?.messages),
@@ -8524,7 +8785,11 @@ export const recordSautiAiConversationRecord = createServerFn({ method: "POST" }
       targetType: "ai_conversation",
       targetId: data.id,
       summary: `${actor.name} saved Sauti AI conversation ${data.title}`,
-      details: { mode: data.mode, agentKey: data.agentKey ?? null, messageCount: data.messages.length },
+      details: {
+        mode: data.mode,
+        agentKey: data.agentKey ?? null,
+        messageCount: data.messages.length,
+      },
     });
     return { id: data.id, persisted: true };
   });
@@ -8541,16 +8806,23 @@ export const upsertSautiAiMemoryRecord = createServerFn({ method: "POST" })
       metadata?: Record<string, unknown>;
     }) => ({
       id: String(data?.id ?? "").trim() || makeId("AIMEM"),
-      content: String(data?.content ?? "").trim().slice(0, 8000),
+      content: String(data?.content ?? "")
+        .trim()
+        .slice(0, 8000),
       memoryType: ["user", "operational", "contextual", "governance"].includes(
         String(data?.memoryType ?? "user"),
       )
         ? String(data?.memoryType ?? "user")
         : "user",
-      scope: ["private", "team", "organization", "member"].includes(String(data?.scope ?? "private"))
+      scope: ["private", "team", "organization", "member"].includes(
+        String(data?.scope ?? "private"),
+      )
         ? String(data?.scope ?? "private")
         : "private",
-      source: String(data?.source ?? "manual").trim().slice(0, 80) || "manual",
+      source:
+        String(data?.source ?? "manual")
+          .trim()
+          .slice(0, 80) || "manual",
       tags: normalizeAiTags(data?.tags),
       metadata: asJsonObject(data?.metadata),
     }),
@@ -8585,7 +8857,11 @@ export const upsertSautiAiMemoryRecord = createServerFn({ method: "POST" })
       targetType: "ai_memory",
       targetId: data.id,
       summary: `${actor.name} saved Sauti AI memory`,
-      details: { memoryType: data.memoryType, scope: data.scope, content: clipAuditText(data.content, 180) },
+      details: {
+        memoryType: data.memoryType,
+        scope: data.scope,
+        content: clipAuditText(data.content, 180),
+      },
     });
     return { id: data.id, persisted: true, approved };
   });
@@ -8601,14 +8877,27 @@ export const createSautiAiObservationRecord = createServerFn({ method: "POST" })
       entityId?: string;
       metadata?: Record<string, unknown>;
     }) => ({
-      title: String(data?.title ?? "").trim().slice(0, 180),
-      detail: String(data?.detail ?? "").trim().slice(0, 12000),
-      observationType: String(data?.observationType ?? "workflow").trim().slice(0, 80) || "workflow",
+      title: String(data?.title ?? "")
+        .trim()
+        .slice(0, 180),
+      detail: String(data?.detail ?? "")
+        .trim()
+        .slice(0, 12000),
+      observationType:
+        String(data?.observationType ?? "workflow")
+          .trim()
+          .slice(0, 80) || "workflow",
       severity: ["low", "medium", "high", "critical"].includes(String(data?.severity ?? "low"))
         ? String(data?.severity ?? "low")
         : "low",
-      entityType: String(data?.entityType ?? "").trim().slice(0, 80) || undefined,
-      entityId: String(data?.entityId ?? "").trim().slice(0, 120) || undefined,
+      entityType:
+        String(data?.entityType ?? "")
+          .trim()
+          .slice(0, 80) || undefined,
+      entityId:
+        String(data?.entityId ?? "")
+          .trim()
+          .slice(0, 120) || undefined,
       metadata: asJsonObject(data?.metadata),
     }),
   )
@@ -8733,10 +9022,20 @@ export const createSautiAiResearchLogRecord = createServerFn({ method: "POST" })
       trusted?: boolean;
       metadata?: Record<string, unknown>;
     }) => ({
-      query: String(data?.query ?? "").trim().slice(0, 1000),
-      sourceUrl: String(data?.sourceUrl ?? "").trim().slice(0, 2000) || undefined,
-      sourceTitle: String(data?.sourceTitle ?? "").trim().slice(0, 300) || undefined,
-      summary: String(data?.summary ?? "").trim().slice(0, 12000),
+      query: String(data?.query ?? "")
+        .trim()
+        .slice(0, 1000),
+      sourceUrl:
+        String(data?.sourceUrl ?? "")
+          .trim()
+          .slice(0, 2000) || undefined,
+      sourceTitle:
+        String(data?.sourceTitle ?? "")
+          .trim()
+          .slice(0, 300) || undefined,
+      summary: String(data?.summary ?? "")
+        .trim()
+        .slice(0, 12000),
       trusted: data?.trusted === true,
       metadata: asJsonObject(data?.metadata),
     }),
@@ -8783,11 +9082,19 @@ export const createSautiAiFileRecord = createServerFn({ method: "POST" })
       status?: string;
       metadata?: Record<string, unknown>;
     }) => ({
-      filename: String(data?.filename ?? "").trim().slice(0, 260),
-      mimeType: String(data?.mimeType ?? "").trim().slice(0, 120) || undefined,
+      filename: String(data?.filename ?? "")
+        .trim()
+        .slice(0, 260),
+      mimeType:
+        String(data?.mimeType ?? "")
+          .trim()
+          .slice(0, 120) || undefined,
       sizeBytes: Math.max(0, Math.floor(Number(data?.sizeBytes ?? 0) || 0)),
       textContent: String(data?.textContent ?? "").slice(0, 80000) || undefined,
-      summary: String(data?.summary ?? "").trim().slice(0, 12000) || undefined,
+      summary:
+        String(data?.summary ?? "")
+          .trim()
+          .slice(0, 12000) || undefined,
       tags: normalizeAiTags(data?.tags),
       status: ["uploaded", "processed", "failed"].includes(String(data?.status ?? "uploaded"))
         ? String(data?.status ?? "uploaded")
@@ -8824,7 +9131,7 @@ export const createSautiAiFileRecord = createServerFn({ method: "POST" })
         file_id: id,
         chunk_index: index,
         content,
-        summary: index === 0 ? data.summary ?? null : null,
+        summary: index === 0 ? (data.summary ?? null) : null,
         tags: data.tags,
         metadata: data.metadata,
       }));

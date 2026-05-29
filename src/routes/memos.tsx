@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { Badge, Section } from "@/components/ui-bits";
 import { CommsTabs } from "./staff";
 import { fmtKES, loanSummary, useStore } from "@/lib/store";
@@ -270,22 +271,17 @@ function MemosPage() {
         <Section title="Letterhead letter">
           <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.85fr)]">
             <div className="space-y-3">
-              <select
+              <MemberSearchSelect
+                members={members}
                 value={targetMemberId}
-                onChange={(event) => {
-                  setTargetMemberId(event.target.value);
+                onChange={(value) => {
+                  setTargetMemberId(value);
                   setAudience("member");
                   setDocumentKind("letter");
                 }}
-                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-              >
-                <option value="">Choose member</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.id} - {member.name}
-                  </option>
-                ))}
-              </select>
+                emptyLabel="Choose member"
+                describeMember={(member) => `${member.id} - ${member.name}`}
+              />
               <input
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}

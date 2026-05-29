@@ -6,7 +6,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
 import { roleLabel, useStore, type Attendance } from "@/lib/store";
-import { todayInKenya } from "@/lib/time";
+import { timeInKenya, todayInKenya } from "@/lib/time";
 import { getErrorMessage } from "@/lib/utils";
 
 export const Route = createFileRoute("/attendance")({
@@ -42,6 +42,7 @@ const STATUS_TONE: Record<Attendance["status"], "success" | "warning" | "destruc
 function AttendancePage() {
   const { attendance, currentUser, markAttendance, staff } = useStore();
   const today = todayInKenya();
+  const currentKenyaTime = timeInKenya();
   const dates = Array.from(new Set([today, ...attendance.map((row) => row.date)]))
     .sort()
     .reverse();
@@ -99,7 +100,7 @@ function AttendancePage() {
             value={permissionToday}
             tone={permissionToday > 0 ? "accent" : "default"}
           />
-          <StatCard label="Days Tracked" value={recentDates.length} tone="accent" />
+          <StatCard label="Nairobi Time" value={currentKenyaTime} tone="accent" />
         </div>
 
         <Section title="Roll Call Sheet">
@@ -144,7 +145,7 @@ function AttendancePage() {
           </div>
         </Section>
 
-        <Section title={`Today · ${today}`}>
+        <Section title={`Today · ${today} · Nairobi time`}>
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
               <tr>

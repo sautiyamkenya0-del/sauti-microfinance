@@ -1,4 +1,6 @@
 import { Section, Badge } from "@/components/ui-bits";
+import { useServerFn } from "@tanstack/react-start";
+import { saveLoanReviewRecord } from "@/lib/app-data.functions";
 import {
   useStore,
   fmtKES,
@@ -21,9 +23,13 @@ const PRODUCT_FILTERS: { key: ProductFilter; label: string }[] = [
 ];
 
 export function PendingReview() {
-  const { loans, members, staff, currentUser, approveLoan, rejectLoan, appraisals } = useStore();
+  const { loans, members, staff, currentUser, rejectLoan, appraisals, reloadAppData } = useStore();
+  const saveLoanReview = useServerFn(saveLoanReviewRecord);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const [appliedAmount, setAppliedAmount] = useState(0);
   const [adjAmount, setAdjAmount] = useState(0);
+  const [adjTermDays, setAdjTermDays] = useState(30);
+  const [reviewPurpose, setReviewPurpose] = useState("");
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [productFilter, setProductFilter] = useState<ProductFilter>("all");
@@ -125,8 +131,12 @@ export function PendingReview() {
                   <td className="px-5 py-3 text-right">
                     <button
                       onClick={() => {
+                        const termDays = loanTermDaysOf(loan);
                         setReviewing(loan.id);
+                        setAppliedAmount(loan.principal);
                         setAdjAmount(appraisal?.approvedAmount || loan.principal);
+                        setAdjTermDays(termDays);
+                        setReviewPurpose(loan.purpose ?? "");
                         setNote("");
                         setShowAll(false);
                       }}
@@ -148,7 +158,7 @@ export function PendingReview() {
           const member = members.find((row) => row.id === loan.memberId);
           const officer = staff.find((row) => row.id === loan.officerId);
           const appraisal = appraisals.find((row) => row.loanId === loan.id);
-          const termDays = loanTermDaysOf(loan);
+          const termDays = Math.max(1, Math.floor(adjTermDays || loanTermDaysOf(loan)));
           const supplierBacked = loan.loanKind != null && loan.loanKind !== "financial";
           const productChargeAmount = loanProductChargeAmount({
             loanKind: loan.loanKind,
@@ -176,9 +186,7 @@ export function PendingReview() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h3 className="font-display text-lg font-semibold mb-1">
-                      Review {loan.id}
-                    </h3>
+                    <h3 className="font-display text-lg font-semibold mb-1">Review {loan.id}</h3>
                     <p className="text-xs text-muted-foreground">
                       {member?.name} - {loan.loanKind ?? "financial"} application
                     </p>
@@ -195,7 +203,7 @@ export function PendingReview() {
                 <div className="mt-4 grid gap-2 sm:grid-cols-2 text-sm">
                   <ReviewCell label="Member" value={member?.name ?? loan.memberId} />
                   <ReviewCell label="Officer" value={officer?.name ?? loan.officerId} />
-                  <ReviewCell label="Amount applied" value={fmtKES(loan.principal)} />
+                  <ReviewCell label="Amount applied" value={fmtKES(appliedAmount)} />
                   <ReviewCell label="Product charge" value={fmtKES(productChargeAmount)} />
                   <ReviewCell label="Term" value={`${termDays} days`} />
                   <ReviewCell
@@ -223,8 +231,14 @@ export function PendingReview() {
 
                 {showAll ? (
                   <div className="mt-4 space-y-4">
-                    <DetailBlock title="Application details" data={application ?? loan.supplierPayload} />
-                    <DetailBlock title="Appraisal details" data={appraisal ?? { status: "Pending appraisal" }} />
+                    <DetailBlock
+                      title="Application details"
+                      data={application ?? loan.supplierPayload}
+                    />
+                    <DetailBlock
+                      title="Appraisal details"
+                      data={appraisal ?? { status: "Pending appraisal" }}
+                    />
                     <DetailBlock
                       title="Review computation"
                       data={{
@@ -240,18 +254,56 @@ export function PendingReview() {
                 ) : null}
 
                 <label className="mt-4 block">
+                  <span className="text-xs text-muted-foreground">Applied amount</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={appliedAmount}
+                    onChange={(event) => {
+                      const next = Math.max(1, Number(event.target.value) || 1);
+                      setAppliedAmount(next);
+                      setAdjAmount((current) => Math.min(current, next));
+                    }}
+                    className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="mt-3 block">
                   <span className="text-xs text-muted-foreground">
                     Approved amount (you may revise downward)
                   </span>
                   <input
                     type="number"
-                    max={loan.principal}
+                    max={appliedAmount}
                     value={adjAmount}
                     onChange={(event) =>
-                      setAdjAmount(Math.min(loan.principal, Number(event.target.value)))
+                      setAdjAmount(Math.min(appliedAmount, Number(event.target.value)))
                     }
                     className="w-full mt-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
                   />
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs text-muted-foreground">Purpose / applied details</span>
+                  <input
+                    value={reviewPurpose}
+                    onChange={(event) => setReviewPurpose(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs text-muted-foreground">Approved repayment days</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={adjTermDays}
+                    onChange={(event) =>
+                      setAdjTermDays(Math.max(1, Math.floor(Number(event.target.value) || 1)))
+                    }
+                    className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                  />
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Changing this recalculates the daily repayment, interest band, round-off, and
+                    due date.
+                  </div>
                 </label>
                 <label className="mt-3 block">
                   <span className="text-xs text-muted-foreground">Review note (optional)</span>
@@ -290,17 +342,28 @@ export function PendingReview() {
                           toast.error("Approved amount must be above zero.");
                           return;
                         }
-                        await approveLoan(loan.id, adjAmount, currentUser.id, note);
-                        toast.success(
-                          supplierBacked
-                            ? "Loan approved for supplier fulfillment"
-                            : "Loan approved and disbursed",
-                        );
+                        if (appliedAmount <= 0) {
+                          toast.error("Applied amount must be above zero.");
+                          return;
+                        }
+                        await saveLoanReview({
+                          data: {
+                            loanId: loan.id,
+                            principal: appliedAmount,
+                            approvedAmount: adjAmount,
+                            termDays,
+                            reviewedBy: currentUser.id,
+                            purpose: reviewPurpose,
+                            note,
+                          },
+                        });
+                        await reloadAppData();
+                        toast.success("Loan review saved. It is now eligible for approval.");
                         setReviewing(null);
                       }}
                       className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                     >
-                      {supplierBacked ? "Approve for supplier" : "Approve and disburse"}
+                      Save review
                     </button>
                   </div>
                 </div>

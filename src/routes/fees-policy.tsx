@@ -811,17 +811,41 @@ function PolicyCenterPage() {
     if (!editingFee) return;
     if (!editingFee.label.trim()) return toast.error("Label required.");
     if (editingFee.amount < 0) return toast.error("Amount must be 0 or more.");
+    if (!isCoreFeePolicy(editingFee)) {
+      return toast.error("Only membership, card, sticker, and fuel buffer fees are managed here.");
+    }
+    if (editingFee.key === "fuel_buffer" && editingFee.scope !== "locomotive_members") {
+      return toast.error("Fuel buffer must apply to locomotive members only.");
+    }
+    if (editingFee.key === "sticker" && editingFee.scope !== "financial_members") {
+      return toast.error("Sticker fee must apply to financial members only.");
+    }
     if (
       editingFee.scope === "selected_members" &&
       (editingFee.selectedMemberIds?.length ?? 0) === 0
     ) {
       return toast.error("Pick at least one member for a selected-members fee.");
     }
-    await saveFee({ data: editingFee });
-    await reloadAppData();
-    toast.success(creatingFee ? "Fee created" : "Fee updated");
-    setEditingFee(null);
-    setCreatingFee(false);
+    try {
+      await saveFee({
+        data: {
+          ...editingFee,
+          custom: false,
+          scope:
+            editingFee.key === "fuel_buffer"
+              ? "locomotive_members"
+              : editingFee.key === "sticker"
+                ? "financial_members"
+                : editingFee.scope,
+        },
+      });
+      await reloadAppData();
+      toast.success("Fee updated");
+      setEditingFee(null);
+      setCreatingFee(false);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Fee could not be saved.");
+    }
   }
 
   async function saveServiceDraft() {
@@ -1287,21 +1311,7 @@ function PolicyCenterPage() {
 
         {tab === "fees" && (
           <>
-            <Section
-              title="Mandatory fee heads"
-              action={
-                <button
-                  onClick={() => {
-                    setEditingFee(blankFee());
-                    setCreatingFee(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add fee
-                </button>
-              }
-            >
+            <Section title="Mandatory fee heads">
               <div className="grid gap-4 p-5 md:grid-cols-4">
                 <StatCard label="Membership" value={fmtKES(membershipAmount)} />
                 <StatCard label="Card" value={fmtKES(cardAmount)} />
@@ -1321,7 +1331,7 @@ function PolicyCenterPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {feeRows.map((fee) => (
+                    {feeRows.filter(isCoreFeePolicy).map((fee) => (
                       <tr key={fee.key}>
                         <td className="px-5 py-3">
                           <div className="font-medium">{fee.label}</div>
@@ -1359,18 +1369,6 @@ function PolicyCenterPage() {
                             <Pencil className="h-3 w-3" />
                             Edit
                           </button>
-                          {fee.custom && (
-                            <button
-                              onClick={async () => {
-                                await deleteFee({ data: { key: fee.key } });
-                                await reloadAppData();
-                                toast.success("Fee removed");
-                              }}
-                              className="ml-2 inline-flex items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          )}
                         </td>
                       </tr>
                     ))}
@@ -1464,6 +1462,7 @@ function PolicyCenterPage() {
                         })
                       }
                       className="input"
+                      disabled={editingFee.key === "fuel_buffer" || editingFee.key === "sticker"}
                     >
                       {SCOPES.map((scope) => (
                         <option key={scope} value={scope}>
@@ -1471,6 +1470,16 @@ function PolicyCenterPage() {
                         </option>
                       ))}
                     </select>
+                    {editingFee.key === "fuel_buffer" ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Fuel buffer is fixed to locomotive members.
+                      </div>
+                    ) : null}
+                    {editingFee.key === "sticker" ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Sticker fee is fixed to financial members.
+                      </div>
+                    ) : null}
                   </Field>
                   {editingFee.scope === "new_only" && (
                     <div className="sm:col-span-2 rounded-xl border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
@@ -2102,58 +2111,6 @@ function PolicyCenterPage() {
                     </div>
                   </Field>
                 ) : null}
-                <Field label="Amended fee overrides JSON" className="sm:col-span-2">
-                  <textarea
-                    rows={4}
-                    value={serviceDraft.feeOverridesText}
-                    onChange={(event) =>
-                      setServiceDraft((current) => ({
-                        ...current,
-                        feeOverridesText: event.target.value,
-                      }))
-                    }
-                    className="input font-mono text-xs"
-                  />
-                </Field>
-                <Field label="Custom charges JSON" className="sm:col-span-2">
-                  <textarea
-                    rows={3}
-                    value={serviceDraft.customChargesText}
-                    onChange={(event) =>
-                      setServiceDraft((current) => ({
-                        ...current,
-                        customChargesText: event.target.value,
-                      }))
-                    }
-                    className="input font-mono text-xs"
-                  />
-                </Field>
-                <Field label="Normal deductions JSON" className="sm:col-span-2">
-                  <textarea
-                    rows={3}
-                    value={serviceDraft.normalDeductionsText}
-                    onChange={(event) =>
-                      setServiceDraft((current) => ({
-                        ...current,
-                        normalDeductionsText: event.target.value,
-                      }))
-                    }
-                    className="input font-mono text-xs"
-                  />
-                </Field>
-                <Field label="Renewal rules JSON" className="sm:col-span-2">
-                  <textarea
-                    rows={3}
-                    value={serviceDraft.renewalRulesText}
-                    onChange={(event) =>
-                      setServiceDraft((current) => ({
-                        ...current,
-                        renewalRulesText: event.target.value,
-                      }))
-                    }
-                    className="input font-mono text-xs"
-                  />
-                </Field>
                 <div className="sm:col-span-2 flex flex-wrap gap-2">
                   <button
                     disabled={serviceBusy}
@@ -4137,16 +4094,20 @@ function PolicyCenterPage() {
 
 function blankFee(): FeePolicy {
   return {
-    key: `custom_${Date.now()}`,
-    label: "",
+    key: "membership",
+    label: "Membership Fee",
     amount: 0,
     permanence: "permanent",
     scope: "all",
     selectedMemberIds: [],
     effectiveFrom: new Date().toISOString().slice(0, 10),
-    custom: true,
+    custom: false,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function isCoreFeePolicy(fee: Pick<FeePolicy, "key">) {
+  return ["membership", "card", "sticker", "fuel_buffer"].includes(fee.key);
 }
 
 function blankServiceDraft(): ServiceDraft {

@@ -65,6 +65,7 @@ function SuppliersPage() {
 
   const [workspace, setWorkspace] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [summarySupplierId, setSummarySupplierId] = useState("");
   const [registerForm, setRegisterForm] = useState(emptyRegisterForm);
   const [requestForm, setRequestForm] = useState({
     kind: "stock" as SupplierKind,
@@ -119,6 +120,119 @@ function SuppliersPage() {
   const members = workspace?.members ?? [];
   const loans = workspace?.loans ?? [];
   const supplierInventory = workspace?.supplierInventory ?? [];
+  const supplierNameById = useMemo(
+    () =>
+      new Map(
+        suppliers.map((supplier: any) => [
+          String(supplier.id ?? ""),
+          String(supplier.name ?? supplier.id ?? ""),
+        ]),
+      ),
+    [suppliers],
+  );
+  const summaryRequests = useMemo(
+    () =>
+      summarySupplierId
+        ? requests.filter((request: any) => String(request.supplier_id ?? "") === summarySupplierId)
+        : requests,
+    [requests, summarySupplierId],
+  );
+  const summaryOutflows = useMemo(
+    () =>
+      summarySupplierId
+        ? outflows.filter((outflow: any) => String(outflow.supplier_id ?? "") === summarySupplierId)
+        : outflows,
+    [outflows, summarySupplierId],
+  );
+  const supplierSummaryRows = useMemo(() => {
+    const rows = new Map<
+      string,
+      {
+        supplierId: string;
+        supplierName: string;
+        requests: number;
+        amount: number;
+        paid: number;
+        fuelLitres: number;
+        fuelAmount: number;
+        stockQuantity: number;
+        stockAmount: number;
+        services: number;
+        serviceAmount: number;
+      }
+    >();
+    const ensure = (supplierId: string) => {
+      const key = supplierId || "unassigned";
+      if (!rows.has(key)) {
+        rows.set(key, {
+          supplierId: key,
+          supplierName: String(
+            supplierNameById.get(key) ?? (key === "unassigned" ? "Unassigned" : key),
+          ),
+          requests: 0,
+          amount: 0,
+          paid: 0,
+          fuelLitres: 0,
+          fuelAmount: 0,
+          stockQuantity: 0,
+          stockAmount: 0,
+          services: 0,
+          serviceAmount: 0,
+        });
+      }
+      return rows.get(key)!;
+    };
+    summaryRequests.forEach((request: any) => {
+      const row = ensure(String(request.supplier_id ?? ""));
+      const quantity = Number(request.quantity_requested ?? request.detail?.quantity ?? 0);
+      const amount = Number(request.amount ?? 0);
+      row.requests += 1;
+      row.amount += amount;
+      if (request.kind === "fuel") {
+        row.fuelLitres += quantity;
+        row.fuelAmount += amount;
+      }
+      if (request.kind === "stock") {
+        row.stockQuantity += quantity;
+        row.stockAmount += amount;
+      }
+      if (request.kind === "service") {
+        row.services += 1;
+        row.serviceAmount += amount;
+      }
+    });
+    summaryOutflows.forEach((outflow: any) => {
+      const row = ensure(String(outflow.supplier_id ?? ""));
+      row.paid += Number(outflow.amount ?? 0);
+    });
+    return Array.from(rows.values()).sort((a, b) => b.amount - a.amount);
+  }, [summaryOutflows, summaryRequests, supplierNameById]);
+  const supplierSummaryTotals = supplierSummaryRows.reduce(
+    (totals, row) => ({
+      requests: totals.requests + row.requests,
+      amount: totals.amount + row.amount,
+      paid: totals.paid + row.paid,
+      balance: totals.balance + Math.max(0, row.amount - row.paid),
+      fuelLitres: totals.fuelLitres + row.fuelLitres,
+      fuelAmount: totals.fuelAmount + row.fuelAmount,
+      stockQuantity: totals.stockQuantity + row.stockQuantity,
+      stockAmount: totals.stockAmount + row.stockAmount,
+      services: totals.services + row.services,
+      serviceAmount: totals.serviceAmount + row.serviceAmount,
+    }),
+    {
+      requests: 0,
+      amount: 0,
+      paid: 0,
+      balance: 0,
+      fuelLitres: 0,
+      fuelAmount: 0,
+      stockQuantity: 0,
+      stockAmount: 0,
+      services: 0,
+      serviceAmount: 0,
+    },
+  );
 
   const supplierDebtById = useMemo(() => {
     const totals = new Map<string, number>();
@@ -154,55 +268,62 @@ function SuppliersPage() {
     [outflows],
   );
   const stockLedgerRows = useMemo(() => {
-    const supplierNameById = new Map(
-      suppliers.map((supplier: any) => [String(supplier.id ?? ""), String(supplier.name ?? "")]),
-    );
     const events = [
-      ...stockRequests.map((request: any) => {
-        const quantity = Number(request.quantity_requested ?? request.detail?.quantity ?? 0);
-        const amount = Number(request.amount ?? 0);
-        const unit = String(request.unit_of_measure ?? request.detail?.unit ?? "unit");
-        const item =
-          String(
-            request.commodity_name ?? request.detail?.item ?? request.detail?.commodityName ?? "",
-          ).trim() || "Stock request";
-        return {
-          type: "request" as const,
-          id: String(request.id ?? ""),
-          date: String(request.fulfilled_at ?? request.created_at ?? "").slice(0, 10),
-          supplierId: String(request.supplier_id ?? ""),
-          supplierName:
-            supplierNameById.get(String(request.supplier_id ?? "")) ||
-            String(request.supplier_id ?? ""),
-          item,
-          unit,
-          quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
-          expectedAt:
-            Number.isFinite(quantity) && quantity > 0
-              ? Math.max(0, amount / quantity)
-              : Number(request.detail?.unitPrice ?? 0),
-          amount: Math.max(0, amount),
-          payment: 0,
-          reference: String(request.loan_id ?? request.id ?? ""),
-        };
-      }),
-      ...supplierPaymentRows.map((payment: any) => {
-        const supplierId = String(payment.supplier_id ?? "");
-        return {
-          type: "payment" as const,
-          id: String(payment.id ?? ""),
-          date: String(payment.created_at ?? "").slice(0, 10),
-          supplierId,
-          supplierName: supplierNameById.get(supplierId) || supplierId,
-          item: String(payment.note ?? "Supplier payment"),
-          unit: "",
-          quantity: 0,
-          expectedAt: 0,
-          amount: 0,
-          payment: Math.max(0, Number(payment.amount ?? 0)),
-          reference: String(payment.transaction_id ?? payment.id ?? ""),
-        };
-      }),
+      ...stockRequests
+        .filter(
+          (request: any) =>
+            !summarySupplierId || String(request.supplier_id ?? "") === summarySupplierId,
+        )
+        .map((request: any) => {
+          const quantity = Number(request.quantity_requested ?? request.detail?.quantity ?? 0);
+          const amount = Number(request.amount ?? 0);
+          const unit = String(request.unit_of_measure ?? request.detail?.unit ?? "unit");
+          const item =
+            String(
+              request.commodity_name ?? request.detail?.item ?? request.detail?.commodityName ?? "",
+            ).trim() || "Stock request";
+          return {
+            type: "request" as const,
+            id: String(request.id ?? ""),
+            date: String(request.fulfilled_at ?? request.created_at ?? "").slice(0, 10),
+            supplierId: String(request.supplier_id ?? ""),
+            supplierName:
+              supplierNameById.get(String(request.supplier_id ?? "")) ||
+              String(request.supplier_id ?? ""),
+            item,
+            unit,
+            quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
+            expectedAt:
+              Number.isFinite(quantity) && quantity > 0
+                ? Math.max(0, amount / quantity)
+                : Number(request.detail?.unitPrice ?? 0),
+            amount: Math.max(0, amount),
+            payment: 0,
+            reference: String(request.loan_id ?? request.id ?? ""),
+          };
+        }),
+      ...supplierPaymentRows
+        .filter(
+          (payment: any) =>
+            !summarySupplierId || String(payment.supplier_id ?? "") === summarySupplierId,
+        )
+        .map((payment: any) => {
+          const supplierId = String(payment.supplier_id ?? "");
+          return {
+            type: "payment" as const,
+            id: String(payment.id ?? ""),
+            date: String(payment.created_at ?? "").slice(0, 10),
+            supplierId,
+            supplierName: supplierNameById.get(supplierId) || supplierId,
+            item: String(payment.note ?? "Supplier payment"),
+            unit: "",
+            quantity: 0,
+            expectedAt: 0,
+            amount: 0,
+            payment: Math.max(0, Number(payment.amount ?? 0)),
+            reference: String(payment.transaction_id ?? payment.id ?? ""),
+          };
+        }),
     ].sort((left, right) => {
       const byDate = String(left.date ?? "").localeCompare(String(right.date ?? ""));
       if (byDate !== 0) return byDate;
@@ -229,7 +350,7 @@ function SuppliersPage() {
         cumulativeBalance: Math.max(0, cumulativeBalance),
       };
     });
-  }, [stockRequests, supplierPaymentRows, suppliers]);
+  }, [stockRequests, supplierPaymentRows, supplierNameById, summarySupplierId]);
   const stockLedgerTotals = useMemo(
     () =>
       stockLedgerRows.reduce(
@@ -381,14 +502,90 @@ function SuppliersPage() {
         </div>
 
         <div className="flex justify-end">
-          <button
-            onClick={() => refresh()}
-            disabled={busy}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
-          >
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={summarySupplierId}
+              onChange={(event) => setSummarySupplierId(event.target.value)}
+              className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+            >
+              <option value="">All suppliers</option>
+              {normalSuppliers.map((supplier: any) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => refresh()}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+            >
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </button>
+          </div>
         </div>
+
+        <Section title="Supplier summaries">
+          <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-8">
+            <StatCard label="Requests" value={supplierSummaryTotals.requests} />
+            <StatCard label="Requested value" value={fmtKES(supplierSummaryTotals.amount)} />
+            <StatCard label="Paid" value={fmtKES(supplierSummaryTotals.paid)} />
+            <StatCard
+              label="Balance"
+              value={fmtKES(supplierSummaryTotals.balance)}
+              tone="warning"
+            />
+            <StatCard
+              label="Fuel consumed"
+              value={`${supplierSummaryTotals.fuelLitres.toLocaleString()} L`}
+            />
+            <StatCard label="Fuel value" value={fmtKES(supplierSummaryTotals.fuelAmount)} />
+            <StatCard
+              label="Stock issued"
+              value={supplierSummaryTotals.stockQuantity.toLocaleString()}
+            />
+            <StatCard label="Services" value={supplierSummaryTotals.services} />
+          </div>
+          <div className="overflow-x-auto border-t border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Supplier</th>
+                  <th className="px-5 py-3 text-right">Requests</th>
+                  <th className="px-5 py-3 text-right">Fuel L</th>
+                  <th className="px-5 py-3 text-right">Fuel value</th>
+                  <th className="px-5 py-3 text-right">Stock Qty</th>
+                  <th className="px-5 py-3 text-right">Requested</th>
+                  <th className="px-5 py-3 text-right">Paid</th>
+                  <th className="px-5 py-3 text-right">Balance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {supplierSummaryRows.map((row) => (
+                  <tr key={row.supplierId}>
+                    <td className="px-5 py-3 font-medium">{row.supplierName}</td>
+                    <td className="px-5 py-3 text-right">{row.requests}</td>
+                    <td className="px-5 py-3 text-right">{row.fuelLitres.toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.fuelAmount)}</td>
+                    <td className="px-5 py-3 text-right">{row.stockQuantity.toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.amount)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.paid)}</td>
+                    <td className="px-5 py-3 text-right font-semibold">
+                      {fmtKES(Math.max(0, row.amount - row.paid))}
+                    </td>
+                  </tr>
+                ))}
+                {supplierSummaryRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
+                      No supplier movement for this filter.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </Section>
 
         <Section title="Register supplier">
           <div className="space-y-4 p-5">

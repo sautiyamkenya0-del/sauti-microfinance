@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { AppHeader } from "@/components/AppHeader";
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Section, StatCard } from "@/components/ui-bits";
 import {
@@ -24,7 +25,11 @@ import {
   type LegacyCarryoverLoan,
   type ReportSnapshot,
 } from "@/lib/legacy-finance";
-import { listAllCarryoverLoans, listReportSnapshots } from "@/lib/runtime-data.functions";
+import {
+  listAllCarryoverLoans,
+  listReportSnapshots,
+  listSupplierWorkspaceRecord,
+} from "@/lib/runtime-data.functions";
 import {
   Bar,
   BarChart,
@@ -97,6 +102,7 @@ function ReportsPage() {
   const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
   const loadSnapshots = useServerFn(listReportSnapshots);
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
+  const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const {
     loans,
     members,
@@ -116,6 +122,8 @@ function ReportsPage() {
   const [contributionMemberId, setContributionMemberId] = useState("");
   const [reportScope, setReportScope] = useState<ReportScope>("daily");
   const [fuelMemberId, setFuelMemberId] = useState("");
+  const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
+  const [supplierReportId, setSupplierReportId] = useState("");
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -141,7 +149,16 @@ function ReportsPage() {
     refreshCarryoverLoans().catch(() => {});
   }, [refreshCarryoverLoans]);
 
+  useEffect(() => {
+    loadSupplierWorkspace()
+      .then(setSupplierWorkspace)
+      .catch(() => setSupplierWorkspace(null));
+  }, [loadSupplierWorkspace]);
+
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
+  const supplierRows = supplierWorkspace?.suppliers ?? [];
+  const supplierRequests = supplierWorkspace?.requests ?? [];
+  const supplierOutflows = supplierWorkspace?.outflows ?? [];
   const disbursedLoans = loans.filter(
     (loan) => loan.status !== "pending" && loan.status !== "rejected",
   );
@@ -390,11 +407,15 @@ function ReportsPage() {
       "purpose_pool",
       "Purpose pool",
       contributionTransactions.filter((transaction) =>
-        String(transaction.note ?? "").toLowerCase().includes("purpose pool"),
+        String(transaction.note ?? "")
+          .toLowerCase()
+          .includes("purpose pool"),
       ).length,
       contributionTransactions
         .filter((transaction) =>
-          String(transaction.note ?? "").toLowerCase().includes("purpose pool"),
+          String(transaction.note ?? "")
+            .toLowerCase()
+            .includes("purpose pool"),
         )
         .reduce((sum, transaction) => sum + transaction.amount, 0),
       "",
@@ -593,6 +614,100 @@ function ReportsPage() {
       total: rows.reduce((sum, transaction) => sum + transaction.amount, 0),
     };
   });
+  const memberCategoryReportRows = [
+    "member",
+    "financial",
+    "locomotive",
+    "stock",
+    "service",
+    "both",
+    "investor",
+  ].map((category) => {
+    const rows = members.filter(
+      (member) =>
+        member.category === category ||
+        member.memberTags?.includes(category as any) ||
+        (category === "financial" && member.category === "member"),
+    );
+    const rowTransactions = transactions.filter((transaction) =>
+      rows.some((member) => member.id === transaction.memberId),
+    );
+    const rowLoans = loans.filter((loan) => rows.some((member) => member.id === loan.memberId));
+    return {
+      key: category,
+      label: category === "member" ? "SBC members" : category.replace(/_/g, " "),
+      count: rows.length,
+      savings: rows.reduce((sum, member) => sum + member.savingsBalance, 0),
+      shares: rows.reduce((sum, member) => sum + member.shares * sharePrice, 0),
+      collected: rowTransactions
+        .filter((transaction) =>
+          ["deposit", "loan_repayment", "share_purchase", "fee_payment"].includes(transaction.type),
+        )
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      activeLoans: rowLoans.filter((loan) => loan.status === "active").length,
+    };
+  });
+  const supplierReportRows = supplierRows
+    .filter((supplier: any) => !supplierReportId || String(supplier.id) === supplierReportId)
+    .map((supplier: any) => {
+      const supplierId = String(supplier.id ?? "");
+      const rows = supplierRequests.filter(
+        (request: any) => String(request.supplier_id ?? "") === supplierId,
+      );
+      const payments = supplierOutflows.filter(
+        (outflow: any) => String(outflow.supplier_id ?? "") === supplierId,
+      );
+      const amount = rows.reduce(
+        (sum: number, request: any) => sum + Number(request.amount ?? 0),
+        0,
+      );
+      const paid = payments.reduce(
+        (sum: number, outflow: any) => sum + Number(outflow.amount ?? 0),
+        0,
+      );
+      return {
+        id: supplierId,
+        name: String(supplier.name ?? supplierId),
+        kind: String(supplier.kind ?? "stock"),
+        requests: rows.length,
+        fuelLitres: rows
+          .filter((request: any) => request.kind === "fuel")
+          .reduce(
+            (sum: number, request: any) =>
+              sum + Number(request.quantity_requested ?? request.detail?.quantity ?? 0),
+            0,
+          ),
+        fuelAmount: rows
+          .filter((request: any) => request.kind === "fuel")
+          .reduce((sum: number, request: any) => sum + Number(request.amount ?? 0), 0),
+        stockQuantity: rows
+          .filter((request: any) => request.kind === "stock")
+          .reduce(
+            (sum: number, request: any) =>
+              sum + Number(request.quantity_requested ?? request.detail?.quantity ?? 0),
+            0,
+          ),
+        amount,
+        paid,
+        balance: Math.max(0, amount - paid),
+      };
+    });
+  const investorReportRows = investors.map((investor) => {
+    const member = members.find((row) => row.id === investor.memberId);
+    const tx = transactions.filter(
+      (transaction) =>
+        transaction.memberId === investor.memberId && transaction.type === "investor_contribution",
+    );
+    return {
+      id: investor.id,
+      name: investor.name,
+      memberId: investor.memberId,
+      memberName: member?.name ?? investor.memberId,
+      contributed: investor.contributed,
+      recordedContributions: tx.reduce((sum, transaction) => sum + transaction.amount, 0),
+      sharePct: investor.sharePct,
+    };
+  });
 
   return (
     <>
@@ -680,21 +795,125 @@ function ReportsPage() {
           totalNote="Total of all amount-bearing activity in the selected report window."
         />
 
+        <Section title="Member Reports by Category">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Category</th>
+                  <th className="px-5 py-3 text-right">Members</th>
+                  <th className="px-5 py-3 text-right">Savings</th>
+                  <th className="px-5 py-3 text-right">Shares</th>
+                  <th className="px-5 py-3 text-right">Collections</th>
+                  <th className="px-5 py-3 text-right">Active loans</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {memberCategoryReportRows.map((row) => (
+                  <tr key={row.key}>
+                    <td className="px-5 py-3 font-medium capitalize">{row.label}</td>
+                    <td className="px-5 py-3 text-right">{row.count}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.savings)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.shares)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.collected)}</td>
+                    <td className="px-5 py-3 text-right">{row.activeLoans}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
         <Section
-          title="Member Contribution Distribution"
+          title="Supplier Reports"
           action={
             <select
-              value={contributionMemberId}
-              onChange={(event) => setContributionMemberId(event.target.value)}
+              value={supplierReportId}
+              onChange={(event) => setSupplierReportId(event.target.value)}
               className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
             >
-              <option value="">Choose member</option>
-              {memberAccounts.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.id} - {member.name}
+              <option value="">All suppliers</option>
+              {supplierRows.map((supplier: any) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
                 </option>
               ))}
             </select>
+          }
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Supplier</th>
+                  <th className="px-5 py-3 text-left">Kind</th>
+                  <th className="px-5 py-3 text-right">Requests</th>
+                  <th className="px-5 py-3 text-right">Fuel L</th>
+                  <th className="px-5 py-3 text-right">Fuel value</th>
+                  <th className="px-5 py-3 text-right">Stock Qty</th>
+                  <th className="px-5 py-3 text-right">Requested</th>
+                  <th className="px-5 py-3 text-right">Paid</th>
+                  <th className="px-5 py-3 text-right">Balance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {supplierReportRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="px-5 py-3 font-medium">{row.name}</td>
+                    <td className="px-5 py-3 capitalize">{row.kind}</td>
+                    <td className="px-5 py-3 text-right">{row.requests}</td>
+                    <td className="px-5 py-3 text-right">{row.fuelLitres.toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.fuelAmount)}</td>
+                    <td className="px-5 py-3 text-right">{row.stockQuantity.toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.amount)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.paid)}</td>
+                    <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="Investor Reports">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Investor</th>
+                  <th className="px-5 py-3 text-left">Linked member</th>
+                  <th className="px-5 py-3 text-right">Contributed</th>
+                  <th className="px-5 py-3 text-right">Ledger contributions</th>
+                  <th className="px-5 py-3 text-right">Equity %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {investorReportRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="px-5 py-3 font-medium">{row.name}</td>
+                    <td className="px-5 py-3">{row.memberName}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.contributed)}</td>
+                    <td className="px-5 py-3 text-right">{fmtKES(row.recordedContributions)}</td>
+                    <td className="px-5 py-3 text-right">{row.sharePct}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section
+          title="Member Contribution Distribution"
+          action={
+            <div className="min-w-[280px]">
+              <MemberSearchSelect
+                members={memberAccounts}
+                value={contributionMemberId}
+                onChange={setContributionMemberId}
+                emptyLabel="Choose member"
+                describeMember={(member) => `${member.id} - ${member.name}`}
+              />
+            </div>
           }
         >
           {!contributionMember ? (
@@ -716,9 +935,7 @@ function ReportsPage() {
                     <tr key={row.key}>
                       <td className="px-5 py-3 font-medium">{row.label}</td>
                       <td className="px-5 py-3 text-right">{row.count}</td>
-                      <td className="px-5 py-3 text-right font-semibold">
-                        {fmtKES(row.amount)}
-                      </td>
+                      <td className="px-5 py-3 text-right font-semibold">{fmtKES(row.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -769,18 +986,15 @@ function ReportsPage() {
         <Section
           title="Fuel Consumption"
           action={
-            <select
-              value={fuelMemberId}
-              onChange={(event) => setFuelMemberId(event.target.value)}
-              className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
-            >
-              <option value="">All clients</option>
-              {memberAccounts.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.id} - {member.name}
-                </option>
-              ))}
-            </select>
+            <div className="min-w-[280px]">
+              <MemberSearchSelect
+                members={memberAccounts}
+                value={fuelMemberId}
+                onChange={setFuelMemberId}
+                emptyLabel="All clients"
+                describeMember={(member) => `${member.id} - ${member.name}`}
+              />
+            </div>
           }
         >
           <div className="grid gap-3 p-5 sm:grid-cols-4">
@@ -826,18 +1040,15 @@ function ReportsPage() {
         <Section
           title="Purpose Pool Distribution"
           action={
-            <select
-              value={purposePoolMemberId}
-              onChange={(event) => setPurposePoolMemberId(event.target.value)}
-              className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
-            >
-              <option value="">All clients</option>
-              {memberAccounts.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.id} - {member.name}
-                </option>
-              ))}
-            </select>
+            <div className="min-w-[280px]">
+              <MemberSearchSelect
+                members={memberAccounts}
+                value={purposePoolMemberId}
+                onChange={setPurposePoolMemberId}
+                emptyLabel="All clients"
+                describeMember={(member) => `${member.id} - ${member.name}`}
+              />
+            </div>
           }
         >
           <div className="overflow-x-auto">
