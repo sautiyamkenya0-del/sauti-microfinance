@@ -1,6 +1,57 @@
 -- Repair duplicate open loan-category records and refresh PostgREST's schema cache.
 -- Business rule: a member may have only one unfinished loan per category.
 
+create or replace function public.sauti_live_loan_settlement_amount(loan_row public.loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(
+      loan_row.financed_principal_amount,
+      loan_row.approved_amount,
+      loan_row.principal,
+      0
+    )
+  );
+$$;
+
+create or replace function public.sauti_carryover_loan_settlement_amount(loan_row public.member_carryover_loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(loan_row.principal, 0)
+    + case
+        when coalesce(nullif(loan_row.loan_kind, ''), 'financial') in ('fuel', 'stock', 'service') then
+          coalesce(nullif(loan_row.fee_breakdown ->> 'processingFeeAmount', '')::numeric, 0)
+        else
+          coalesce(nullif(loan_row.fee_breakdown ->> 'processingFeeAmount', '')::numeric, 0)
+          + coalesce(nullif(loan_row.fee_breakdown ->> 'insuranceFeeAmount', '')::numeric, 0)
+          + coalesce(nullif(loan_row.fee_breakdown ->> 'transactionFeeAmount', '')::numeric, 0)
+          + (coalesce(loan_row.principal, 0) * coalesce(loan_row.interest_rate_pct, 0) / 100)
+            * greatest(1, ceiling(greatest(1, coalesce(loan_row.term_days, 1))::numeric / 30))
+          + coalesce(loan_row.daily_savings_amount, 0) * greatest(1, coalesce(loan_row.term_days, 1))
+      end
+  );
+$$;
+
+create or replace function public.sauti_carryover_prior_penalty_amount(loan_row public.member_carryover_loans)
+returns numeric
+language sql
+stable
+as $$
+  select greatest(
+    0,
+    coalesce(nullif(loan_row.fee_breakdown ->> 'priorPenaltyAmount', '')::numeric, 0)
+    + coalesce(nullif(loan_row.fee_breakdown ->> 'manualPenaltyAmount', '')::numeric, 0)
+    + coalesce(nullif(loan_row.fee_breakdown ->> 'carriedForwardPenaltyAmount', '')::numeric, 0)
+  );
+$$;
+
 create or replace function public.sauti_repair_duplicate_open_loan_categories()
 returns table (
   source_table text,
@@ -16,6 +67,8 @@ declare
   group_row record;
   loan_ids text[];
   duplicate_ids text[];
+  latest_source text;
+  latest_id text;
 begin
   for group_row in
     select
@@ -26,7 +79,7 @@ begin
     group by l.member_id, coalesce(nullif(l.loan_kind, ''), 'financial')
     having count(*) > 1
   loop
-    select array_agg(l.id order by l.start_date nulls last, l.created_at nulls last, l.id)
+    select array_agg(l.id order by l.start_date desc nulls last, l.created_at desc nulls last, l.id desc)
       into loan_ids
     from public.loans l
     where l.member_id = group_row.member_id
@@ -36,43 +89,13 @@ begin
     kept_loan_id := loan_ids[1];
     duplicate_ids := loan_ids[2:cardinality(loan_ids)];
 
-    update public.loans keeper
-    set
-      principal = coalesce(keeper.principal, 0) + coalesce(extra.principal, 0),
-      approved_amount = coalesce(keeper.approved_amount, keeper.principal, 0) + coalesce(extra.approved_amount, 0),
-      financed_principal_amount = coalesce(keeper.financed_principal_amount, keeper.approved_amount, keeper.principal, 0) + coalesce(extra.financed_principal_amount, 0),
-      paid = coalesce(keeper.paid, 0) + coalesce(extra.paid, 0),
-      status = case
-        when extra.has_defaulted then 'defaulted'::public.loan_status
-        else keeper.status
-      end,
-      supplier_payload = coalesce(keeper.supplier_payload, '{}'::jsonb) || jsonb_build_object(
-        'consolidatedDuplicateLoanIds', to_jsonb(duplicate_ids),
-        'consolidatedAt', now()
-      ),
-      updated_at = now()
-    from (
-      select
-        sum(coalesce(l.principal, 0)) as principal,
-        sum(coalesce(l.approved_amount, l.principal, 0)) as approved_amount,
-        sum(coalesce(l.financed_principal_amount, l.approved_amount, l.principal, 0)) as financed_principal_amount,
-        sum(coalesce(l.paid, 0)) as paid,
-        bool_or(l.status = 'defaulted') as has_defaulted
-      from public.loans l
-      where l.id = any(duplicate_ids)
-    ) extra
-    where keeper.id = kept_loan_id;
-
     update public.loans duplicate
     set
       status = 'closed',
-      paid = greatest(
-        coalesce(duplicate.paid, 0),
-        coalesce(duplicate.financed_principal_amount, duplicate.approved_amount, duplicate.principal, 0)
-      ),
+      paid = greatest(coalesce(duplicate.paid, 0), public.sauti_live_loan_settlement_amount(duplicate)),
       supplier_payload = coalesce(duplicate.supplier_payload, '{}'::jsonb) || jsonb_build_object(
-        'consolidatedIntoLoanId', kept_loan_id,
-        'consolidatedAt', now()
+        'closedAsEarlierCycleBeforeLoanId', kept_loan_id,
+        'closedFromLifetimeNetAt', now()
       ),
       updated_at = now()
     where duplicate.id = any(duplicate_ids);
@@ -95,7 +118,7 @@ begin
     group by cl.member_id, coalesce(nullif(cl.loan_kind, ''), 'financial')
     having count(*) > 1
   loop
-    select array_agg(cl.id order by cl.start_date nulls last, cl.created_at nulls last, cl.id)
+    select array_agg(cl.id order by cl.start_date desc nulls last, cl.created_at desc nulls last, cl.id desc)
       into loan_ids
     from public.member_carryover_loans cl
     where cl.member_id = group_row.member_id
@@ -106,41 +129,24 @@ begin
     kept_loan_id := loan_ids[1];
     duplicate_ids := loan_ids[2:cardinality(loan_ids)];
 
-    update public.member_carryover_loans keeper
-    set
-      principal = coalesce(keeper.principal, 0) + coalesce(extra.principal, 0),
-      paid_to_date = coalesce(keeper.paid_to_date, 0) + coalesce(extra.paid_to_date, 0),
-      status = case when extra.has_defaulted then 'defaulted' else keeper.status end,
-      fee_breakdown = coalesce(keeper.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
-        'consolidatedDuplicateCarryoverIds', to_jsonb(duplicate_ids),
-        'consolidatedAt', now()
-      ),
-      notes = concat_ws(
-        E'\n',
-        keeper.notes,
-        'System consolidated duplicate open same-category carryover loans: ' || array_to_string(duplicate_ids, ', ')
-      ),
-      updated_at = now()
-    from (
-      select
-        sum(coalesce(cl.principal, 0)) as principal,
-        sum(coalesce(cl.paid_to_date, 0)) as paid_to_date,
-        bool_or(cl.status = 'defaulted') as has_defaulted
-      from public.member_carryover_loans cl
-      where cl.id = any(duplicate_ids)
-    ) extra
-    where keeper.id = kept_loan_id;
-
     update public.member_carryover_loans duplicate
     set
       status = 'closed',
       finished = true,
       closed_on = coalesce(duplicate.closed_on, duplicate.due_date, current_date),
-      fee_breakdown = coalesce(duplicate.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
-        'consolidatedIntoCarryoverId', kept_loan_id,
-        'consolidatedAt', now()
+      paid_to_date = greatest(
+        coalesce(duplicate.paid_to_date, 0),
+        public.sauti_carryover_loan_settlement_amount(duplicate)
       ),
-      notes = concat_ws(E'\n', duplicate.notes, 'System closed after consolidation into ' || kept_loan_id),
+      penalty_waived_amount = greatest(
+        coalesce(duplicate.penalty_waived_amount, 0),
+        public.sauti_carryover_prior_penalty_amount(duplicate)
+      ),
+      fee_breakdown = coalesce(duplicate.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeCarryoverId', kept_loan_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      notes = concat_ws(E'\n', duplicate.notes, 'System closed older same-category cycle from lifetime net before ' || kept_loan_id),
       updated_at = now()
     where duplicate.id = any(duplicate_ids);
 
@@ -151,16 +157,140 @@ begin
     closed_count := cardinality(duplicate_ids);
     return next;
   end loop;
+
+  for group_row in
+    with open_cycles as (
+      select
+        'loans'::text as source,
+        l.id,
+        l.member_id,
+        coalesce(nullif(l.loan_kind, ''), 'financial') as loan_kind,
+        l.start_date,
+        l.created_at
+      from public.loans l
+      where l.status in ('pending', 'active', 'defaulted')
+      union all
+      select
+        'member_carryover_loans'::text as source,
+        cl.id,
+        cl.member_id,
+        coalesce(nullif(cl.loan_kind, ''), 'financial') as loan_kind,
+        cl.start_date,
+        cl.created_at
+      from public.member_carryover_loans cl
+      where cl.status in ('active', 'defaulted')
+        and coalesce(cl.finished, false) = false
+    ),
+    grouped as (
+      select
+        oc.member_id,
+        oc.loan_kind,
+        array_agg(oc.source order by oc.start_date desc nulls last, oc.created_at desc nulls last, oc.id desc) as sources,
+        array_agg(oc.id order by oc.start_date desc nulls last, oc.created_at desc nulls last, oc.id desc) as ids
+      from open_cycles oc
+      group by oc.member_id, oc.loan_kind
+      having count(*) > 1
+    )
+    select * from grouped
+  loop
+    latest_source := group_row.sources[1];
+    latest_id := group_row.ids[1];
+    kept_loan_id := latest_id;
+    duplicate_ids := group_row.ids[2:cardinality(group_row.ids)];
+
+    update public.loans duplicate
+    set
+      status = 'closed',
+      paid = greatest(coalesce(duplicate.paid, 0), public.sauti_live_loan_settlement_amount(duplicate)),
+      supplier_payload = coalesce(duplicate.supplier_payload, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeSource', latest_source,
+        'closedAsEarlierCycleBeforeId', latest_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids)
+      and duplicate.id <> latest_id;
+
+    update public.member_carryover_loans duplicate
+    set
+      status = 'closed',
+      finished = true,
+      closed_on = coalesce(duplicate.closed_on, duplicate.due_date, current_date),
+      paid_to_date = greatest(
+        coalesce(duplicate.paid_to_date, 0),
+        public.sauti_carryover_loan_settlement_amount(duplicate)
+      ),
+      penalty_waived_amount = greatest(
+        coalesce(duplicate.penalty_waived_amount, 0),
+        public.sauti_carryover_prior_penalty_amount(duplicate)
+      ),
+      fee_breakdown = coalesce(duplicate.fee_breakdown, '{}'::jsonb) || jsonb_build_object(
+        'closedAsEarlierCycleBeforeSource', latest_source,
+        'closedAsEarlierCycleBeforeId', latest_id,
+        'closedFromLifetimeNetAt', now()
+      ),
+      notes = concat_ws(E'\n', duplicate.notes, 'System closed older same-category cycle from lifetime net before ' || latest_id),
+      updated_at = now()
+    where duplicate.id = any(duplicate_ids)
+      and duplicate.id <> latest_id;
+
+    source_table := 'loans/member_carryover_loans';
+    member_id := group_row.member_id;
+    loan_kind := group_row.loan_kind;
+    closed_loan_ids := duplicate_ids;
+    closed_count := cardinality(duplicate_ids);
+    return next;
+  end loop;
 end;
 $$;
 
-alter table public.loans disable trigger trg_loans_reject_duplicate_open;
-alter table public.member_carryover_loans disable trigger trg_member_carryover_loans_reject_duplicate_open;
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.loans'::regclass
+      and tgname = 'trg_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.loans disable trigger trg_loans_reject_duplicate_open;
+  end if;
+
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.member_carryover_loans'::regclass
+      and tgname = 'trg_member_carryover_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.member_carryover_loans disable trigger trg_member_carryover_loans_reject_duplicate_open;
+  end if;
+end $$;
 
 select * from public.sauti_repair_duplicate_open_loan_categories();
 
-alter table public.loans enable trigger trg_loans_reject_duplicate_open;
-alter table public.member_carryover_loans enable trigger trg_member_carryover_loans_reject_duplicate_open;
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.loans'::regclass
+      and tgname = 'trg_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.loans enable trigger trg_loans_reject_duplicate_open;
+  end if;
+
+  if exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.member_carryover_loans'::regclass
+      and tgname = 'trg_member_carryover_loans_reject_duplicate_open'
+      and not tgisinternal
+  ) then
+    alter table public.member_carryover_loans enable trigger trg_member_carryover_loans_reject_duplicate_open;
+  end if;
+end $$;
 
 drop index if exists public.loans_one_open_per_member_kind_idx;
 create unique index loans_one_open_per_member_kind_idx

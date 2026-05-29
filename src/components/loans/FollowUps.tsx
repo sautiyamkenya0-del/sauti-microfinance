@@ -37,7 +37,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
   const items = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const liveItems = loans
-      .filter((l) => l.status !== "pending" && l.status !== "rejected")
+      .filter((l) => !["pending", "rejected", "closed"].includes(l.status))
       .map((l) => {
         const summary = loanPenaltySummary(l, transactions);
         const isComplete = summary.totalOwedNow <= 0;
@@ -73,6 +73,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
       })
       .filter((x) => x.member && x.include);
     const carryoverItems = carryoverLoans
+      .filter((loan) => loan.status !== "closed" && !loan.finished)
       .map((loan) => {
         const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
         const isComplete = summary.totalOwedNow <= 0;

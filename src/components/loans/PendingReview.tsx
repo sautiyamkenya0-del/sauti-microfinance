@@ -5,9 +5,20 @@ import {
   loanPricingPreview,
   loanTermDaysOf,
   loanProductChargeAmount,
+  type LoanKind,
 } from "@/lib/store";
 import { useState } from "react";
 import { toast } from "sonner";
+
+type ProductFilter = "all" | LoanKind;
+
+const PRODUCT_FILTERS: { key: ProductFilter; label: string }[] = [
+  { key: "all", label: "All products" },
+  { key: "financial", label: "Financial" },
+  { key: "fuel", label: "Fuel" },
+  { key: "stock", label: "Stock" },
+  { key: "service", label: "Service" },
+];
 
 export function PendingReview() {
   const { loans, members, staff, currentUser, approveLoan, rejectLoan, appraisals } = useStore();
@@ -15,6 +26,7 @@ export function PendingReview() {
   const [adjAmount, setAdjAmount] = useState(0);
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [productFilter, setProductFilter] = useState<ProductFilter>("all");
 
   if (currentUser.role !== "director") {
     return (
@@ -25,12 +37,33 @@ export function PendingReview() {
     );
   }
 
-  const pending = loans.filter(
-    (loan) => loan.status === "pending" && loan.supplierRequestStatus !== "approved",
-  );
+  const pending = loans.filter((loan) => {
+    if (loan.status !== "pending" || loan.supplierRequestStatus === "approved") return false;
+    if (productFilter === "all") return true;
+    return (loan.loanKind ?? "financial") === productFilter;
+  });
 
   return (
     <Section title={`Applications Awaiting Review (${pending.length})`}>
+      <div className="flex flex-wrap gap-2 border-b border-border px-5 py-3">
+        {PRODUCT_FILTERS.map((filter) => {
+          const active = productFilter === filter.key;
+          return (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setProductFilter(filter.key)}
+              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card hover:bg-muted"
+              }`}
+            >
+              {filter.label}
+            </button>
+          );
+        })}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
