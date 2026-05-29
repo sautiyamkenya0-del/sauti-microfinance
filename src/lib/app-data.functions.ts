@@ -733,6 +733,10 @@ async function liveLoanAccountingSummary(
     0,
     roundMoney(totalExpectedCollected + totalPenalty - ledger.totalPaid),
   );
+  const defaultedAmount = Math.max(
+    0,
+    roundMoney(ledger.scheduledCollectedToDate + totalPenalty - ledger.totalPaid),
+  );
   const autoStopped =
     ledger.daysPastDue > 0 &&
     DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
@@ -750,7 +754,7 @@ async function liveLoanAccountingSummary(
     total: roundMoney(ledger.totalPaid + totalOwedNow),
     dueDate: ledger.dueDate,
     daysPastDue: ledger.daysPastDue,
-    defaultedAmount: ledger.daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    defaultedAmount,
     autoStopped,
     autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
     isFinished: totalOwedNow <= 0,

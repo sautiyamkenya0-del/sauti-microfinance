@@ -1649,6 +1649,10 @@ export function loanPenaltySummary(
   });
   const totalPenalty = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + totalPenalty - ledger.totalPaid);
+  const defaultedAmount = Math.max(
+    0,
+    ledger.scheduledCollectedToDate + totalPenalty - ledger.totalPaid,
+  );
   const autoStopped =
     ledger.daysPastDue > 0 &&
     DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
@@ -1669,7 +1673,7 @@ export function loanPenaltySummary(
     penaltyWaivedAmount,
     totalPenalty,
     totalOwedNow,
-    defaultedAmount: ledger.daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    defaultedAmount,
     autoStopped,
     autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
     repaymentLedger: ledger.rows,

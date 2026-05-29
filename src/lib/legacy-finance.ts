@@ -331,6 +331,10 @@ export function summarizeLegacyCarryoverLoan(
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const estimatedPenaltyNow = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
   const totalOwedNow = Math.max(0, totalExpectedCollected + estimatedPenaltyNow - ledger.totalPaid);
+  const defaultedAmount = Math.max(
+    0,
+    ledger.scheduledCollectedToDate + estimatedPenaltyNow - ledger.totalPaid,
+  );
   const autoStopped =
     daysPastDue > 0 &&
     DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
@@ -375,7 +379,7 @@ export function summarizeLegacyCarryoverLoan(
     overduePenalty,
     estimatedPenaltyNow,
     totalOwedNow,
-    defaultedAmount: daysPastDue > 0 && totalOwedNow > 0 ? totalOwedNow : 0,
+    defaultedAmount,
     autoStopped,
     autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
     paidPct,
