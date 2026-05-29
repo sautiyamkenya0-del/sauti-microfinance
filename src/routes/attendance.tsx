@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { CalendarCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { AppHeader } from "@/components/AppHeader";
@@ -41,8 +42,22 @@ const STATUS_TONE: Record<Attendance["status"], "success" | "warning" | "destruc
 
 function AttendancePage() {
   const { attendance, currentUser, markAttendance, staff } = useStore();
-  const today = todayInKenya();
-  const currentKenyaTime = timeInKenya();
+  const [kenyaClock, setKenyaClock] = useState(() => ({
+    date: todayInKenya(),
+    time: timeInKenya(),
+  }));
+  const today = kenyaClock.date;
+  const currentKenyaTime = kenyaClock.time;
+
+  useEffect(() => {
+    const updateClock = () =>
+      setKenyaClock({
+        date: todayInKenya(),
+        time: timeInKenya(),
+      });
+    const timer = window.setInterval(updateClock, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
   const dates = Array.from(new Set([today, ...attendance.map((row) => row.date)]))
     .sort()
     .reverse();
@@ -145,7 +160,7 @@ function AttendancePage() {
           </div>
         </Section>
 
-        <Section title={`Today · ${today} · Nairobi time`}>
+        <Section title={`Today - ${today} - Nairobi time`}>
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider">
               <tr>

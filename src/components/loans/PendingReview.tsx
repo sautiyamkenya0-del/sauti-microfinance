@@ -7,12 +7,26 @@ import {
   loanPricingPreview,
   loanTermDaysOf,
   loanProductChargeAmount,
+  type Loan,
   type LoanKind,
 } from "@/lib/store";
 import { useState } from "react";
 import { toast } from "sonner";
 
 type ProductFilter = "all" | LoanKind;
+type ReviewProductDraft = {
+  vehiclePlate: string;
+  fuelType: string;
+  litres: number;
+  unitPrice: number;
+  productChargeAmount: number;
+  weekStarting: string;
+  weekEnding: string;
+  item: string;
+  quantity: number;
+  serviceType: string;
+  notes: string;
+};
 
 const PRODUCT_FILTERS: { key: ProductFilter; label: string }[] = [
   { key: "all", label: "All products" },
@@ -30,6 +44,9 @@ export function PendingReview() {
   const [adjAmount, setAdjAmount] = useState(0);
   const [adjTermDays, setAdjTermDays] = useState(30);
   const [reviewPurpose, setReviewPurpose] = useState("");
+  const [productDraft, setProductDraft] = useState<ReviewProductDraft>(() =>
+    productDraftFromLoan(),
+  );
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [productFilter, setProductFilter] = useState<ProductFilter>("all");
@@ -137,6 +154,7 @@ export function PendingReview() {
                         setAdjAmount(appraisal?.approvedAmount || loan.principal);
                         setAdjTermDays(termDays);
                         setReviewPurpose(loan.purpose ?? "");
+                        setProductDraft(productDraftFromLoan(loan));
                         setNote("");
                         setShowAll(false);
                       }}
@@ -160,11 +178,14 @@ export function PendingReview() {
           const appraisal = appraisals.find((row) => row.loanId === loan.id);
           const termDays = Math.max(1, Math.floor(adjTermDays || loanTermDaysOf(loan)));
           const supplierBacked = loan.loanKind != null && loan.loanKind !== "financial";
-          const productChargeAmount = loanProductChargeAmount({
+          const storedProductChargeAmount = loanProductChargeAmount({
             loanKind: loan.loanKind,
             supplierPayload: loan.supplierPayload,
             processingFeeAmount: loan.processingFeeAmount,
           });
+          const productChargeAmount = supplierBacked
+            ? Math.max(0, Number(productDraft.productChargeAmount || storedProductChargeAmount))
+            : 0;
           const pricing = loanPricingPreview({
             netAmount: adjAmount,
             termDays,
@@ -289,6 +310,11 @@ export function PendingReview() {
                     className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
                   />
                 </label>
+                <ReviewProductFields
+                  loanKind={loan.loanKind ?? "financial"}
+                  draft={productDraft}
+                  onChange={(patch) => setProductDraft((current) => ({ ...current, ...patch }))}
+                />
                 <label className="mt-3 block">
                   <span className="text-xs text-muted-foreground">Approved repayment days</span>
                   <input
@@ -355,6 +381,19 @@ export function PendingReview() {
                             reviewedBy: currentUser.id,
                             purpose: reviewPurpose,
                             note,
+                            supplierPayloadPatch: supplierPayloadPatchFromDraft(
+                              productDraft,
+                              loan.loanKind ?? "financial",
+                            ),
+                            applicationLoanPatch: {
+                              purpose: reviewPurpose,
+                              amountApplied: appliedAmount,
+                              termDays,
+                            },
+                            applicationApplicantPatch:
+                              loan.loanKind === "fuel"
+                                ? { vehiclePlate: productDraft.vehiclePlate.trim() || undefined }
+                                : {},
                           },
                         });
                         await reloadAppData();
@@ -380,6 +419,205 @@ function extractApplicationPayload(payload?: Record<string, unknown>) {
   return application && typeof application === "object" ? application : undefined;
 }
 
+function productDraftFromLoan(loan?: Loan): ReviewProductDraft {
+  const payload = (loan?.supplierPayload ?? {}) as Record<string, unknown>;
+  return {
+    vehiclePlate: String(payload.vehiclePlate ?? ""),
+    fuelType: String(payload.fuelType ?? "Petrol"),
+    litres: Number(payload.litres ?? 0),
+    unitPrice: Number(payload.unitPrice ?? 0),
+    productChargeAmount: loan
+      ? loanProductChargeAmount({
+          loanKind: loan.loanKind,
+          supplierPayload: loan.supplierPayload,
+          processingFeeAmount: loan.processingFeeAmount,
+        })
+      : 0,
+    weekStarting: String(payload.weekStarting ?? ""),
+    weekEnding: String(payload.weekEnding ?? ""),
+    item: String(payload.item ?? ""),
+    quantity: Number(payload.quantity ?? 0),
+    serviceType: String(payload.serviceType ?? ""),
+    notes: String(payload.notes ?? ""),
+  };
+}
+
+function supplierPayloadPatchFromDraft(draft: ReviewProductDraft, loanKind: LoanKind) {
+  if (loanKind === "fuel") {
+    return {
+      vehiclePlate: draft.vehiclePlate.trim(),
+      fuelType: draft.fuelType.trim(),
+      litres: Math.max(0, Number(draft.litres) || 0),
+      unitPrice: Math.max(0, Number(draft.unitPrice) || 0),
+      fuelCharge: Math.max(0, Number(draft.productChargeAmount) || 0),
+      productChargeAmount: Math.max(0, Number(draft.productChargeAmount) || 0),
+      weekStarting: draft.weekStarting || undefined,
+      weekEnding: draft.weekEnding || undefined,
+      notes: draft.notes.trim() || undefined,
+    };
+  }
+  if (loanKind === "stock") {
+    return {
+      item: draft.item.trim(),
+      quantity: Math.max(0, Number(draft.quantity) || 0),
+      stockCharge: Math.max(0, Number(draft.productChargeAmount) || 0),
+      productChargeAmount: Math.max(0, Number(draft.productChargeAmount) || 0),
+      notes: draft.notes.trim() || undefined,
+    };
+  }
+  if (loanKind === "service") {
+    return {
+      serviceType: draft.serviceType.trim(),
+      notes: draft.notes.trim() || undefined,
+    };
+  }
+  return {};
+}
+
+function ReviewProductFields({
+  loanKind,
+  draft,
+  onChange,
+}: {
+  loanKind: LoanKind;
+  draft: ReviewProductDraft;
+  onChange: (patch: Partial<ReviewProductDraft>) => void;
+}) {
+  if (loanKind === "financial") return null;
+  return (
+    <div className="mt-4 rounded-md border border-border bg-muted/20 p-3">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Applied product details
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {loanKind === "fuel" ? (
+          <>
+            <ReviewInput
+              label="Vehicle plate"
+              value={draft.vehiclePlate}
+              onChange={(value) => onChange({ vehiclePlate: value.toUpperCase() })}
+            />
+            <ReviewInput
+              label="Fuel type"
+              value={draft.fuelType}
+              onChange={(value) => onChange({ fuelType: value })}
+            />
+            <ReviewNumberInput
+              label="Litres"
+              value={draft.litres}
+              onChange={(value) => onChange({ litres: value })}
+            />
+            <ReviewNumberInput
+              label="Unit price"
+              value={draft.unitPrice}
+              onChange={(value) => onChange({ unitPrice: value })}
+            />
+            <ReviewNumberInput
+              label="Fuel charge"
+              value={draft.productChargeAmount}
+              onChange={(value) => onChange({ productChargeAmount: value })}
+            />
+            <ReviewInput
+              label="Week starting"
+              type="date"
+              value={draft.weekStarting}
+              onChange={(value) => onChange({ weekStarting: value })}
+            />
+            <ReviewInput
+              label="Week ending"
+              type="date"
+              value={draft.weekEnding}
+              onChange={(value) => onChange({ weekEnding: value })}
+            />
+          </>
+        ) : null}
+        {loanKind === "stock" ? (
+          <>
+            <ReviewInput
+              label="Stock item"
+              value={draft.item}
+              onChange={(value) => onChange({ item: value })}
+            />
+            <ReviewNumberInput
+              label="Quantity"
+              value={draft.quantity}
+              onChange={(value) => onChange({ quantity: value })}
+            />
+            <ReviewNumberInput
+              label="Stock charge"
+              value={draft.productChargeAmount}
+              onChange={(value) => onChange({ productChargeAmount: value })}
+            />
+          </>
+        ) : null}
+        {loanKind === "service" ? (
+          <ReviewInput
+            label="Service type"
+            value={draft.serviceType}
+            onChange={(value) => onChange({ serviceType: value })}
+          />
+        ) : null}
+        <label className="block sm:col-span-2">
+          <span className="text-xs text-muted-foreground">Supplier notes</span>
+          <textarea
+            rows={2}
+            value={draft.notes}
+            onChange={(event) => onChange({ notes: event.target.value })}
+            className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function ReviewInput({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+      />
+    </label>
+  );
+}
+
+function ReviewNumberInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+      />
+    </label>
+  );
+}
+
 function ReviewCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3">
@@ -395,9 +633,48 @@ function DetailBlock({ title, data }: { title: string; data: unknown }) {
       <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </div>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
-        {JSON.stringify(data ?? {}, null, 2)}
-      </pre>
+      <div className="max-h-64 overflow-auto text-xs">
+        <FriendlyDetails data={data ?? {}} />
+      </div>
     </div>
   );
+}
+
+function FriendlyDetails({ data }: { data: unknown }) {
+  if (Array.isArray(data)) {
+    if (data.length === 0) return <div className="text-muted-foreground">None</div>;
+    return (
+      <div className="space-y-2">
+        {data.map((item, index) => (
+          <div key={index} className="rounded border border-border/70 bg-card/60 p-2">
+            <div className="mb-1 font-medium text-muted-foreground">Item {index + 1}</div>
+            <FriendlyDetails data={item} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (data && typeof data === "object") {
+    const entries = Object.entries(data as Record<string, unknown>);
+    if (entries.length === 0) return <div className="text-muted-foreground">None</div>;
+    return (
+      <div className="space-y-1.5">
+        {entries.map(([key, value]) => (
+          <div key={key} className="grid gap-1 sm:grid-cols-[160px,1fr]">
+            <div className="font-medium capitalize text-muted-foreground">
+              {key.replace(/([A-Z])/g, " $1").replace(/_/g, " ")}
+            </div>
+            <div>
+              {value && typeof value === "object" ? (
+                <FriendlyDetails data={value} />
+              ) : (
+                String(value ?? "-")
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return <div>{String(data ?? "-")}</div>;
 }

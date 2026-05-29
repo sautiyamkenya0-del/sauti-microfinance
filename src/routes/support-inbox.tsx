@@ -17,8 +17,13 @@ export const Route = createFileRoute("/support-inbox")({
 
 function SupportInboxPage() {
   const { currentUser, staff } = useStore();
-  const { rows: threads, appendMessage, setThreadStatus, updateMessage, deleteMessage } =
-    useSupportInboxActions();
+  const {
+    rows: threads,
+    appendMessage,
+    setThreadStatus,
+    updateMessage,
+    deleteMessage,
+  } = useSupportInboxActions();
   const { markRead } = useReadIds();
   // Inbox: threads assigned to me + unassigned + my role-relevant
   const visible = threads.filter(
@@ -71,6 +76,24 @@ function SupportInboxPage() {
     toast.success("Copied");
   }
 
+  async function copyThread() {
+    if (!active) return;
+    const body = active.messages
+      .map((message) => `[${formatKenyaTime(message.at)}] ${message.fromName}: ${message.text}`)
+      .join("\n");
+    await navigator.clipboard.writeText(body);
+    toast.success("Conversation copied");
+  }
+
+  function canManageMessage(message: NonNullable<typeof active>["messages"][number]) {
+    return (
+      message.from === "staff" &&
+      (message.fromId === currentUser.id ||
+        currentUser.role === "director" ||
+        currentUser.role === "manager")
+    );
+  }
+
   async function editMessage(messageId: string, text: string) {
     const next = window.prompt("Edit message", text);
     if (next == null || next.trim() === text.trim()) return;
@@ -82,6 +105,20 @@ function SupportInboxPage() {
     if (!window.confirm("Delete this message?")) return;
     await deleteMessage(messageId);
     toast.success("Message deleted");
+  }
+
+  async function deleteThreadMessages() {
+    if (!active) return;
+    const deletable = active.messages.filter(canManageMessage);
+    if (deletable.length === 0) {
+      toast.error("No staff replies you can delete in this conversation.");
+      return;
+    }
+    if (!window.confirm(`Delete ${deletable.length} staff reply/replies?`)) return;
+    for (const message of deletable) {
+      await deleteMessage(message.id);
+    }
+    toast.success("Conversation messages deleted");
   }
 
   return (
@@ -132,6 +169,30 @@ function SupportInboxPage() {
           </aside>
 
           <Section
+            action={
+              active ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void copyThread()}
+                    disabled={active.messages.length === 0}
+                    className="grid h-8 w-8 place-items-center rounded-md border border-border text-muted-foreground hover:bg-muted disabled:opacity-40"
+                    title="Copy conversation"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteThreadMessages()}
+                    disabled={!active.messages.some(canManageMessage)}
+                    className="grid h-8 w-8 place-items-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                    title="Delete staff replies"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null
+            }
             title={active ? `${active.memberName} · ${active.subject}` : "Select a conversation"}
           >
             {active ? (
@@ -154,7 +215,7 @@ function SupportInboxPage() {
                           >
                             <Copy className="h-3 w-3" />
                           </button>
-                          {m.from === "staff" && m.fromId === currentUser.id ? (
+                          {canManageMessage(m) ? (
                             <>
                               <button
                                 type="button"

@@ -329,9 +329,7 @@ function LoansHub() {
                           member.id,
                         )} loans)${blocker ? ` - blocked: ${blocker}` : ""}`;
                       }}
-                      getOptionDisabled={(member) =>
-                        !!openLoanBlocker(member.id, selectedLoanKind)
-                      }
+                      getOptionDisabled={(member) => !!openLoanBlocker(member.id, selectedLoanKind)}
                     />
                   </div>
                   {eligibleMemberAccounts.length === 0 ? (
@@ -963,6 +961,27 @@ function NumberInput({
         min={0}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+      />
+    </label>
+  );
+}
+
+function TextInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
         className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
       />
     </label>

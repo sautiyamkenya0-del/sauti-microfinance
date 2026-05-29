@@ -8,6 +8,10 @@ type MemberOption = {
   phone?: string;
   category?: string;
   member_category?: string;
+  oldSystemId?: string;
+  businessName?: string;
+  vehiclePlate?: string;
+  serviceMemberNumber?: string;
   shares?: number;
 };
 
@@ -29,15 +33,34 @@ export function MemberSearchSelect({
   getOptionDisabled?: (member: MemberOption) => boolean;
 }) {
   const [query, setQuery] = useState("");
+  const selectedMember = useMemo(
+    () => members.find((member) => member.id === value),
+    [members, value],
+  );
   const filteredMembers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return members;
-    return members.filter((member) =>
-      [member.id, member.name, member.phone, member.category, member.member_category]
-        .filter(Boolean)
-        .some((part) => String(part).toLowerCase().includes(normalized)),
-    );
-  }, [members, query]);
+    const matches = !normalized
+      ? members
+      : members.filter((member) =>
+          [
+            member.id,
+            member.name,
+            member.phone,
+            member.category,
+            member.member_category,
+            member.oldSystemId,
+            member.businessName,
+            member.vehiclePlate,
+            member.serviceMemberNumber,
+          ]
+            .filter(Boolean)
+            .some((part) => String(part).toLowerCase().includes(normalized)),
+        );
+    if (selectedMember && !matches.some((member) => member.id === selectedMember.id)) {
+      return [selectedMember, ...matches];
+    }
+    return matches;
+  }, [members, query, selectedMember]);
 
   return (
     <div className="space-y-2">
@@ -65,6 +88,10 @@ export function MemberSearchSelect({
       </select>
       {filteredMembers.length === 0 ? (
         <div className="text-xs text-muted-foreground">No members match that search.</div>
+      ) : query.trim() ? (
+        <div className="text-xs text-muted-foreground">
+          Showing {filteredMembers.length} matching member{filteredMembers.length === 1 ? "" : "s"}.
+        </div>
       ) : null}
     </div>
   );

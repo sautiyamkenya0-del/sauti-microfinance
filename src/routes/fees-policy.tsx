@@ -262,6 +262,7 @@ function PolicyCenterPage() {
   );
   const [editingFee, setEditingFee] = useState<FeePolicy | null>(null);
   const [creatingFee, setCreatingFee] = useState(false);
+  const [feeBusy, setFeeBusy] = useState(false);
   const [serviceRows, setServiceRows] = useState<any[]>([]);
   const [countyScheduleRows, setCountyScheduleRows] = useState<any[]>([]);
   const [serviceApplicationRows, setServiceApplicationRows] = useState<any[]>([]);
@@ -280,6 +281,7 @@ function PolicyCenterPage() {
   const [waterfallScenario, setWaterfallScenario] = useState<WaterfallScenario>("member_with_loan");
   const [clientQuery, setClientQuery] = useState("");
   const [feeMemberQuery, setFeeMemberQuery] = useState("");
+  const [serviceMemberQuery, setServiceMemberQuery] = useState("");
   const memberAccounts = useMemo(
     () => members.filter((member) => member.category !== "investor"),
     [members],
@@ -302,6 +304,16 @@ function PolicyCenterPage() {
         member.phone.toLowerCase().includes(query),
     );
   }, [feeMemberQuery, feeSelectableMembers]);
+  const filteredServiceMembers = useMemo(() => {
+    const query = serviceMemberQuery.trim().toLowerCase();
+    if (!query) return memberAccounts;
+    return memberAccounts.filter(
+      (member) =>
+        member.name.toLowerCase().includes(query) ||
+        member.id.toLowerCase().includes(query) ||
+        member.phone.toLowerCase().includes(query),
+    );
+  }, [memberAccounts, serviceMemberQuery]);
   const newFeeSelectableMembers = useMemo(() => {
     if (!editingFee) return [];
     const effectiveFrom = String(editingFee.effectiveFrom ?? "").slice(0, 10);
@@ -793,6 +805,18 @@ function PolicyCenterPage() {
     systemTargetRows,
     openLiveLoanSummaries.length + openCarryoverPortfolio.length,
   );
+  const serviceCustomCharges = useMemo(
+    () => parseServiceCustomChargesDraft(serviceDraft.customChargesText),
+    [serviceDraft.customChargesText],
+  );
+  const serviceNormalDeductions = useMemo(
+    () => parseServiceObjectDraft(serviceDraft.normalDeductionsText),
+    [serviceDraft.normalDeductionsText],
+  );
+  const serviceRenewalRules = useMemo(
+    () => parseServiceRenewalRulesDraft(serviceDraft.renewalRulesText),
+    [serviceDraft.renewalRulesText],
+  );
 
   const enrichedTargets = useMemo(
     () =>
@@ -814,30 +838,23 @@ function PolicyCenterPage() {
     if (!isCoreFeePolicy(editingFee)) {
       return toast.error("Only membership, card, sticker, and fuel buffer fees are managed here.");
     }
-    if (editingFee.key === "fuel_buffer" && editingFee.scope !== "locomotive_members") {
-      return toast.error("Fuel buffer must apply to locomotive members only.");
-    }
-    if (editingFee.key === "sticker" && editingFee.scope !== "financial_members") {
-      return toast.error("Sticker fee must apply to financial members only.");
-    }
-    if (
-      editingFee.scope === "selected_members" &&
-      (editingFee.selectedMemberIds?.length ?? 0) === 0
-    ) {
+    const nextFee = {
+      ...editingFee,
+      custom: false,
+      scope:
+        editingFee.key === "fuel_buffer"
+          ? "locomotive_members"
+          : editingFee.key === "sticker"
+            ? "financial_members"
+            : editingFee.scope,
+    } satisfies FeePolicy;
+    if (nextFee.scope === "selected_members" && (nextFee.selectedMemberIds?.length ?? 0) === 0) {
       return toast.error("Pick at least one member for a selected-members fee.");
     }
+    setFeeBusy(true);
     try {
       await saveFee({
-        data: {
-          ...editingFee,
-          custom: false,
-          scope:
-            editingFee.key === "fuel_buffer"
-              ? "locomotive_members"
-              : editingFee.key === "sticker"
-                ? "financial_members"
-                : editingFee.scope,
-        },
+        data: nextFee,
       });
       await reloadAppData();
       toast.success("Fee updated");
@@ -845,6 +862,8 @@ function PolicyCenterPage() {
       setCreatingFee(false);
     } catch (error: any) {
       toast.error(error?.message ?? "Fee could not be saved.");
+    } finally {
+      setFeeBusy(false);
     }
   }
 
@@ -853,39 +872,10 @@ function PolicyCenterPage() {
     if (serviceDraft.scope === "selected_members" && serviceDraft.selectedMemberIds.length === 0) {
       return toast.error("Pick at least one member for a selected-members service.");
     }
-    let feeOverrides: Record<string, unknown> = {};
-    let normalDeductions: Record<string, unknown> = {};
-    let renewalRules: Record<string, unknown> = {};
-    let customCharges: unknown[] = [];
-    if (serviceDraft.feeOverridesText.trim()) {
-      try {
-        feeOverrides = JSON.parse(serviceDraft.feeOverridesText);
-      } catch {
-        return toast.error("Fee overrides must be valid JSON.");
-      }
-    }
-    if (serviceDraft.normalDeductionsText.trim()) {
-      try {
-        normalDeductions = JSON.parse(serviceDraft.normalDeductionsText);
-      } catch {
-        return toast.error("Normal deductions must be valid JSON.");
-      }
-    }
-    if (serviceDraft.renewalRulesText.trim()) {
-      try {
-        renewalRules = JSON.parse(serviceDraft.renewalRulesText);
-      } catch {
-        return toast.error("Renewal rules must be valid JSON.");
-      }
-    }
-    if (serviceDraft.customChargesText.trim()) {
-      try {
-        const parsed = JSON.parse(serviceDraft.customChargesText);
-        customCharges = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return toast.error("Custom charges must be a valid JSON array.");
-      }
-    }
+    const feeOverrides = parseServiceOverridesDraft(serviceDraft.feeOverridesText);
+    const normalDeductions = parseServiceObjectDraft(serviceDraft.normalDeductionsText);
+    const renewalRules = parseServiceObjectDraft(serviceDraft.renewalRulesText);
+    const customCharges = parseServiceCustomChargesDraft(serviceDraft.customChargesText);
     setServiceBusy(true);
     try {
       await saveService({
@@ -956,6 +946,58 @@ function PolicyCenterPage() {
       }
       const nextOverrides = { ...overrides, deductions };
       return { ...current, feeOverridesText: JSON.stringify(nextOverrides, null, 2) };
+    });
+  }
+
+  function updateServiceCustomCharges(
+    next:
+      | Array<{ label: string; amount: number }>
+      | ((
+          current: Array<{ label: string; amount: number }>,
+        ) => Array<{ label: string; amount: number }>),
+  ) {
+    setServiceDraft((current) => {
+      const currentCharges = parseServiceCustomChargesDraft(current.customChargesText);
+      const nextCharges = typeof next === "function" ? next(currentCharges) : next;
+      return {
+        ...current,
+        customChargesText: JSON.stringify(
+          nextCharges
+            .map((charge) => ({
+              label: charge.label.trim(),
+              amount: Math.max(0, Number(charge.amount) || 0),
+            }))
+            .filter((charge) => charge.label || charge.amount > 0),
+          null,
+          2,
+        ),
+      };
+    });
+  }
+
+  function updateServiceNormalDeduction(fee: FeePolicy, checked: boolean, amount?: number) {
+    setServiceDraft((current) => {
+      const deductions = parseServiceObjectDraft(current.normalDeductionsText);
+      const nextDeductions = { ...deductions };
+      if (!checked) {
+        delete nextDeductions[fee.key];
+      } else {
+        nextDeductions[fee.key] = {
+          label: fee.label,
+          amount: Math.max(0, Number(amount ?? fee.amount) || 0),
+        };
+      }
+      return { ...current, normalDeductionsText: JSON.stringify(nextDeductions, null, 2) };
+    });
+  }
+
+  function updateServiceRenewalRules(patch: Record<string, unknown>) {
+    setServiceDraft((current) => {
+      const nextRules = {
+        ...parseServiceRenewalRulesDraft(current.renewalRulesText),
+        ...patch,
+      };
+      return { ...current, renewalRulesText: JSON.stringify(nextRules, null, 2) };
     });
   }
 
@@ -1293,7 +1335,20 @@ function PolicyCenterPage() {
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 border-b border-border">
+        <div className="md:hidden">
+          <select
+            value={tab}
+            onChange={(event) => setTab(event.target.value as PolicyCenterTab)}
+            className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+          >
+            {SUBPAGES.map((subpage) => (
+              <option key={subpage.key} value={subpage.key}>
+                {subpage.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="hidden flex-wrap items-center gap-1 border-b border-border md:flex">
           {SUBPAGES.map((subpage) => (
             <button
               key={subpage.key}
@@ -1610,7 +1665,7 @@ function PolicyCenterPage() {
                           </div>
                         )}
                         <div className="mt-3 text-[11px] text-muted-foreground">
-                          The separate `New members only` audience will automatically target anyone
+                          The separate New members only audience will automatically target anyone
                           whose join date is on or after the effective date above.
                         </div>
                       </div>
@@ -1628,13 +1683,16 @@ function PolicyCenterPage() {
                   </Field>
                   <div className="sm:col-span-2 flex gap-2">
                     <button
+                      type="button"
+                      disabled={feeBusy}
                       onClick={() => void saveFeeDraft()}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                     >
                       <Save className="h-4 w-4" />
-                      Save
+                      {feeBusy ? "Saving..." : "Save"}
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setEditingFee(null);
                         setCreatingFee(false);
@@ -2021,37 +2079,199 @@ function PolicyCenterPage() {
                     className="input"
                   />
                 </Field>
-                {serviceDraft.scope === "selected_members" ? (
-                  <Field label="Specific members" className="sm:col-span-2">
-                    <div className="grid max-h-72 gap-2 overflow-y-auto rounded-xl border border-border bg-muted/20 p-3 md:grid-cols-2">
-                      {memberAccounts.map((member) => {
-                        const checked = serviceDraft.selectedMemberIds.includes(member.id);
-                        return (
-                          <label
-                            key={member.id}
-                            className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm"
-                          >
+                <Field label="Additional charges" className="sm:col-span-2">
+                  <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                    {serviceCustomCharges.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        No extra charges added for this service.
+                      </div>
+                    ) : null}
+                    {serviceCustomCharges.map((charge, index) => (
+                      <div key={index} className="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
+                        <input
+                          value={charge.label}
+                          onChange={(event) =>
+                            updateServiceCustomCharges((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, label: event.target.value } : item,
+                              ),
+                            )
+                          }
+                          placeholder="Charge name"
+                          className="input"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          value={charge.amount}
+                          onChange={(event) =>
+                            updateServiceCustomCharges((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, amount: Number(event.target.value) }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="input"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateServiceCustomCharges((current) =>
+                              current.filter((_, itemIndex) => itemIndex !== index),
+                            )
+                          }
+                          className="rounded-md border border-border px-3 py-2 text-xs hover:bg-muted"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateServiceCustomCharges((current) => [
+                          ...current,
+                          { label: "", amount: 0 },
+                        ])
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-xs hover:bg-muted"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add charge
+                    </button>
+                  </div>
+                </Field>
+                <Field label="Normal deductions" className="sm:col-span-2">
+                  <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+                    {activeFees.filter(isCoreFeePolicy).map((fee) => {
+                      const deduction = serviceNormalDeductions[fee.key] as
+                        | { amount?: number }
+                        | undefined;
+                      const checked = deduction != null;
+                      const amount = Number(deduction?.amount ?? fee.amount);
+                      return (
+                        <label
+                          key={fee.key}
+                          className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm"
+                        >
+                          <span className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={checked}
                               onChange={(event) =>
-                                setServiceDraft((current) => ({
-                                  ...current,
-                                  selectedMemberIds: event.target.checked
-                                    ? Array.from(new Set([...current.selectedMemberIds, member.id]))
-                                    : current.selectedMemberIds.filter((id) => id !== member.id),
-                                }))
+                                updateServiceNormalDeduction(fee, event.target.checked, amount)
                               }
                             />
-                            <span>
-                              <span className="font-medium">{member.name}</span>
-                              <span className="block text-xs text-muted-foreground">
-                                {member.id} | {member.phone}
+                            <span className="font-medium">{fee.label}</span>
+                          </span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={amount}
+                            disabled={!checked}
+                            onChange={(event) =>
+                              updateServiceNormalDeduction(fee, true, Number(event.target.value))
+                            }
+                            className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs disabled:opacity-50"
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </Field>
+                <Field label="Renewal rules" className="sm:col-span-2">
+                  <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-3">
+                    <label className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={serviceRenewalRules.autoRenew}
+                        onChange={(event) =>
+                          updateServiceRenewalRules({ autoRenew: event.target.checked })
+                        }
+                      />
+                      Auto-renew
+                    </label>
+                    <label className="block text-sm">
+                      <span className="text-xs text-muted-foreground">Reminder days</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={serviceRenewalRules.reminderDays}
+                        onChange={(event) =>
+                          updateServiceRenewalRules({
+                            reminderDays: Math.max(0, Math.floor(Number(event.target.value) || 0)),
+                          })
+                        }
+                        className="input mt-1"
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      <span className="text-xs text-muted-foreground">Renewal window</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={serviceRenewalRules.renewalWindowDays}
+                        onChange={(event) =>
+                          updateServiceRenewalRules({
+                            renewalWindowDays: Math.max(
+                              0,
+                              Math.floor(Number(event.target.value) || 0),
+                            ),
+                          })
+                        }
+                        className="input mt-1"
+                      />
+                    </label>
+                  </div>
+                </Field>
+                {serviceDraft.scope === "selected_members" ? (
+                  <Field label="Specific members" className="sm:col-span-2">
+                    <div className="rounded-xl border border-border bg-muted/20 p-3">
+                      <input
+                        value={serviceMemberQuery}
+                        onChange={(event) => setServiceMemberQuery(event.target.value)}
+                        placeholder="Search by name, member number, or phone"
+                        className="input mb-3"
+                      />
+                      <div className="grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
+                        {filteredServiceMembers.map((member) => {
+                          const checked = serviceDraft.selectedMemberIds.includes(member.id);
+                          return (
+                            <label
+                              key={member.id}
+                              className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) =>
+                                  setServiceDraft((current) => ({
+                                    ...current,
+                                    selectedMemberIds: event.target.checked
+                                      ? Array.from(
+                                          new Set([...current.selectedMemberIds, member.id]),
+                                        )
+                                      : current.selectedMemberIds.filter((id) => id !== member.id),
+                                  }))
+                                }
+                              />
+                              <span>
+                                <span className="font-medium">{member.name}</span>
+                                <span className="block text-xs text-muted-foreground">
+                                  {member.id} | {member.phone}
+                                </span>
                               </span>
-                            </span>
-                          </label>
-                        );
-                      })}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {filteredServiceMembers.length === 0 ? (
+                        <div className="mt-3 text-xs text-muted-foreground">
+                          No members match that search.
+                        </div>
+                      ) : null}
                     </div>
                   </Field>
                 ) : null}
@@ -2113,18 +2333,20 @@ function PolicyCenterPage() {
                 ) : null}
                 <div className="sm:col-span-2 flex flex-wrap gap-2">
                   <button
+                    type="button"
                     disabled={serviceBusy}
                     onClick={() => void saveServiceDraft()}
                     className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                   >
                     <Save className="h-4 w-4" />
-                    Save service
+                    {serviceBusy ? "Saving..." : "Save"}
                   </button>
                   <button
+                    type="button"
                     onClick={() => setServiceDraft(blankServiceDraft())}
                     className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted"
                   >
-                    Clear
+                    Reset
                   </button>
                 </div>
               </div>
@@ -4177,6 +4399,40 @@ function parseServiceOverridesDraft(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseServiceObjectDraft(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseServiceCustomChargesDraft(value: string): Array<{ label: string; amount: number }> {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item, index) => {
+      const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      return {
+        label: String(row.label ?? row.name ?? `Charge ${index + 1}`),
+        amount: Math.max(0, Number(row.amount ?? 0) || 0),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function parseServiceRenewalRulesDraft(value: string) {
+  const parsed = parseServiceObjectDraft(value);
+  return {
+    autoRenew: parsed.autoRenew === true,
+    reminderDays: Math.max(0, Math.floor(Number(parsed.reminderDays ?? 0) || 0)),
+    renewalWindowDays: Math.max(0, Math.floor(Number(parsed.renewalWindowDays ?? 0) || 0)),
+  };
 }
 
 function describeFeeScope(fee: FeePolicy, members: Array<{ id: string }>) {

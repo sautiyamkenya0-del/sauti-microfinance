@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { Section } from "@/components/ui-bits";
 import { feePolicyAppliesToMember } from "@/lib/fees-policy";
 import {
@@ -66,7 +67,6 @@ export function Simulator() {
   const [registrationMode, setRegistrationMode] = useState<LoanChargeMode>("upfront");
   const [cardMode, setCardMode] = useState<LoanChargeMode>("upfront");
   const [stickerMode, setStickerMode] = useState<LoanChargeMode>("upfront");
-  const [memberQuery, setMemberQuery] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [walkInBusinessPermanence, setWalkInBusinessPermanence] =
     useState<BusinessPermanence>("permanent");
@@ -75,16 +75,6 @@ export function Simulator() {
     () => members.filter((member) => isMemberCategory(member.category)),
     [members],
   );
-  const filteredMembers = useMemo(() => {
-    const query = memberQuery.trim().toLowerCase();
-    if (!query) return memberAccounts;
-    return memberAccounts.filter(
-      (member) =>
-        member.name.toLowerCase().includes(query) ||
-        member.id.toLowerCase().includes(query) ||
-        member.phone.toLowerCase().includes(query),
-    );
-  }, [memberAccounts, memberQuery]);
   const selectedMember = memberAccounts.find((member) => member.id === selectedMemberId);
   const requestedTermBucket = normalizeLoanTermDaysForType(requestedDays, loanType);
   const stickerApplicable = selectedMember
@@ -186,28 +176,15 @@ export function Simulator() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Section title="Simulation Inputs">
           <div className="space-y-4 p-5">
-            <div className="grid gap-3 md:grid-cols-[220px,1fr]">
-              <Field label="Search Member">
-                <input
-                  value={memberQuery}
-                  onChange={(event) => setMemberQuery(event.target.value)}
-                  placeholder="Search name, member no., or phone"
-                  className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                />
-              </Field>
+            <div className="grid gap-3">
               <Field label="Member">
-                <select
+                <MemberSearchSelect
+                  members={memberAccounts}
                   value={selectedMemberId}
-                  onChange={(event) => setSelectedMemberId(event.target.value)}
-                  className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                >
-                  <option value="">Walk-in / new applicant</option>
-                  {filteredMembers.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.id} - {member.name} - {member.phone}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSelectedMemberId}
+                  emptyLabel="Walk-in / new applicant"
+                  describeMember={(member) => `${member.id} - ${member.name} - ${member.phone}`}
+                />
               </Field>
             </div>
 

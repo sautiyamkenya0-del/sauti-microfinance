@@ -118,8 +118,15 @@ function normalizeSelectedMemberIds(value: unknown) {
 export function normalizeFeePolicies(rows?: FeePolicy[] | null) {
   const merged = new Map(DEFAULT_FEE_POLICIES.map((row) => [row.key, row]));
   for (const row of rows ?? []) {
+    const scope: FeeScope =
+      row.key === "sticker"
+        ? "financial_members"
+        : row.key === "fuel_buffer"
+          ? "locomotive_members"
+          : row.scope;
     merged.set(row.key, {
       ...row,
+      scope,
       selectedMemberIds: normalizeSelectedMemberIds(row.selectedMemberIds),
     });
   }

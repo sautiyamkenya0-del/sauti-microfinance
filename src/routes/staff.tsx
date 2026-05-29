@@ -39,8 +39,14 @@ type ChatMsg = {
 type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
 
 function StaffChat() {
-  const { staff, currentUser, staffMessages, addStaffMessage, updateStaffMessage, deleteStaffMessage } =
-    useStore();
+  const {
+    staff,
+    currentUser,
+    staffMessages,
+    addStaffMessage,
+    updateStaffMessage,
+    deleteStaffMessage,
+  } = useStore();
   const others = staff.filter((s) => s.id !== currentUser.id);
   const [activeId, setActiveId] = useState(others[0]?.id ?? "");
   const allMsgs: ChatMsg[] = staffMessages.map((message) => ({
@@ -114,6 +120,9 @@ function StaffChat() {
       (m.from === currentUser.id && m.to === activeId) ||
       (m.from === activeId && m.to === currentUser.id),
   );
+  const canManageAnyChat = currentUser.role === "director" || currentUser.role === "manager";
+  const canManageMessage = (message: ChatMsg) =>
+    message.from === currentUser.id || canManageAnyChat;
 
   async function pushMsg(m: Omit<ChatMsg, "id" | "from" | "fromName" | "to" | "at">) {
     if (!activeId) return;
@@ -139,8 +148,33 @@ function StaffChat() {
     toast.success("Copied");
   }
 
+  async function copyChat() {
+    if (thread.length === 0) return;
+    const body = thread
+      .map((message) => {
+        const text = message.text ?? `Attachment: ${message.att?.name ?? "file"}`;
+        return `[${formatKenyaTime(message.at)}] ${message.fromName}: ${text}`;
+      })
+      .join("\n");
+    await navigator.clipboard.writeText(body);
+    toast.success("Chat copied");
+  }
+
+  async function deleteChat() {
+    const deletable = thread.filter(canManageMessage);
+    if (deletable.length === 0) {
+      toast.error("No messages you can delete in this chat.");
+      return;
+    }
+    if (!window.confirm(`Delete ${deletable.length} message(s) from this chat?`)) return;
+    for (const message of deletable) {
+      await deleteStaffMessage(message.id);
+    }
+    toast.success("Chat messages deleted");
+  }
+
   async function editMessage(message: ChatMsg) {
-    if (message.from !== currentUser.id || !message.text) return;
+    if (!canManageMessage(message) || !message.text) return;
     const next = window.prompt("Edit message", message.text);
     if (next == null || next.trim() === message.text.trim()) return;
     await updateStaffMessage(message.id, next);
@@ -148,7 +182,7 @@ function StaffChat() {
   }
 
   async function removeMessage(message: ChatMsg) {
-    if (message.from !== currentUser.id) return;
+    if (!canManageMessage(message)) return;
     if (!window.confirm("Delete this message?")) return;
     await deleteStaffMessage(message.id);
     toast.success("Message deleted");
@@ -259,7 +293,27 @@ function StaffChat() {
                   </div>
                 );
               })()}
-              {others.find((o) => o.id === activeId)?.name ?? "Select a staff"}
+              <span className="min-w-0 flex-1 truncate">
+                {others.find((o) => o.id === activeId)?.name ?? "Select a staff"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void copyChat()}
+                disabled={thread.length === 0}
+                className="grid h-8 w-8 place-items-center rounded-md border border-border text-muted-foreground hover:bg-muted disabled:opacity-40"
+                title="Copy chat"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteChat()}
+                disabled={thread.length === 0}
+                className="grid h-8 w-8 place-items-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                title="Delete chat messages"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
               {thread.map((m) => (
@@ -267,44 +321,42 @@ function StaffChat() {
                   key={m.id}
                   className={`flex ${m.from === currentUser.id ? "justify-end" : "justify-start"}`}
                 >
-                    <div
-                      className={`max-w-[75%] px-3 py-2 rounded-lg text-sm ${m.from === currentUser.id ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                    >
-                      <div className="mb-1 flex justify-end gap-1 opacity-70">
+                  <div
+                    className={`max-w-[75%] px-3 py-2 rounded-lg text-sm ${m.from === currentUser.id ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                  >
+                    <div className="mb-1 flex justify-end gap-1 opacity-70">
+                      <button
+                        type="button"
+                        onClick={() => void copyMessage(m)}
+                        className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                        title="Copy"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                      {canManageMessage(m) && m.text ? (
                         <button
                           type="button"
-                          onClick={() => void copyMessage(m)}
+                          onClick={() => void editMessage(m)}
                           className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
-                          title="Copy"
+                          title="Edit"
                         >
-                          <Copy className="h-3 w-3" />
+                          <Pencil className="h-3 w-3" />
                         </button>
-                        {m.from === currentUser.id && m.text ? (
-                          <button
-                            type="button"
-                            onClick={() => void editMessage(m)}
-                            className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
-                            title="Edit"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                        ) : null}
-                        {m.from === currentUser.id ? (
-                          <button
-                            type="button"
-                            onClick={() => void removeMessage(m)}
-                            className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        ) : null}
-                      </div>
-                      {m.text && <div className="whitespace-pre-wrap">{m.text}</div>}
-                    {m.att && <Attachment att={m.att} />}
-                    <div className="text-[10px] opacity-60 mt-1">
-                      {formatKenyaTime(m.at)}
+                      ) : null}
+                      {canManageMessage(m) ? (
+                        <button
+                          type="button"
+                          onClick={() => void removeMessage(m)}
+                          className="grid h-5 w-5 place-items-center rounded hover:bg-background/20"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      ) : null}
                     </div>
+                    {m.text && <div className="whitespace-pre-wrap">{m.text}</div>}
+                    {m.att && <Attachment att={m.att} />}
+                    <div className="text-[10px] opacity-60 mt-1">{formatKenyaTime(m.at)}</div>
                   </div>
                 </div>
               ))}

@@ -6632,6 +6632,9 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
       reviewedBy: string;
       purpose?: string;
       note?: string;
+      supplierPayloadPatch?: Record<string, unknown>;
+      applicationLoanPatch?: Record<string, unknown>;
+      applicationApplicantPatch?: Record<string, unknown>;
     }) => ({
       loanId: String(data?.loanId ?? "").trim(),
       approvedAmount:
@@ -6641,6 +6644,9 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
       reviewedBy: String(data?.reviewedBy ?? "").trim(),
       purpose: data?.purpose?.trim() || undefined,
       note: data?.note?.trim() || undefined,
+      supplierPayloadPatch: asJsonObject(data?.supplierPayloadPatch),
+      applicationLoanPatch: asJsonObject(data?.applicationLoanPatch),
+      applicationApplicantPatch: asJsonObject(data?.applicationApplicantPatch),
     }),
   )
   .handler(async ({ data }) => {
@@ -6686,6 +6692,31 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
     const supplierBacked = loanKind !== "financial";
     const shouldUsePolicyRate =
       loanKind === "financial" && (data.termDays != null || data.approvedAmount != null);
+    const supplierPayload = asJsonObject(loan.supplier_payload);
+    const applicationPayload = asJsonObject(supplierPayload.application);
+    const applicationLoan = asJsonObject(applicationPayload.loan);
+    const applicationApplicant = asJsonObject(applicationPayload.applicant);
+    const nextSupplierPayload: Record<string, unknown> = {
+      ...supplierPayload,
+      ...data.supplierPayloadPatch,
+    };
+    if (
+      Object.keys(data.applicationLoanPatch).length > 0 ||
+      Object.keys(data.applicationApplicantPatch).length > 0
+    ) {
+      nextSupplierPayload.application = {
+        ...applicationPayload,
+        applicant: {
+          ...applicationApplicant,
+          ...data.applicationApplicantPatch,
+        },
+        loan: {
+          ...applicationLoan,
+          ...data.applicationLoanPatch,
+        },
+      };
+    }
+
     const pricing = computeLoanPricing({
       netAmount: approvedAmount,
       ratePct: shouldUsePolicyRate ? undefined : Number(loan.rate ?? 0),
@@ -6694,7 +6725,7 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
       processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
       loanKind,
-      supplierPayload: asJsonObject(loan.supplier_payload),
+      supplierPayload: nextSupplierPayload,
       settings: policySettings,
     });
 
@@ -6721,6 +6752,7 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
         term_days: pricing.termDays,
         term_months: pricing.termMonths,
         purpose: data.purpose ?? loan.purpose ?? null,
+        supplier_payload: nextSupplierPayload,
         reviewed_by: actor.id,
         review_note: data.note ?? null,
       })
@@ -7321,6 +7353,9 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       productChargeAmount?: number;
       manualPenaltyAmount?: number;
       penaltyWaivedAmount?: number;
+      supplierPayloadPatch?: Record<string, unknown>;
+      applicationLoanPatch?: Record<string, unknown>;
+      applicationApplicantPatch?: Record<string, unknown>;
     }) => ({
       loanId: String(data?.loanId ?? "").trim(),
       principal: Math.max(0, Number(data?.principal ?? 0)),
@@ -7345,6 +7380,9 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
         data?.penaltyWaivedAmount == null
           ? undefined
           : Math.max(0, Number(data.penaltyWaivedAmount ?? 0)),
+      supplierPayloadPatch: asJsonObject(data?.supplierPayloadPatch),
+      applicationLoanPatch: asJsonObject(data?.applicationLoanPatch),
+      applicationApplicantPatch: asJsonObject(data?.applicationApplicantPatch),
     }),
   )
   .handler(async ({ data }) => {
@@ -7374,9 +7412,29 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
     const termMonths = termPeriodsForLoanKind(loanKind, termDays, existingTermMonths);
     const approvedAmount = data.approvedAmount ?? data.principal;
     const supplierPayload = asJsonObject(existingLoan.supplier_payload);
+    const applicationPayload = asJsonObject(supplierPayload.application);
+    const applicationLoan = asJsonObject(applicationPayload.loan);
+    const applicationApplicant = asJsonObject(applicationPayload.applicant);
     const nextSupplierPayload: Record<string, unknown> = {
       ...supplierPayload,
+      ...data.supplierPayloadPatch,
     };
+    if (
+      Object.keys(data.applicationLoanPatch).length > 0 ||
+      Object.keys(data.applicationApplicantPatch).length > 0
+    ) {
+      nextSupplierPayload.application = {
+        ...applicationPayload,
+        applicant: {
+          ...applicationApplicant,
+          ...data.applicationApplicantPatch,
+        },
+        loan: {
+          ...applicationLoan,
+          ...data.applicationLoanPatch,
+        },
+      };
+    }
     if (data.manualPenaltyAmount != null) {
       nextSupplierPayload.manualPenaltyAmount = data.manualPenaltyAmount;
     }
@@ -9523,7 +9581,7 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const id = data.id ?? makeId("SRV");
-    const { error } = await runtimeDb.from("service_catalog").upsert({
+    const servicePayload = {
       id,
       name: data.name,
       service_category: data.serviceCategory ?? null,
@@ -9548,7 +9606,46 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
       renewal_rules: data.renewalRules,
       active: data.active,
       created_by: actor.id,
-    });
+    };
+    let { error } = await runtimeDb.from("service_catalog").upsert(servicePayload);
+    const optionalServiceColumns = [
+      "service_category",
+      "effective_date",
+      "expiry_date",
+      "registration_fee",
+      "processing_fee",
+      "service_charge",
+      "waiver_amount",
+      "penalty_amount",
+      "custom_charges",
+      "negotiated_discount_amount",
+      "normal_deductions",
+      "grace_period_days",
+      "renewal_rules",
+    ];
+    if (
+      error &&
+      (optionalServiceColumns.some((column) => isMissingColumnError(error, column)) ||
+        String(error.message ?? "")
+          .toLowerCase()
+          .includes("service_catalog_scope_check") ||
+        String(error.message ?? "")
+          .toLowerCase()
+          .includes("service_catalog_frequency_check"))
+    ) {
+      const fallbackPayload = { ...servicePayload } as Record<string, unknown>;
+      for (const column of optionalServiceColumns) delete fallbackPayload[column];
+      if (fallbackPayload.scope === "sbc_members") fallbackPayload.scope = "all_members";
+      if (
+        !["one_time", "daily", "weekly", "monthly", "yearly"].includes(
+          String(fallbackPayload.billing_frequency ?? ""),
+        )
+      ) {
+        fallbackPayload.billing_frequency = "monthly";
+      }
+      const retry = await runtimeDb.from("service_catalog").upsert(fallbackPayload);
+      error = retry.error;
+    }
     if (error) throw new Error(error.message);
 
     if (data.active) {
@@ -9583,7 +9680,7 @@ export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
         const { error: subError } = await runtimeDb
           .from("member_service_subscriptions")
           .upsert(rows);
-        if (subError) throw new Error(subError.message);
+        if (subError && !isMissingRelationError(subError)) throw new Error(subError.message);
       }
     }
 
