@@ -36,12 +36,14 @@ import { Badge, Section, StatCard } from "@/components/ui-bits";
 import {
   deleteFeePolicyRecord,
   deleteMemberCarryoverLoanRecord,
+  deleteServiceCatalogRecord,
   resetMemberCarryoverRecord,
   triggerPurposePoolRedistributionRecord,
   upsertMemberCarryoverLoanRecord,
   upsertMemberCarryoverProfileRecord,
   upsertFeePolicyRecord,
   upsertPolicySettingRecord,
+  upsertServiceCatalogRecord,
   waivePenaltyRecord,
 } from "@/lib/app-data.functions";
 import {
@@ -76,7 +78,11 @@ import {
   type WaterfallRule,
   type WaterfallScenario,
 } from "@/lib/policy-settings";
-import { listAllCarryoverLoans, loadMemberCarryover } from "@/lib/runtime-data.functions";
+import {
+  listAllCarryoverLoans,
+  listServiceCatalog,
+  loadMemberCarryover,
+} from "@/lib/runtime-data.functions";
 import {
   fmtKES,
   loanSummary,
@@ -88,7 +94,14 @@ import {
   type LoanKind,
 } from "@/lib/store";
 
-type PolicyCenterTab = "fees" | "percentages" | "interest" | "waterfall" | "clients" | "targets";
+type PolicyCenterTab =
+  | "fees"
+  | "services"
+  | "percentages"
+  | "interest"
+  | "waterfall"
+  | "clients"
+  | "targets";
 
 type TargetDraft = {
   id?: string;
@@ -97,6 +110,19 @@ type TargetDraft = {
   expectedValue: number;
   startOn: string;
   notes: string;
+};
+
+type ServiceDraft = {
+  id?: string;
+  name: string;
+  description: string;
+  price: number;
+  billingFrequency: "one_time" | "daily" | "weekly" | "monthly" | "yearly";
+  scope: "all_members" | "service_members" | "selected_members";
+  selectedMemberIds: string[];
+  deductionMode: "normal" | "override_all" | "amended_override";
+  feeOverridesText: string;
+  active: boolean;
 };
 
 type CarryoverFeeBuckets = {
@@ -120,6 +146,7 @@ type CarryoverMemberMode = "loan" | "none";
 const SCOPES: FeeScope[] = ["all", "new_only", "selected_members", "loan_holders", "investors"];
 const SUBPAGES: { key: PolicyCenterTab; label: string }[] = [
   { key: "fees", label: "Fees" },
+  { key: "services", label: "Services" },
   { key: "percentages", label: "Percentages" },
   { key: "interest", label: "Interest" },
   { key: "waterfall", label: "Waterfall Flow" },
@@ -146,6 +173,9 @@ function PolicyCenterPage() {
   } = useStore();
   const saveFee = useServerFn(upsertFeePolicyRecord);
   const deleteFee = useServerFn(deleteFeePolicyRecord);
+  const loadServices = useServerFn(listServiceCatalog);
+  const saveService = useServerFn(upsertServiceCatalogRecord);
+  const deleteService = useServerFn(deleteServiceCatalogRecord);
   const savePolicySetting = useServerFn(upsertPolicySettingRecord);
   const loadCarryover = useServerFn(loadMemberCarryover);
   const loadAllCarryoverLoans = useServerFn(listAllCarryoverLoans);
@@ -162,6 +192,9 @@ function PolicyCenterPage() {
   );
   const [editingFee, setEditingFee] = useState<FeePolicy | null>(null);
   const [creatingFee, setCreatingFee] = useState(false);
+  const [serviceRows, setServiceRows] = useState<any[]>([]);
+  const [serviceDraft, setServiceDraft] = useState<ServiceDraft>(() => blankServiceDraft());
+  const [serviceBusy, setServiceBusy] = useState(false);
   const [percentagesDraft, setPercentagesDraft] = useState(policySettings.percentages);
   const [interestDraft, setInterestDraft] = useState(policySettings.interestRates);
   const [waterfallDraft, setWaterfallDraft] = useState(policySettings.waterfallRules);
@@ -237,6 +270,16 @@ function PolicyCenterPage() {
   useEffect(() => {
     setFeeMemberQuery("");
   }, [editingFee?.key]);
+
+  const refreshServices = useCallback(async () => {
+    setServiceRows((await loadServices()) as any[]);
+  }, [loadServices]);
+
+  useEffect(() => {
+    refreshServices().catch((error: any) => {
+      toast.error(error?.message ?? "Failed to load service catalog.");
+    });
+  }, [refreshServices]);
 
   const refreshAllCarryoverLoans = useCallback(async () => {
     setAllCarryoverLoans(await loadAllCarryoverLoans());
@@ -676,6 +719,45 @@ function PolicyCenterPage() {
     toast.success(creatingFee ? "Fee created" : "Fee updated");
     setEditingFee(null);
     setCreatingFee(false);
+  }
+
+  async function saveServiceDraft() {
+    if (!serviceDraft.name.trim()) return toast.error("Service name required.");
+    if (serviceDraft.scope === "selected_members" && serviceDraft.selectedMemberIds.length === 0) {
+      return toast.error("Pick at least one member for a selected-members service.");
+    }
+    let feeOverrides: Record<string, unknown> = {};
+    if (serviceDraft.feeOverridesText.trim()) {
+      try {
+        feeOverrides = JSON.parse(serviceDraft.feeOverridesText);
+      } catch {
+        return toast.error("Fee overrides must be valid JSON.");
+      }
+    }
+    setServiceBusy(true);
+    try {
+      await saveService({
+        data: {
+          id: serviceDraft.id,
+          name: serviceDraft.name,
+          description: serviceDraft.description,
+          price: serviceDraft.price,
+          billingFrequency: serviceDraft.billingFrequency,
+          scope: serviceDraft.scope,
+          selectedMemberIds: serviceDraft.selectedMemberIds,
+          deductionMode: serviceDraft.deductionMode,
+          feeOverrides,
+          active: serviceDraft.active,
+        },
+      });
+      await refreshServices();
+      setServiceDraft(blankServiceDraft());
+      toast.success("Service saved.");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Could not save service.");
+    } finally {
+      setServiceBusy(false);
+    }
   }
 
   async function persistPolicySettings(
@@ -1465,6 +1547,36 @@ function PolicyCenterPage() {
                   setPercentagesDraft((current) => ({
                     ...current,
                     roundOffStep: Math.max(1, value),
+                  }))
+                }
+              />
+              <NumberField
+                label="Fuel Buffer (KES)"
+                value={percentagesDraft.fuelBufferAmount}
+                onChange={(value) =>
+                  setPercentagesDraft((current) => ({
+                    ...current,
+                    fuelBufferAmount: Math.max(0, value),
+                  }))
+                }
+              />
+              <NumberField
+                label="Fuel Charge (KES)"
+                value={percentagesDraft.fuelChargeAmount}
+                onChange={(value) =>
+                  setPercentagesDraft((current) => ({
+                    ...current,
+                    fuelChargeAmount: Math.max(0, value),
+                  }))
+                }
+              />
+              <NumberField
+                label="Stock Charge (KES)"
+                value={percentagesDraft.stockChargeAmount}
+                onChange={(value) =>
+                  setPercentagesDraft((current) => ({
+                    ...current,
+                    stockChargeAmount: Math.max(0, value),
                   }))
                 }
               />

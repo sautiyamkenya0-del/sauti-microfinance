@@ -110,7 +110,7 @@ function diffDays(from: string, to: string) {
 }
 
 function normalizeTermDays(termDays?: number): 7 | 14 | 30 | 60 | 90 {
-  return normalizePolicyTermDays(termDays);
+  return Math.max(1, Math.floor(Number(termDays ?? 0) || 1)) as 7 | 14 | 30 | 60 | 90;
 }
 
 function moneyValue(value: unknown) {
@@ -135,7 +135,9 @@ function roundUpKES(amount: number, step: number) {
 }
 
 function termPeriodsFromDays(termDays: number) {
-  return Math.max(1, Math.ceil(normalizeTermDays(termDays) / 30));
+  const normalized = Math.max(1, Math.floor(Number(termDays ?? 0) || 1));
+  if ([7, 14, 30, 60, 90].includes(normalized)) return Math.max(1, Math.ceil(normalized / 30));
+  return Math.max(1, normalized / 30);
 }
 
 function defaultLoanServiceFees(principal: number, settings: PolicySettings) {
@@ -285,7 +287,7 @@ export function summarizeLegacyCarryoverLoan(
     : oneTimeFees + financedLoanServiceFees + subscriptionDeducted;
   const financedPrincipal = principal + feeChargesTotal;
   const periods = termPeriodsFromDays(termDays);
-  const interest = supplierBacked ? 0 : financedPrincipal * (ratePct / 100) * periods;
+  const interest = supplierBacked ? 0 : principal * (ratePct / 100) * periods;
   const totalRepayment = financedPrincipal + interest;
   const dailyLoanInstallment = termDays > 0 ? totalRepayment / termDays : totalRepayment;
   const effectiveDailySavingsAmount = supplierBacked ? 0 : dailySavingsAmount;

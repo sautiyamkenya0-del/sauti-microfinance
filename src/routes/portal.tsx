@@ -10,6 +10,7 @@ import {
   fmtKES,
   joinName,
   loanSummary,
+  memberIsServiceOnly,
   memberNeedsSticker,
 } from "@/lib/store";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,15 +28,18 @@ import {
   Receipt,
   ShieldCheck,
   Bell,
+  Wallet,
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
+import { downloadLetterheadHtml } from "@/components/LetterheadDocument";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
 import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   listClientNotices,
+  listMemberSelfServiceWorkspaceRecord,
   listPortalCarryoverLoans,
   listSupplierWorkspaceRecord,
 } from "@/lib/runtime-data.functions";
@@ -59,6 +63,8 @@ type ClientNotice = {
   by: string;
   kind?: "info" | "warning" | "alert";
   expiresAt?: string;
+  documentKind?: "memo" | "letter";
+  letterMeta?: Record<string, unknown>;
 };
 
 type ClientAlert = {
@@ -125,6 +131,9 @@ function Portal() {
     setPortalMemberId(memberId);
   }, [memberId, setPortalMemberId]);
   const [tab, setTab] = useState<Tab>("overview");
+  const [loanRequestAmount, setLoanRequestAmount] = useState("");
+  const [loanRequestDays, setLoanRequestDays] = useState("30");
+  const [loanRequestPurpose, setLoanRequestPurpose] = useState("");
 
   const member = members.find((m) => m.id === memberId);
   const investorProfile = member
@@ -141,6 +150,7 @@ function Portal() {
         .includes("purpose pool contribution"),
   );
   const myPen = penalties.filter((p) => p.memberId === memberId);
+  const canRequestLoans = member ? !memberIsServiceOnly(member) : false;
   const fees = feePolicies.filter(isFeeActive);
   const visibleFees = member
     ? fees.filter(
@@ -177,6 +187,20 @@ function Portal() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification === "undefined" ? "denied" : Notification.permission,
   );
+  const [serviceWorkspace, setServiceWorkspace] = useState<{
+    services: any[];
+    subscriptions: any[];
+    stockItems: any[];
+    requests: any[];
+    serviceWalletBalance: number;
+  }>({
+    services: [],
+    subscriptions: [],
+    stockItems: [],
+    requests: [],
+    serviceWalletBalance: 0,
+  });
+  const loadServiceWorkspace = useServerFn(listMemberSelfServiceWorkspaceRecord);
   const [fuelLoanAmount, setFuelLoanAmount] = useState("");
   const [fuelLoanVehicle, setFuelLoanVehicle] = useState("");
   const [fuelLoanType, setFuelLoanType] = useState("");
@@ -212,12 +236,38 @@ function Portal() {
   useEffect(() => {
     if (!memberId) {
       setCarryoverLoans([]);
+      setServiceWorkspace({
+        services: [],
+        subscriptions: [],
+        stockItems: [],
+        requests: [],
+        serviceWalletBalance: 0,
+      });
       return;
     }
     loadCarryoverLoans({ data: isStaffView ? { memberId } : {} })
       .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
       .catch(() => setCarryoverLoans([]));
-  }, [isStaffView, loadCarryoverLoans, memberId]);
+    loadServiceWorkspace({ data: isStaffView ? { memberId } : { memberId } })
+      .then((workspace) =>
+        setServiceWorkspace({
+          services: (workspace as any).services ?? [],
+          subscriptions: (workspace as any).subscriptions ?? [],
+          stockItems: (workspace as any).stockItems ?? [],
+          requests: (workspace as any).requests ?? [],
+          serviceWalletBalance: Number((workspace as any).serviceWalletBalance ?? 0),
+        }),
+      )
+      .catch(() =>
+        setServiceWorkspace({
+          services: [],
+          subscriptions: [],
+          stockItems: [],
+          requests: [],
+          serviceWalletBalance: 0,
+        }),
+      );
+  }, [isStaffView, loadCarryoverLoans, loadServiceWorkspace, memberId]);
   useEffect(() => {
     if (authMode !== "member") return;
     loadSupplierWorkspace()
@@ -231,20 +281,27 @@ function Portal() {
     staleTime: 30000,
     refetchOnWindowFocus: false,
   });
+  const clientLetters = useMemo(
+    () => clientNotices.filter((notice) => notice.documentKind === "letter"),
+    [clientNotices],
+  );
+
   const clientAlerts = useMemo<ClientAlert[]>(() => {
     if (!member) return [];
     const out: ClientAlert[] = [];
     const today = todayIso();
 
-    clientNotices.forEach((notice) => {
-      out.push({
-        id: `notice-${notice.id}`,
-        kind: noticeKind(notice.kind),
-        title: notice.title,
-        detail: notice.body,
-        tab: "overview",
+    clientNotices
+      .filter((notice) => notice.documentKind !== "letter")
+      .forEach((notice) => {
+        out.push({
+          id: `notice-${notice.id}`,
+          kind: noticeKind(notice.kind),
+          title: notice.title,
+          detail: notice.body,
+          tab: "overview",
+        });
       });
-    });
 
     const compliancePaidToday = myTx.some(
       (transaction) =>
@@ -318,6 +375,20 @@ function Portal() {
 
     return out;
   }, [clientNotices, member, myLoans, myPen, myTx]);
+
+  async function downloadClientLetter(notice: ClientNotice) {
+    if (notice.documentKind !== "letter") return;
+    const meta = notice.letterMeta ?? {};
+    await downloadLetterheadHtml({
+      title: notice.title,
+      body: notice.body,
+      date: notice.date,
+      recipientName: String(meta.recipientName ?? ""),
+      recipientId: String(meta.recipientId ?? notice.by),
+      facts: Array.isArray(meta.facts) ? (meta.facts as any[]) : [],
+      filename: `${notice.date}-${notice.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "letter"}`,
+    });
+  }
   const unreadClientAlerts = useMemo(
     () => clientAlerts.filter((alert) => !clientReadIds.has(alert.id)),
     [clientAlerts, clientReadIds],
@@ -623,6 +694,46 @@ function Portal() {
                     ))}
                   </div>
                 </Section>
+                {clientLetters.length > 0 ? (
+                  <Section
+                    title="Official letters"
+                    action={
+                      <button
+                        onClick={() =>
+                          clientLetters.forEach((letter) => void downloadClientLetter(letter))
+                        }
+                        className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                      >
+                        Download all
+                      </button>
+                    }
+                  >
+                    <div className="space-y-2 p-5 text-sm">
+                      {clientLetters.map((letter) => (
+                        <div
+                          key={letter.id}
+                          className="rounded-md border border-border bg-card p-4"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold">{letter.title}</div>
+                              <div className="text-xs text-muted-foreground">{letter.date}</div>
+                            </div>
+                            <button
+                              onClick={() => void downloadClientLetter(letter)}
+                              className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                            >
+                              Download letter
+                            </button>
+                          </div>
+                          <p className="mt-3 text-sm text-muted-foreground whitespace-pre-wrap">
+                            {letter.body}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                ) : null}
                 {investorProfile && (
                   <Section title="My Investment">
                     <div className="grid gap-3 p-5 text-sm sm:grid-cols-4">
@@ -633,6 +744,29 @@ function Portal() {
                     </div>
                   </Section>
                 )}
+                {serviceWorkspace.serviceWalletBalance > 0 ||
+                serviceWorkspace.subscriptions.length > 0 ? (
+                  <Section title="Service wallet">
+                    <div className="grid gap-3 p-5 sm:grid-cols-3">
+                      <StatCard
+                        label="Service wallet"
+                        value={fmtKES(serviceWorkspace.serviceWalletBalance)}
+                        icon={<Wallet className="h-5 w-5" />}
+                        tone={serviceWorkspace.serviceWalletBalance > 0 ? "success" : "default"}
+                      />
+                      <StatCard
+                        label="Active services"
+                        value={`${serviceWorkspace.subscriptions.length}`}
+                        icon={<ShieldCheck className="h-5 w-5" />}
+                      />
+                      <StatCard
+                        label="Service requests"
+                        value={`${serviceWorkspace.requests.length}`}
+                        icon={<MessageSquare className="h-5 w-5" />}
+                      />
+                    </div>
+                  </Section>
+                ) : null}
                 <Section title="My Penalties">
                   <div className="p-5 space-y-2 text-sm">
                     {myPen.length === 0 && (
@@ -657,6 +791,67 @@ function Portal() {
                     ))}
                   </div>
                 </Section>
+                {!isStaffView && canRequestLoans && (
+                  <Section title="Request loan">
+                    <div className="grid gap-3 p-5 sm:grid-cols-3">
+                      <input
+                        value={loanRequestAmount}
+                        onChange={(event) => setLoanRequestAmount(event.target.value)}
+                        placeholder="Amount"
+                        type="number"
+                        min={1}
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={loanRequestDays}
+                        onChange={(event) => setLoanRequestDays(event.target.value)}
+                        placeholder="Repayment days"
+                        type="number"
+                        min={1}
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={loanRequestPurpose}
+                        onChange={(event) => setLoanRequestPurpose(event.target.value)}
+                        placeholder="Purpose"
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      />
+                      <div className="sm:col-span-3">
+                        <button
+                          onClick={async () => {
+                            await submit({
+                              kind: "other",
+                              title: "Loan request",
+                              detail: `${member.name} requests ${loanRequestAmount || "0"} KES for ${loanRequestDays || "0"} days. Purpose: ${loanRequestPurpose || "not stated"}.`,
+                              requestedBy: member.id,
+                              requestedByName: member.name,
+                              payload: {
+                                requestType: "loan",
+                                amount: loanRequestAmount,
+                                termDays: loanRequestDays,
+                                purpose: loanRequestPurpose,
+                              },
+                            });
+                            toast.success("Loan request submitted for staff review");
+                            setLoanRequestAmount("");
+                            setLoanRequestDays("30");
+                            setLoanRequestPurpose("");
+                          }}
+                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Submit loan request
+                        </button>
+                      </div>
+                    </div>
+                  </Section>
+                )}
+                {!isStaffView && !canRequestLoans && (
+                  <Section title="Loan requests">
+                    <div className="p-5 text-sm text-muted-foreground">
+                      Service-only accounts can view records and support, but cannot request loans.
+                    </div>
+                  </Section>
+                )}
                 {!isStaffView && member.category === "locomotive" && (
                   <Section title="Request fuel loan">
                     <div className="p-5 grid gap-3 sm:grid-cols-2">

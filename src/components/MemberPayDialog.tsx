@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import {
   useStore,
   businessPermanenceLabel,
-  FUEL_BUFFER_TARGET,
   fmtKES,
+  fuelBufferTargetAmount,
   formatMembershipNumber,
   isInvestorOnlyCategory,
   memberIsFuelMember,
@@ -46,7 +46,7 @@ export function MemberPayDialog({ member, mode = "member", onClose }: Props) {
         String(transaction.note ?? "").startsWith("Locomotive fuel buffer"),
     )
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const fuelBufferDue = fuelMember ? Math.max(0, FUEL_BUFFER_TARGET - fuelBufferPaid) : 0;
+  const fuelBufferDue = fuelMember ? Math.max(0, fuelBufferTargetAmount() - fuelBufferPaid) : 0;
   const fees = member.fees;
   const membershipPolicy = feePolicies.find((fee) => fee.key === "membership");
   const cardPolicy = feePolicies.find((fee) => fee.key === "card");

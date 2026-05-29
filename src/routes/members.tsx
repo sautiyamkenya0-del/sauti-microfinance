@@ -17,7 +17,9 @@ import {
   type Member,
   type MemberCategory,
 } from "@/lib/store";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { listServiceCatalog } from "@/lib/runtime-data.functions";
 import { toast } from "sonner";
 import { MemberLoanHistory } from "@/components/loans/LoanBook";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
@@ -27,6 +29,7 @@ type MemberForm = {
   memberNo: string;
   category: MemberCategory;
   memberTags: MemberCategory[];
+  serviceIds: string[];
   firstName: string;
   secondName: string;
   thirdName: string;
@@ -82,6 +85,7 @@ function MembersPage() {
     memberNo,
     category: "member" as MemberCategory,
     memberTags: ["member"] as MemberCategory[],
+    serviceIds: [],
     firstName: "",
     secondName: "",
     thirdName: "",
@@ -119,6 +123,7 @@ function MembersPage() {
     memberNo: member.id,
     category: member.category,
     memberTags: member.memberTags?.length ? member.memberTags : [member.category],
+    serviceIds: [],
     firstName: member.firstName ?? "",
     secondName: member.secondName ?? "",
     thirdName: member.thirdName ?? "",
@@ -145,6 +150,13 @@ function MembersPage() {
     currentUser.role === "loan_officer" ||
     currentUser.role === "manager" ||
     currentUser.role === "director";
+  const loadServiceRows = useServerFn(listServiceCatalog);
+  const [serviceRows, setServiceRows] = useState<any[]>([]);
+  useEffect(() => {
+    loadServiceRows()
+      .then((rows) => setServiceRows(rows as any[]))
+      .catch(() => setServiceRows([]));
+  }, [loadServiceRows]);
   const memberRegistry = useMemo(
     () =>
       members.filter(
@@ -805,6 +817,7 @@ function MembersPage() {
                         fieldOfficerId: form.fieldOfficerId || undefined,
                         category: form.category,
                         memberTags: form.memberTags,
+                        serviceIds: form.serviceIds,
                         investorContribution: showInvestorFields
                           ? form.investorContribution
                           : undefined,

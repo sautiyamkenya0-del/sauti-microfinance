@@ -21,6 +21,7 @@ function ApprovalsPage() {
   const { items, decide } = useApprovals();
   const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
   const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
+  const [repaymentDays, setRepaymentDays] = useState<Record<string, number>>({});
 
   const canDecide = currentUser.role === "director";
   const pendingLoans = loans.filter((l) => l.status === "pending");
@@ -70,6 +71,7 @@ function ApprovalsPage() {
                   <th className="px-5 py-2.5 text-left">Loan</th>
                   <th className="text-left">Member</th>
                   <th className="text-right">Principal</th>
+                  <th className="text-left pl-4">Repayment Days</th>
                   <th className="text-left pl-4">Officer</th>
                   <th className="text-right pr-5">Action</th>
                 </tr>
@@ -77,7 +79,7 @@ function ApprovalsPage() {
               <tbody className="divide-y divide-border">
                 {pendingLoans.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                    <td colSpan={6} className="px-5 py-8 text-center text-muted-foreground">
                       No loans awaiting review.
                     </td>
                   </tr>
@@ -92,6 +94,21 @@ function ApprovalsPage() {
                     </td>
                     <td>{memberName(l.memberId)}</td>
                     <td className="text-right font-medium">{fmtKES(l.principal)}</td>
+                    <td className="pl-4">
+                      <input
+                        type="number"
+                        min={1}
+                        value={repaymentDays[l.id] ?? l.termDays ?? 30}
+                        onChange={(event) =>
+                          setRepaymentDays((current) => ({
+                            ...current,
+                            [l.id]: Math.max(1, Number(event.target.value) || 1),
+                          }))
+                        }
+                        className="w-24 rounded-md border border-border bg-card px-2 py-1 text-xs"
+                        disabled={!canDecide}
+                      />
+                    </td>
                     <td className="pl-4 text-xs text-muted-foreground">{l.officerId}</td>
                     <td className="text-right pr-5 space-x-2">
                       <Link to="/loans" className="text-xs text-primary hover:underline">
@@ -106,6 +123,7 @@ function ApprovalsPage() {
                                 l.principal,
                                 currentUser.id,
                                 "Approved from queue",
+                                repaymentDays[l.id] ?? l.termDays ?? 30,
                               );
                               toast.success("Loan approved and payout requested");
                             }}

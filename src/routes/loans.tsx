@@ -25,6 +25,7 @@ import { upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
 import { listAllCarryoverLoans } from "@/lib/runtime-data.functions";
 import {
   fmtKES,
+  fuelBufferTargetAmount,
   hasMemberTag,
   isMemberCategory,
   memberIsFuelMember,
@@ -848,7 +849,8 @@ function CarryoverEntry({
               </div>
               <div className="md:col-span-2 xl:col-span-3 text-xs text-muted-foreground">
                 Saving this fuel carryover will register the member as a locomotive fuel member and
-                skip sticker fees. Fuel members pay the {fmtKES(3000)} fuel buffer instead.
+                skip sticker fees. Fuel members pay the {fmtKES(fuelBufferTargetAmount())} fuel
+                buffer instead.
               </div>
             </div>
           ) : null}

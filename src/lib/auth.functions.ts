@@ -22,6 +22,11 @@ function requireSupabaseAdmin() {
   return supabaseAdmin;
 }
 
+function isMissingColumnError(error: any, column: string) {
+  const message = String(error?.message ?? "");
+  return error?.code === "42703" || message.includes(column);
+}
+
 const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_AUTH_FAILURES_PER_WINDOW = 8;
 
@@ -162,9 +167,22 @@ export const signInMember = createServerFn({ method: "POST" })
       .select("id, name, phone")
       .in("id", memberCandidates);
     if (error) throw new Error(error.message);
-    const memberRow = memberCandidates
+    let memberRow = memberCandidates
       .map((candidate) => (memberRows ?? []).find((row) => row.id === candidate))
       .find(Boolean);
+
+    if (!memberRow) {
+      const rawServiceNumber = data.memberNo.trim().toUpperCase();
+      const { data: serviceRows, error: serviceError } = await supabaseAdmin
+        .from("members")
+        .select("id, name, phone, service_member_number")
+        .eq("service_member_number", rawServiceNumber)
+        .limit(1);
+      if (serviceError && !isMissingColumnError(serviceError, "service_member_number")) {
+        throw new Error(serviceError.message);
+      }
+      memberRow = serviceError ? undefined : serviceRows?.[0];
+    }
 
     const suppliedPhone = toComparableKenyanPhone(data.phone);
     const memberPhone = toComparableKenyanPhone(memberRow?.phone ?? "");

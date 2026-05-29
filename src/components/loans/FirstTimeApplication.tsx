@@ -4,7 +4,7 @@ import {
   useStore,
   formatMembershipNumber,
   fmtKES,
-  FUEL_BUFFER_TARGET,
+  fuelBufferTargetAmount,
   loanPricingPreview,
   loanProductTypeForAmount,
   memberIsFuelMember,
@@ -190,7 +190,7 @@ export function FirstTimeApplication({
     [existing, transactions],
   );
   const fuelBufferDue = isFuelApplication
-    ? Math.max(0, FUEL_BUFFER_TARGET - existingFuelBufferPaid)
+    ? Math.max(0, fuelBufferTargetAmount() - existingFuelBufferPaid)
     : 0;
   const stickerApplicable =
     !isFuelApplication && (existing?.businessPermanence ?? f.businessPermanence) === "permanent";

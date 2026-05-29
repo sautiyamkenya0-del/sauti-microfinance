@@ -2,16 +2,32 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { Badge, Section } from "@/components/ui-bits";
 import { CommsTabs } from "./staff";
-import { useStore } from "@/lib/store";
-import { useEffect, useState } from "react";
+import { fmtKES, loanSummary, useStore } from "@/lib/store";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Download, Plus, StickyNote, Trash2 } from "lucide-react";
+import { Download, FileText, Plus, Sparkles, StickyNote, Trash2 } from "lucide-react";
 import { useStaffMemos } from "@/lib/memos-board";
 import { useReadIds } from "@/lib/read-state";
 import { useServerFn } from "@tanstack/react-start";
 import { listSupplierWorkspaceRecord } from "@/lib/runtime-data.functions";
+import { polishMemberLetterRecord } from "@/lib/app-data.functions";
+import {
+  downloadLetterheadHtml,
+  LetterheadDocument,
+  type LetterFact,
+} from "@/components/LetterheadDocument";
 
-type MemoAudience = "staff" | "members" | "suppliers" | "supplier" | "all";
+type MemoAudience = "staff" | "members" | "member" | "suppliers" | "supplier" | "all";
+type LetterFactKey =
+  | "name"
+  | "memberNumber"
+  | "phone"
+  | "savingsBalance"
+  | "shares"
+  | "loanAppliedFor"
+  | "loanDueDate"
+  | "loanStatus"
+  | "penalties";
 
 export const Route = createFileRoute("/memos")({
   head: () => ({ meta: [{ title: "Memos — Sauti Microfinance" }] }),
@@ -31,17 +47,85 @@ function audienceLabel(audience?: string, supplierId?: string, suppliers: any[] 
 }
 
 function MemosPage() {
-  const { currentUser } = useStore();
+  const { currentUser, members, loans, penalties } = useStore();
   const { memos, postMemo, removeMemo } = useStaffMemos();
   const { markRead } = useReadIds();
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
+  const polishLetter = useServerFn(polishMemberLetterRecord);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [audience, setAudience] = useState<MemoAudience>("staff");
+  const [targetMemberId, setTargetMemberId] = useState("");
   const [targetSupplierId, setTargetSupplierId] = useState("");
   const [kind, setKind] = useState<"info" | "warning" | "alert">("info");
   const [expiresAt, setExpiresAt] = useState("");
+  const [documentKind, setDocumentKind] = useState<"memo" | "letter">("memo");
+  const [letterIntent, setLetterIntent] = useState("");
+  const [letterFactKeys, setLetterFactKeys] = useState<LetterFactKey[]>([
+    "name",
+    "memberNumber",
+    "savingsBalance",
+    "loanAppliedFor",
+    "loanDueDate",
+  ]);
+  const [polishing, setPolishing] = useState(false);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const selectedMember = members.find((member) => member.id === targetMemberId);
+  const selectedLoan = useMemo(() => {
+    if (!targetMemberId) return undefined;
+    return loans
+      .filter((loan) => loan.memberId === targetMemberId)
+      .sort((left, right) => right.startDate.localeCompare(left.startDate))[0];
+  }, [loans, targetMemberId]);
+  const selectedLoanSummary = selectedLoan ? loanSummary(selectedLoan) : undefined;
+  const selectedPenaltyTotal = useMemo(
+    () =>
+      penalties
+        .filter((penalty) => penalty.memberId === targetMemberId && penalty.status === "outstanding")
+        .reduce((sum, penalty) => sum + penalty.amount, 0),
+    [penalties, targetMemberId],
+  );
+  const availableLetterFacts = useMemo<Array<{ key: LetterFactKey; label: string; value: string }>>(
+    () => [
+      { key: "name", label: "Name", value: selectedMember?.name ?? "" },
+      { key: "memberNumber", label: "Member number", value: selectedMember?.id ?? "" },
+      { key: "phone", label: "Phone", value: selectedMember?.phone ?? "" },
+      {
+        key: "savingsBalance",
+        label: "Savings balance",
+        value: selectedMember ? fmtKES(selectedMember.savingsBalance) : "",
+      },
+      {
+        key: "shares",
+        label: "Shares",
+        value: selectedMember ? String(selectedMember.shares) : "",
+      },
+      {
+        key: "loanAppliedFor",
+        label: "Loan applied for",
+        value: selectedLoan ? fmtKES(selectedLoan.approvedAmount ?? selectedLoan.principal) : "",
+      },
+      {
+        key: "loanDueDate",
+        label: "Due date",
+        value: selectedLoanSummary?.dueDate ?? "",
+      },
+      {
+        key: "loanStatus",
+        label: "Loan status",
+        value: selectedLoan?.status ?? "",
+      },
+      {
+        key: "penalties",
+        label: "Outstanding penalties",
+        value: selectedPenaltyTotal > 0 ? fmtKES(selectedPenaltyTotal) : "",
+      },
+    ],
+    [selectedLoan, selectedLoanSummary?.dueDate, selectedMember, selectedPenaltyTotal],
+  );
+  const selectedLetterFacts = availableLetterFacts
+    .filter((fact) => letterFactKeys.includes(fact.key) && fact.value)
+    .map(({ label, value }) => ({ label, value }));
 
   useEffect(() => {
     const unreadMemoIds = memos
@@ -59,9 +143,17 @@ function MemosPage() {
       .catch(() => setSuppliers([]));
   }, [loadSupplierWorkspace]);
 
-  async function post() {
+  async function post(mode: "memo" | "letter" = documentKind) {
     if (!title.trim() || !body.trim()) return toast.error("Title and body required");
-    if (audience === "supplier" && !targetSupplierId) {
+    const effectiveDocumentKind = mode;
+    const effectiveAudience = effectiveDocumentKind === "letter" ? "member" : audience;
+    if (effectiveDocumentKind === "letter" && !targetMemberId) {
+      return toast.error("Choose the member who should receive this letter.");
+    }
+    if (effectiveAudience === "member" && !targetMemberId) {
+      return toast.error("Choose the member who should receive this notice.");
+    }
+    if (effectiveAudience === "supplier" && !targetSupplierId) {
       return toast.error("Choose the supplier who should receive this notice.");
     }
     await postMemo({
@@ -70,21 +162,74 @@ function MemosPage() {
       by: currentUser.name,
       byStaffId: currentUser.id,
       date: new Date().toISOString().slice(0, 10),
-      audience,
-      targetSupplierId: audience === "supplier" ? targetSupplierId : undefined,
+      audience: effectiveAudience,
+      targetMemberId: effectiveAudience === "member" ? targetMemberId : undefined,
+      targetSupplierId: effectiveAudience === "supplier" ? targetSupplierId : undefined,
       kind,
       expiresAt: expiresAt || undefined,
+      documentKind: effectiveDocumentKind,
+      letterMeta:
+        effectiveDocumentKind === "letter"
+          ? {
+              recipientName: selectedMember?.name ?? "",
+              recipientId: selectedMember?.id ?? targetMemberId,
+              facts: selectedLetterFacts,
+              intent: letterIntent,
+              polishedWithAi: false,
+            }
+          : undefined,
     });
     setTitle("");
     setBody("");
     setAudience("staff");
+    setTargetMemberId("");
     setTargetSupplierId("");
     setKind("info");
     setExpiresAt("");
-    toast.success(audience === "staff" ? "Memo posted" : "Notice posted");
+    setDocumentKind("memo");
+    setLetterIntent("");
+    toast.success(effectiveDocumentKind === "letter" ? "Letter sent" : "Memo posted");
   }
 
-  function downloadMemo(memo: (typeof memos)[number]) {
+  async function polishDraft() {
+    if (!targetMemberId) return toast.error("Choose a member before polishing the letter.");
+    if (!body.trim()) return toast.error("Write the draft details first.");
+    setPolishing(true);
+    try {
+      const result = await polishLetter({
+        data: {
+          memberId: targetMemberId,
+          intent: letterIntent,
+          draft: body,
+          includedFacts: {
+            facts: selectedLetterFacts,
+            title,
+          },
+        },
+      });
+      setBody(result.body);
+      if (!title.trim()) setTitle("Member Notice");
+      toast.success("Letter polished. Review it before sending.");
+    } catch (error: any) {
+      toast.error(error?.message ?? "AI could not polish this letter.");
+    } finally {
+      setPolishing(false);
+    }
+  }
+
+  async function downloadMemo(memo: (typeof memos)[number]) {
+    if (memo.documentKind === "letter") {
+      const meta = memo.letterMeta ?? {};
+      await downloadLetterheadHtml({
+        title: memo.title,
+        body: memo.body,
+        date: memo.date,
+        recipientName: String(meta.recipientName ?? ""),
+        recipientId: String(meta.recipientId ?? meta.memberId ?? memo.targetMemberId ?? ""),
+        facts: Array.isArray(meta.facts) ? (meta.facts as LetterFact[]) : [],
+      });
+      return;
+    }
     const payload = JSON.stringify(memo, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -95,6 +240,14 @@ function MemosPage() {
     URL.revokeObjectURL(url);
   }
 
+  function toggleLetterFact(key: LetterFactKey, checked: boolean) {
+    setLetterFactKeys((current) =>
+      checked
+        ? Array.from(new Set([...current, key]))
+        : current.filter((existingKey) => existingKey !== key),
+    );
+  }
+
   return (
     <>
       <AppHeader
@@ -103,6 +256,103 @@ function MemosPage() {
       />
       <main className="flex-1 p-6 lg:p-8 space-y-6">
         <CommsTabs />
+        <Section title="Letterhead letter">
+          <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.85fr)]">
+            <div className="space-y-3">
+              <select
+                value={targetMemberId}
+                onChange={(event) => {
+                  setTargetMemberId(event.target.value);
+                  setAudience("member");
+                  setDocumentKind("letter");
+                }}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                <option value="">Choose member</option>
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.id} - {member.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Letter subject"
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+              <textarea
+                value={letterIntent}
+                onChange={(event) => setLetterIntent(event.target.value)}
+                placeholder="AI polish instruction, for example: member has defaulted and should clear arrears by Friday"
+                rows={2}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+              <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 sm:grid-cols-2">
+                {availableLetterFacts.map((fact) => (
+                  <label key={fact.key} className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={letterFactKeys.includes(fact.key)}
+                      onChange={(event) => toggleLetterFact(fact.key, event.target.checked)}
+                    />
+                    <span>
+                      {fact.label}
+                      {fact.value ? (
+                        <span className="text-muted-foreground"> - {fact.value}</span>
+                      ) : null}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <textarea
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+                placeholder="Write the facts and rough wording here, then polish with AI if needed."
+                rows={8}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    setDocumentKind("letter");
+                    setAudience("member");
+                    void polishDraft();
+                  }}
+                  disabled={polishing}
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {polishing ? "Polishing..." : "Polish letter with AI"}
+                </button>
+                <button
+                  onClick={() => {
+                    setDocumentKind("letter");
+                    setAudience("member");
+                    void post("letter");
+                  }}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
+                >
+                  <Plus className="h-4 w-4" />
+                  Send Letter
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <FileText className="h-4 w-4" />
+                Review letterhead
+              </div>
+              <LetterheadDocument
+                title={title || "Member Notice"}
+                body={body || "Your letter will appear here."}
+                recipientName={selectedMember?.name}
+                recipientId={selectedMember?.id}
+                facts={selectedLetterFacts}
+              />
+            </div>
+          </div>
+        </Section>
         <Section title="Post a memo">
           <div className="p-5 space-y-3 max-w-2xl">
             <input
@@ -161,7 +411,7 @@ function MemosPage() {
               </select>
             ) : null}
             <button
-              onClick={post}
+              onClick={() => void post("memo")}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium"
             >
               <Plus className="h-4 w-4" />
@@ -187,6 +437,7 @@ function MemosPage() {
                       <Badge tone={m.audience === "staff" ? "muted" : "accent"}>
                         {audienceLabel(m.audience, m.targetSupplierId, suppliers)}
                       </Badge>
+                      {m.documentKind === "letter" ? <Badge tone="accent">Letterhead</Badge> : null}
                       {m.expiresAt ? <span>Expires {m.expiresAt}</span> : null}
                     </div>
                     <div className="text-xs text-muted-foreground">
@@ -195,7 +446,7 @@ function MemosPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => downloadMemo(m)}
+                      onClick={() => void downloadMemo(m)}
                       className="text-muted-foreground hover:text-foreground"
                       title="Download memo"
                     >
@@ -209,7 +460,22 @@ function MemosPage() {
                     </button>
                   </div>
                 </div>
-                <p className="text-sm mt-2 whitespace-pre-wrap">{m.body}</p>
+                {m.documentKind === "letter" ? (
+                  <div className="mt-3 max-w-3xl">
+                    <LetterheadDocument
+                      title={m.title}
+                      body={m.body}
+                      date={m.date}
+                      recipientName={String(m.letterMeta?.recipientName ?? "")}
+                      recipientId={String(
+                        m.letterMeta?.recipientId ?? m.letterMeta?.memberId ?? "",
+                      )}
+                      facts={Array.isArray(m.letterMeta?.facts) ? (m.letterMeta.facts as LetterFact[]) : []}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm mt-2 whitespace-pre-wrap">{m.body}</p>
+                )}
               </div>
             ))}
           </div>

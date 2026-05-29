@@ -113,6 +113,7 @@ function ReportsPage() {
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [purposePoolMemberId, setPurposePoolMemberId] = useState("");
+  const [contributionMemberId, setContributionMemberId] = useState("");
   const [reportScope, setReportScope] = useState<ReportScope>("daily");
   const [fuelMemberId, setFuelMemberId] = useState("");
 
@@ -375,6 +376,38 @@ function ReportsPage() {
       periodRoundOff.length,
       periodRoundOff.reduce((sum, entry) => sum + entry.amount, 0),
       "Small rounding surplus captured.",
+    ),
+  ];
+  const contributionMember = memberAccounts.find((member) => member.id === contributionMemberId);
+  const contributionTransactions = contributionMemberId
+    ? transactions.filter((transaction) => transaction.memberId === contributionMemberId)
+    : [];
+  const contributionRows: BookRow[] = [
+    movementRow("loan_repayment", "Loans", contributionTransactions, "loan_repayment", ""),
+    movementRow("savings", "Savings", contributionTransactions, "deposit", ""),
+    movementRow("shares", "Shares", contributionTransactions, "share_purchase", ""),
+    movementRow(
+      "purpose_pool",
+      "Purpose pool",
+      contributionTransactions.filter((transaction) =>
+        String(transaction.note ?? "").toLowerCase().includes("purpose pool"),
+      ).length,
+      contributionTransactions
+        .filter((transaction) =>
+          String(transaction.note ?? "").toLowerCase().includes("purpose pool"),
+        )
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      "",
+    ),
+    movementRow("fees", "Fees", contributionTransactions, "fee_payment", ""),
+    movementRow(
+      "penalties",
+      "Penalties",
+      penalties.filter((penalty) => penalty.memberId === contributionMemberId).length,
+      penalties
+        .filter((penalty) => penalty.memberId === contributionMemberId)
+        .reduce((sum, penalty) => sum + penalty.amount, 0),
+      "",
     ),
   ];
   const loanCategoryReportRows = (["financial", "fuel", "stock", "service"] as const).map(
@@ -646,6 +679,53 @@ function ReportsPage() {
           totalAmount={periodMoneyRows.reduce((sum, row) => sum + row.amount, 0)}
           totalNote="Total of all amount-bearing activity in the selected report window."
         />
+
+        <Section
+          title="Member Contribution Distribution"
+          action={
+            <select
+              value={contributionMemberId}
+              onChange={(event) => setContributionMemberId(event.target.value)}
+              className="rounded-md border border-border bg-muted px-3 py-1.5 text-xs"
+            >
+              <option value="">Choose member</option>
+              {memberAccounts.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.id} - {member.name}
+                </option>
+              ))}
+            </select>
+          }
+        >
+          {!contributionMember ? (
+            <div className="px-5 py-8 text-center text-sm text-muted-foreground">
+              Select a member to see how their lifetime contributions are distributed.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Area</th>
+                    <th className="px-5 py-3 text-right">Entries</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {contributionRows.map((row) => (
+                    <tr key={row.key}>
+                      <td className="px-5 py-3 font-medium">{row.label}</td>
+                      <td className="px-5 py-3 text-right">{row.count}</td>
+                      <td className="px-5 py-3 text-right font-semibold">
+                        {fmtKES(row.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
 
         <Section title="Loan Category Status">
           <div className="overflow-x-auto">

@@ -43,6 +43,7 @@ import {
   membershipIdCandidates,
   membershipSequenceValue,
   memberCategoryLabel,
+  normalizeMemberTags,
   normalizeMembershipNumber,
   resolveMemberCategory,
   type MemberCategory,
@@ -109,6 +110,7 @@ export type Member = {
   businessAddress?: string;
   vehiclePlate?: string;
   fieldOfficerId?: string;
+  serviceMemberNumber?: string;
 };
 
 /** SBC policy: financial loans use fixed-day buckets; supplier-backed loans may use 24-hour/custom spans. */
@@ -175,13 +177,15 @@ export function loanProductChargeAmount(loan: {
   if (loan.loanKind === "fuel") {
     return (
       payloadNumber(loan.supplierPayload, ["fuelCharge", "charge", "productChargeAmount"]) ||
-      Number(loan.processingFeeAmount ?? 0)
+      Number(loan.processingFeeAmount ?? 0) ||
+      getActivePolicySettings().percentages.fuelChargeAmount
     );
   }
   if (loan.loanKind === "stock") {
     return (
       payloadNumber(loan.supplierPayload, ["stockCharge", "charge", "productChargeAmount"]) ||
-      Number(loan.processingFeeAmount ?? 0)
+      Number(loan.processingFeeAmount ?? 0) ||
+      getActivePolicySettings().percentages.stockChargeAmount
     );
   }
   return 0;
@@ -339,6 +343,14 @@ export function memberNeedsSticker(
   return !!member.fees.hasShop;
 }
 
+export function memberIsServiceOnly(
+  member: Partial<Pick<Member, "category" | "memberTags">> | null | undefined,
+) {
+  if (!member) return false;
+  const tags = normalizeMemberTags(member.memberTags, member.category);
+  return tags.includes("service") && !tags.includes("member");
+}
+
 export type Appraisal = {
   id: string;
   memberId: string;
@@ -431,6 +443,9 @@ export type MpesaAllocation = {
 
 const SHARE_PRICE = 100;
 export const FUEL_BUFFER_TARGET = 3000;
+export function fuelBufferTargetAmount() {
+  return getActivePolicySettings().percentages.fuelBufferAmount;
+}
 export const STANDARD_LOAN_TERMS: LoanTermDays[] = [7, 14, 30];
 export const PREMIUM_LOAN_TERMS: LoanTermDays[] = [14, 30, 60, 90];
 export const SBC_LOAN_TERMS: LoanTermDays[] = [7, 14, 30, 60, 90];
@@ -533,6 +548,7 @@ type Store = {
       memberId?: string;
       fees?: MandatoryFees;
       memberTags?: MemberCategory[];
+      serviceIds?: string[];
       investorContribution?: number;
       investorNotes?: string;
     },
@@ -564,6 +580,7 @@ type Store = {
     businessAddress?: string;
     vehiclePlate?: string;
     fieldOfficerId?: string;
+    serviceIds?: string[];
   }) => Promise<string>;
   addStaff: (s: Omit<Staff, "id">) => Promise<string>;
   updateStaff: (id: string, patch: Partial<Staff>) => Promise<void>;
@@ -571,7 +588,13 @@ type Store = {
   addLoan: (
     l: Omit<Loan, "id" | "paid" | "status"> & { status?: Loan["status"] },
   ) => Promise<string>;
-  approveLoan: (loanId: string, approvedAmount: number, by: string, note?: string) => Promise<void>;
+  approveLoan: (
+    loanId: string,
+    approvedAmount: number,
+    by: string,
+    note?: string,
+    termDays?: number,
+  ) => Promise<void>;
   rejectLoan: (loanId: string, by: string, note?: string) => Promise<void>;
   recordTransaction: (
     t: Omit<Transaction, "id" | "date"> & { date?: string; allowOverdraw?: boolean },
@@ -866,6 +889,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             fieldOfficerId: m.fieldOfficerId || currentUser.id,
             category: m.category,
             memberTags: (m as any).memberTags,
+            serviceIds: (m as any).serviceIds,
             investorContribution: (m as any).investorContribution,
             investorNotes: (m as any).investorNotes,
           },
@@ -902,6 +926,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             fieldOfficerId: m.fieldOfficerId,
             category: m.category,
             memberTags: m.memberTags,
+            serviceIds: m.serviceIds,
           },
         });
         await refreshAfterMutation("Member was updated, but background sync failed.");
@@ -947,12 +972,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await refreshAfterMutation("Loan was saved, but background sync failed.");
         return result.id;
       },
-      approveLoan: async (loanId, approvedAmount, by, note) => {
+      approveLoan: async (loanId, approvedAmount, by, note, termDays) => {
         await reviewLoan({
           data: {
             loanId,
             decision: "approved",
             approvedAmount,
+            termDays,
             reviewedBy: by,
             note,
           },
@@ -1228,9 +1254,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       resolveMpesaAccount: (account: string) => {
         const candidates = membershipIdCandidates(account);
+        const normalizedAccount = String(account ?? "").trim().toUpperCase();
         return candidates
-          .map((candidate) => members.find((mb) => mb.id === candidate))
-          .find(Boolean);
+          .map(
+            (candidate) =>
+              members.find((mb) => mb.id === candidate) ??
+              members.find(
+                (mb) =>
+                  String(mb.serviceMemberNumber ?? "")
+                    .trim()
+                    .toUpperCase() === candidate,
+              ),
+          )
+          .find(Boolean) ??
+          members.find(
+            (mb) =>
+              String(mb.serviceMemberNumber ?? "")
+                .trim()
+                .toUpperCase() === normalizedAccount,
+          );
       },
       applyMpesaPayment: async (account, amount, payerName, mpesaRef, eventId) => {
         const result = await applyMpesaPaymentServer({
@@ -1324,11 +1366,15 @@ export function normalizeLoanTermDays(termDays?: number): LoanTermDays {
 }
 
 export function normalizeLoanTermDaysForType(termDays?: number, loanType?: LoanProductType) {
-  return normalizePolicyTermDays(termDays, loanType);
+  const normalized = Math.max(1, Math.floor(Number(termDays ?? 0) || 1));
+  return normalized;
 }
 
 export function termPeriodsFromDays(termDays?: number, loanType?: LoanProductType) {
-  return Math.max(1, Math.ceil(normalizeLoanTermDaysForType(termDays, loanType) / 30));
+  const normalized = normalizeLoanTermDaysForType(termDays, loanType);
+  const policyTerms = new Set([7, 14, 30, 60, 90]);
+  if (policyTerms.has(normalized)) return Math.max(1, Math.ceil(normalized / 30));
+  return Math.max(1, normalized / 30);
 }
 
 export function loanProductTypeForAmount(amount: number): LoanProductType {
@@ -1353,6 +1399,18 @@ export function loanScheduleTotal(principal: number, monthlyRatePct: number, mon
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
   const interest = principal * (monthlyRatePct / 100) * periods;
   const total = principal + interest;
+  return { interest, total, monthly: total / periods };
+}
+
+export function loanScheduleTotalFromNet(
+  financedPrincipal: number,
+  netDisbursedAmount: number,
+  monthlyRatePct: number,
+  months: number,
+) {
+  const periods = Number.isFinite(months) && months > 0 ? months : 1;
+  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100) * periods;
+  const total = Math.max(0, financedPrincipal) + interest;
   return { interest, total, monthly: total / periods };
 }
 
@@ -1462,7 +1520,7 @@ export function loanPricingPreview(args: {
   const periods = termPeriodsFromDays(termDays, resolvedLoanType);
   const schedule = supplierBacked
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
-    : loanScheduleTotal(financedPrincipal, ratePct, periods);
+    : loanScheduleTotalFromNet(financedPrincipal, netAmount, ratePct, periods);
   const dailySavingsAmount = Math.max(
     0,
     supplierBacked ? 0 : Number(args.dailySavingsAmount ?? loanDailySavingsAmount(netAmount)),
@@ -1527,7 +1585,7 @@ export function loanSummary(
     loan.financedPrincipalAmount ?? (supplierBacked ? approved + productChargeAmount : approved);
   const schedule = supplierBacked
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
-    : loanScheduleTotal(financedPrincipal, loan.rate, periods);
+    : loanScheduleTotalFromNet(financedPrincipal, approved, loan.rate, periods);
   const balance = Math.max(0, schedule.total - loan.paid);
   const dailySavingsAmount = supplierBacked ? 0 : loanDailySavingsAmount(approved);
   const dueDate = new Date(loan.startDate);

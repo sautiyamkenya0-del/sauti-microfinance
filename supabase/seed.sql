@@ -11,3 +11,4 @@
 \ir seeds/api_topups_6.sql
 \ir seeds/api_topups_7.sql
 \ir seeds/api_topups_8.sql
+\ir seeds/lead_way_fuel.sql

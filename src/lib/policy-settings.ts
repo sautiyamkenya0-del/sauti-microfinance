@@ -22,6 +22,9 @@ export type PolicyPercentages = {
   mandatorySavingsThreshold: number;
   mandatorySharesThreshold: number;
   roundOffStep: number;
+  fuelBufferAmount: number;
+  fuelChargeAmount: number;
+  stockChargeAmount: number;
 };
 
 export type WaterfallScenario = "member_with_loan" | "member_without_loan" | "investor_only";
@@ -103,6 +106,9 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
     mandatorySavingsThreshold: 5000,
     mandatorySharesThreshold: 3000,
     roundOffStep: 5,
+    fuelBufferAmount: 3000,
+    fuelChargeAmount: 100,
+    stockChargeAmount: 100,
   },
   interestRates: {
     standard: {
@@ -411,6 +417,18 @@ export function mergePolicySettings(rows?: PolicySettingRow[] | null): PolicySet
             DEFAULT_POLICY_SETTINGS.percentages.roundOffStep,
           ),
         ),
+      ),
+      fuelBufferAmount: toFiniteNumber(
+        percentagesRow.value.fuelBufferAmount,
+        DEFAULT_POLICY_SETTINGS.percentages.fuelBufferAmount,
+      ),
+      fuelChargeAmount: toFiniteNumber(
+        percentagesRow.value.fuelChargeAmount,
+        DEFAULT_POLICY_SETTINGS.percentages.fuelChargeAmount,
+      ),
+      stockChargeAmount: toFiniteNumber(
+        percentagesRow.value.stockChargeAmount,
+        DEFAULT_POLICY_SETTINGS.percentages.stockChargeAmount,
       ),
     };
   }

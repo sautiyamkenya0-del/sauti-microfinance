@@ -70,6 +70,10 @@ function mapStaffMessageRow(row: DbRow) {
 }
 
 function mapMemoRow(row: DbRow) {
+  const letterMeta =
+    row.letter_meta && typeof row.letter_meta === "object"
+      ? (row.letter_meta as Record<string, unknown>)
+      : {};
   return {
     id: readText(row.id),
     date: readText(row.memo_date),
@@ -82,6 +86,8 @@ function mapMemoRow(row: DbRow) {
     targetSupplierId: optionalText(row.target_supplier_id),
     kind: optionalText(row.notice_kind) ?? "info",
     expiresAt: optionalText(row.expires_at),
+    documentKind: optionalText(row.document_kind) ?? "memo",
+    letterMeta,
     createdAt: readText(row.created_at),
   };
 }
@@ -142,6 +148,40 @@ function mapPerformanceTargetRow(row: DbRow) {
     notes: optionalText(row.notes),
     createdAt: readText(row.created_at),
     updatedAt: readText(row.updated_at),
+  };
+}
+
+function mapServiceCatalogRow(row: DbRow) {
+  return {
+    id: readText(row.id),
+    name: readText(row.name),
+    description: optionalText(row.description),
+    price: readNumber(row.price),
+    billingFrequency: readText(row.billing_frequency) || "monthly",
+    scope: readText(row.scope) || "all_members",
+    selectedMemberIds: Array.isArray(row.selected_member_ids)
+      ? row.selected_member_ids.map((value) => readText(value)).filter(Boolean)
+      : [],
+    deductionMode: readText(row.deduction_mode) || "normal",
+    feeOverrides:
+      row.fee_overrides && typeof row.fee_overrides === "object"
+        ? (row.fee_overrides as Record<string, unknown>)
+        : {},
+    active: row.active !== false,
+    createdBy: optionalText(row.created_by),
+    createdAt: optionalText(row.created_at),
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+function mapMemberServiceSubscriptionRow(row: DbRow) {
+  return {
+    memberId: readText(row.member_id),
+    serviceId: readText(row.service_id),
+    status: readText(row.status) || "active",
+    assignedBy: optionalText(row.assigned_by),
+    assignedAt: optionalText(row.assigned_at),
+    updatedAt: optionalText(row.updated_at),
   };
 }
 
@@ -416,6 +456,125 @@ export const listFeePolicies = createServerFn({ method: "POST" }).handler(async 
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => mapFeePolicyRow(row as DbRow));
 });
+
+export const listServiceCatalog = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireSignedInSession();
+  if (session.authMode !== "member") await requireStaffActor();
+  const supabaseAdmin = requireSupabaseAdmin();
+  let query = supabaseAdmin
+    .from("service_catalog")
+    .select("*")
+    .order("active", { ascending: false })
+    .order("name", { ascending: true });
+  if (session.authMode === "member") query = query.eq("active", true);
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => mapServiceCatalogRow(row as DbRow));
+});
+
+export const listMemberServiceSubscriptions = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireStaffActor();
+    const supabaseAdmin = requireSupabaseAdmin();
+    const { data, error } = await supabaseAdmin
+      .from("member_service_subscriptions")
+      .select("*")
+      .order("updated_at", { ascending: false });
+    if (error) {
+      if (isMissingRelationError(error)) return [];
+      throw new Error(error.message);
+    }
+    return (data ?? []).map((row) => mapMemberServiceSubscriptionRow(row as DbRow));
+  },
+);
+
+export const listMemberSelfServiceWorkspaceRecord = createServerFn({ method: "GET" })
+  .inputValidator((data: { memberId?: string } | undefined) => ({
+    memberId: data?.memberId?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    let targetMemberId = data.memberId ?? "";
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      targetMemberId = member.id;
+    } else {
+      await requireStaffActor();
+    }
+    if (!targetMemberId) {
+      return {
+        services: [],
+        subscriptions: [],
+        stockItems: [],
+        requests: [],
+        serviceWalletBalance: 0,
+      };
+    }
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const [
+      servicesResult,
+      subscriptionsResult,
+      stockResult,
+      requestsResult,
+      serviceWalletResult,
+    ] = await Promise.all([
+      supabaseAdmin
+        .from("service_catalog")
+        .select("*")
+        .eq("active", true)
+        .order("name", { ascending: true }),
+      supabaseAdmin
+        .from("member_service_subscriptions")
+        .select("*")
+        .eq("member_id", targetMemberId)
+        .neq("status", "cancelled")
+        .order("updated_at", { ascending: false }),
+      supabaseAdmin
+        .from("internal_store_items")
+        .select("*")
+        .gt("quantity_available", 0)
+        .order("item_name", { ascending: true }),
+      supabaseAdmin
+        .from("supplier_fulfillment_requests")
+        .select("*")
+        .eq("member_id", targetMemberId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabaseAdmin
+        .from("member_docket_balances")
+        .select("amount")
+        .eq("member_id", targetMemberId)
+        .eq("docket", "service_wallet")
+        .maybeSingle(),
+    ]);
+
+    const failed = [
+      servicesResult,
+      subscriptionsResult,
+      stockResult,
+      requestsResult,
+      serviceWalletResult,
+    ].find((result) => result.error && !isMissingRelationError(result.error));
+    if (failed?.error) throw new Error(failed.error.message);
+
+    return {
+      services: servicesResult.error
+        ? []
+        : (servicesResult.data ?? []).map((row: DbRow) => mapServiceCatalogRow(row)),
+      subscriptions: subscriptionsResult.error
+        ? []
+        : (subscriptionsResult.data ?? []).map((row: DbRow) =>
+            mapMemberServiceSubscriptionRow(row),
+          ),
+      stockItems: stockResult.error ? [] : ((stockResult.data ?? []) as DbRow[]),
+      requests: requestsResult.error ? [] : ((requestsResult.data ?? []) as DbRow[]),
+      serviceWalletBalance: readNumber((serviceWalletResult.data as DbRow | null)?.amount),
+    };
+  });
 
 export const listPerformanceTargets = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();

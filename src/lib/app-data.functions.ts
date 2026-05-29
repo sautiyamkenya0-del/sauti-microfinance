@@ -442,11 +442,13 @@ function premiumUpfrontRequirementForAmount(amount: number) {
 }
 
 function normalizeLoanTermDays(termDays?: number) {
-  return normalizePolicyTermDays(termDays);
+  return Math.max(1, Math.floor(Number(termDays ?? 0) || 1));
 }
 
 function termPeriodsFromDays(termDays?: number) {
-  return Math.max(1, Math.ceil(normalizeLoanTermDays(termDays) / 30));
+  const normalized = normalizeLoanTermDays(termDays);
+  if ([7, 14, 30, 60, 90].includes(normalized)) return Math.max(1, Math.ceil(normalized / 30));
+  return Math.max(1, normalized / 30);
 }
 
 function normalizeLoanKindTermDays(
@@ -478,6 +480,18 @@ function loanScheduleTotal(principal: number, monthlyRatePct: number, months: nu
   const periods = Number.isFinite(months) && months > 0 ? months : 1;
   const interest = principal * (monthlyRatePct / 100) * periods;
   const total = principal + interest;
+  return { interest, total, monthly: total / periods };
+}
+
+function loanScheduleTotalFromNet(
+  financedPrincipal: number,
+  netDisbursedAmount: number,
+  monthlyRatePct: number,
+  months: number,
+) {
+  const periods = Number.isFinite(months) && months > 0 ? months : 1;
+  const interest = Math.max(0, netDisbursedAmount) * (monthlyRatePct / 100) * periods;
+  const total = Math.max(0, financedPrincipal) + interest;
   return { interest, total, monthly: total / periods };
 }
 
@@ -540,7 +554,12 @@ function computeLoanPricing(args: {
       ? Number(args.termMonths ?? 0)
       : termPeriodsForLoanKind(args.loanKind, termDays, args.termMonths);
   const productChargeAmount = supplierBacked
-    ? supplierPayloadChargeAmount(args.loanKind, args.supplierPayload)
+    ? supplierPayloadChargeAmount(args.loanKind, args.supplierPayload) ||
+      (args.loanKind === "fuel"
+        ? settings.percentages.fuelChargeAmount
+        : args.loanKind === "stock"
+          ? settings.percentages.stockChargeAmount
+          : 0)
     : 0;
   const processing = supplierBacked ? 0 : netAmount * (settings.percentages.processingPct / 100);
   const insurance = supplierBacked ? 0 : netAmount * (settings.percentages.insurancePct / 100);
@@ -560,7 +579,7 @@ function computeLoanPricing(args: {
   const ratePct = supplierBacked ? 0 : Number(args.ratePct ?? 0);
   const schedule = supplierBacked
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
-    : loanScheduleTotal(financedPrincipal, ratePct, termMonths);
+    : loanScheduleTotalFromNet(financedPrincipal, netAmount, ratePct, termMonths);
   return {
     termDays,
     termMonths,
@@ -607,7 +626,7 @@ function loanBalanceSummary(loan: {
       : termPeriodsForLoanKind(loanKind, termDays, loan.term_months);
   const total = supplierBacked
     ? financedPrincipal
-    : loanScheduleTotal(financedPrincipal, Number(loan.rate ?? 0), periods).total;
+    : loanScheduleTotalFromNet(financedPrincipal, approved, Number(loan.rate ?? 0), periods).total;
   const paid = Number(loan.paid ?? 0);
   return {
     approved,
@@ -932,6 +951,70 @@ function membershipAccountAliases(value: string) {
   return uniqueTextValues(membershipIdCandidates(value));
 }
 
+function serviceMemberNumberSequence(value: unknown) {
+  const match = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .match(/SVC(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function nextServiceMemberNumber(values: Array<string | null | undefined>) {
+  const max = values.reduce(
+    (highest, value) => Math.max(highest, serviceMemberNumberSequence(value)),
+    0,
+  );
+  return `SVC${String(max + 1).padStart(4, "0")}`;
+}
+
+async function syncMemberServiceSubscriptions(args: {
+  runtimeDb: any;
+  memberId: string;
+  serviceIds?: string[];
+  actorId?: string | null;
+}) {
+  if (!args.serviceIds) return;
+  const serviceIds = uniqueTextValues(args.serviceIds);
+
+  const existingResult = await args.runtimeDb
+    .from("member_service_subscriptions")
+    .select("service_id")
+    .eq("member_id", args.memberId)
+    .neq("status", "cancelled");
+  if (existingResult.error) {
+    if (isMissingRelationError(existingResult.error)) return;
+    throw new Error(existingResult.error.message);
+  }
+
+  const toCancel = (existingResult.data ?? [])
+    .map((row: { service_id?: string | null }) => String(row.service_id ?? "").trim())
+    .filter((serviceId: string) => serviceId && !serviceIds.includes(serviceId));
+  if (toCancel.length > 0) {
+    const { error: clearError } = await args.runtimeDb
+      .from("member_service_subscriptions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("member_id", args.memberId)
+      .in("service_id", toCancel);
+    if (clearError) throw new Error(clearError.message);
+  }
+
+  if (serviceIds.length === 0) return;
+  const now = new Date().toISOString();
+  const rows = serviceIds.map((serviceId) => ({
+    member_id: args.memberId,
+    service_id: serviceId,
+    status: "active",
+    assigned_by: args.actorId ?? null,
+    assigned_at: now,
+    updated_at: now,
+  }));
+  const { error } = await args.runtimeDb.from("member_service_subscriptions").upsert(rows);
+  if (error) {
+    if (isMissingRelationError(error)) return;
+    throw new Error(error.message);
+  }
+}
+
 function feeNoteValue(note?: string | null) {
   return String(note ?? "")
     .trim()
@@ -957,6 +1040,25 @@ export async function findMemberByMembershipInput(account: string) {
   for (const candidate of lookupValues) {
     const match = (data ?? []).find((row) => row.id === candidate);
     if (match) return match;
+  }
+
+  const { data: serviceMatches, error: serviceError } = await supabaseAdmin
+    .from("members")
+    .select("*")
+    .in("service_member_number", lookupValues);
+  if (serviceError && !isMissingColumnError(serviceError, "service_member_number")) {
+    throw new Error(serviceError.message);
+  }
+  if (!serviceError) {
+    for (const candidate of lookupValues) {
+      const match = (serviceMatches ?? []).find(
+        (row) =>
+          String(row.service_member_number ?? "")
+            .trim()
+            .toUpperCase() === candidate,
+      );
+      if (match) return match;
+    }
   }
 
   const { data: legacyMatches, error: legacyError } = await supabaseAdmin
@@ -2073,6 +2175,18 @@ export async function applyMpesaPaymentToDatabase(args: {
     policySettings.percentages.mandatorySavingsThreshold || MANDATORY_SAVINGS_THRESHOLD;
   const mandatorySharesThreshold =
     policySettings.percentages.mandatorySharesThreshold || MANDATORY_SHARES_THRESHOLD;
+  const specialFuelCharge = Math.max(
+    0,
+    policySettings.percentages.fuelChargeAmount || SPECIAL_MEMBER_TRANSACTION_INTEREST,
+  );
+  const specialStockCharge = Math.max(
+    0,
+    policySettings.percentages.stockChargeAmount || SPECIAL_MEMBER_TRANSACTION_INTEREST,
+  );
+  const specialBufferTarget = Math.max(
+    0,
+    policySettings.percentages.fuelBufferAmount || SPECIAL_MEMBER_BUFFER_TARGET,
+  );
 
   const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
     .from("penalties")
@@ -2652,7 +2766,8 @@ export async function applyMpesaPaymentToDatabase(args: {
 
     if (openLoanBalance > 0) {
       if (kind === "locomotive") {
-        const interest = Math.min(remaining, SPECIAL_MEMBER_TRANSACTION_INTEREST);
+        const configuredInterest = kind === "locomotive" ? specialFuelCharge : specialStockCharge;
+        const interest = Math.min(remaining, configuredInterest);
         queueSpecialInterest(interest, kind);
         remaining = roundMoney(remaining - interest);
 
@@ -2665,9 +2780,9 @@ export async function applyMpesaPaymentToDatabase(args: {
           .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
         const bufferGap = Math.max(
           0,
-          SPECIAL_MEMBER_BUFFER_TARGET - existingBuffer - pendingBuffer,
+          specialBufferTarget - existingBuffer - pendingBuffer,
         );
-        const bufferApplied = Math.min(remaining, SPECIAL_MEMBER_BUFFER_PER_PAYMENT, bufferGap);
+        const bufferApplied = Math.min(remaining, specialBufferTarget, bufferGap);
         if (bufferApplied > 0) {
           queueSavingsDeposit(bufferApplied, `${label} buffer:`, {
             note: `${label} buffer via Paybill ${norm}`,
@@ -2699,7 +2814,7 @@ export async function applyMpesaPaymentToDatabase(args: {
           ),
       )
       .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
-    const bufferGap = Math.max(0, SPECIAL_MEMBER_BUFFER_TARGET - existingBuffer - pendingBuffer);
+    const bufferGap = Math.max(0, specialBufferTarget - existingBuffer - pendingBuffer);
     const bufferApplied = Math.min(remaining, bufferGap);
     if (bufferApplied > 0) {
       queueSavingsDeposit(bufferApplied, `${label} buffer:`, {
@@ -2961,6 +3076,23 @@ export async function applyMpesaPaymentToDatabase(args: {
         note: allocation.note ?? tx.note ?? null,
         createdAt: paymentCreatedAt ?? null,
       });
+      if (allocation.allocationType === "service_payment") {
+        await adjustMemberDocketBalance({
+          runtimeDb: supabaseAdmin,
+          member: matchedMember,
+          docket: "service_wallet",
+          delta: Number(tx.amount ?? 0),
+          protected: true,
+        });
+        await recordInvariantDocketMovement({
+          runtimeDb: supabaseAdmin,
+          memberId,
+          toDocket: "service_wallet",
+          amount: Number(tx.amount ?? 0),
+          reason: "Service wallet payment via M-Pesa",
+          actorId: MPESA_SYSTEM_STAFF_ID,
+        });
+      }
     }
     if (
       !primaryTransactionId &&
@@ -3602,6 +3734,7 @@ function mapMemberRow(row: any) {
     businessAddress: row.business_address ?? undefined,
     vehiclePlate: row.vehicle_plate ?? undefined,
     fieldOfficerId: row.field_officer_id ?? undefined,
+    serviceMemberNumber: row.service_member_number ?? undefined,
   };
 }
 
@@ -5097,6 +5230,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId?: string;
       category?: MemberCategory;
       memberTags?: MemberCategory[];
+      serviceIds?: string[];
       investorContribution?: number;
       investorNotes?: string;
     }) => ({
@@ -5129,6 +5263,9 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
       memberTags: normalizeMemberTags(data?.memberTags, data?.category),
+      serviceIds: Array.isArray(data?.serviceIds)
+        ? data.serviceIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+        : undefined,
       investorContribution: Number(data?.investorContribution ?? 0),
       investorNotes: data?.investorNotes?.trim() || undefined,
     }),
@@ -5186,6 +5323,7 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const hasShop = data.businessPermanence === "permanent";
     const fieldOfficerId = data.fieldOfficerId ?? actor.id;
     const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
+    const serviceOnly = memberTags.includes("service") && !memberTags.includes("member");
     const shares = investorOnly ? 0 : data.shares;
     const savingsBalance = investorOnly ? 0 : data.savingsBalance;
     const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
@@ -5194,7 +5332,24 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       assertShareBasketWithinThreshold({ shares, settings: policySettings });
     }
 
-    const { error: memberError } = await supabaseAdmin.from("members").insert({
+    let serviceMemberNumber: string | null = null;
+    if (serviceOnly) {
+      const { data: existingServiceMembers, error: serviceNumberError } = await supabaseAdmin
+        .from("members")
+        .select("service_member_number");
+      if (serviceNumberError && !isMissingColumnError(serviceNumberError, "service_member_number")) {
+        throw new Error(serviceNumberError.message);
+      }
+      serviceMemberNumber = serviceNumberError
+        ? null
+        : nextServiceMemberNumber(
+            (existingServiceMembers ?? []).map(
+              (row: { service_member_number?: string | null }) => row.service_member_number,
+            ),
+          );
+    }
+
+    const memberInsertPayload: Record<string, unknown> = {
       id: memberId,
       name: data.name,
       phone,
@@ -5224,8 +5379,18 @@ export const createMemberRecord = createServerFn({ method: "POST" })
       member_category: memberCategory,
       member_tags: memberTags,
       is_investor: memberTags.includes("investor") || isInvestorCategory(memberCategory),
-    });
+    };
+    if (serviceMemberNumber) memberInsertPayload.service_member_number = serviceMemberNumber;
+
+    const { error: memberError } = await supabaseAdmin.from("members").insert(memberInsertPayload);
     if (memberError) throw new Error(memberError.message);
+
+    await syncMemberServiceSubscriptions({
+      runtimeDb: supabaseAdmin,
+      memberId,
+      serviceIds: data.serviceIds,
+      actorId: actor.id,
+    });
 
     if (memberTags.includes("investor") || isInvestorCategory(memberCategory)) {
       const investorId = await nextPrefixedId("investors", "I", 1);
@@ -5281,6 +5446,8 @@ export const createMemberRecord = createServerFn({ method: "POST" })
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
         vehiclePlate: data.vehiclePlate ?? null,
+        serviceMemberNumber,
+        serviceIds: data.serviceIds ?? [],
         investorContribution: data.investorContribution || 0,
       },
     });
@@ -5316,6 +5483,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId?: string;
       category?: MemberCategory;
       memberTags?: MemberCategory[];
+      serviceIds?: string[];
     }) => ({
       memberId: String(data?.memberId ?? "").trim(),
       nextMemberId: data?.nextMemberId?.trim() || undefined,
@@ -5346,6 +5514,9 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       fieldOfficerId: data?.fieldOfficerId?.trim() || undefined,
       category: resolveMemberCategory(data?.category),
       memberTags: normalizeMemberTags(data?.memberTags, data?.category),
+      serviceIds: Array.isArray(data?.serviceIds)
+        ? data.serviceIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+        : undefined,
     }),
   )
   .handler(async ({ data }) => {
@@ -5378,6 +5549,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
     const targetMembershipNumber = formatMembershipNumber(targetMemberId);
     const hasShop = data.businessPermanence === "permanent";
     const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
+    const serviceOnly = memberTags.includes("service") && !memberTags.includes("member");
     const nextShares = investorOnly ? 0 : data.shares;
     const nextSavingsBalance = investorOnly ? 0 : data.savingsBalance;
 
@@ -5423,6 +5595,23 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       });
     }
 
+    let serviceMemberNumber = currentMember.service_member_number ?? null;
+    if (serviceOnly && !serviceMemberNumber) {
+      const { data: existingServiceMembers, error: serviceNumberError } = await supabaseAdmin
+        .from("members")
+        .select("service_member_number");
+      if (serviceNumberError && !isMissingColumnError(serviceNumberError, "service_member_number")) {
+        throw new Error(serviceNumberError.message);
+      }
+      serviceMemberNumber = serviceNumberError
+        ? null
+        : nextServiceMemberNumber(
+            (existingServiceMembers ?? []).map(
+              (row: { service_member_number?: string | null }) => row.service_member_number,
+            ),
+          );
+    }
+
     const memberPayload = {
       name: data.name,
       phone,
@@ -5452,6 +5641,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       member_category: memberCategory,
       member_tags: memberTags,
       is_investor: memberTags.includes("investor") || isInvestorCategory(memberCategory),
+      service_member_number: serviceOnly ? serviceMemberNumber : null,
     };
 
     const syncSelectedMemberFeePolicies = async (fromMemberId: string, toMemberId: string) => {
@@ -5624,6 +5814,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       await mergeCarryoverProfileReference();
       await moveMemberReference("member_carryover_loans");
       await moveOptionalMemberReference("system_payout_requests");
+      await moveOptionalMemberReference("member_service_subscriptions");
 
       const currentAccountAliases = membershipAccountAliases(currentMemberId);
       for (const accountAlias of currentAccountAliases) {
@@ -5668,6 +5859,13 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
 
     await syncMemberBackedInvestor(finalMemberId);
 
+    await syncMemberServiceSubscriptions({
+      runtimeDb: supabaseAdmin,
+      memberId: finalMemberId,
+      serviceIds: data.serviceIds,
+      actorId: actor.id,
+    });
+
     await auditAction({
       actor,
       action: "member.updated",
@@ -5687,6 +5885,8 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
         businessName: data.businessName ?? null,
         businessPermanence: data.businessPermanence ?? null,
         vehiclePlate: data.vehiclePlate ?? null,
+        serviceMemberNumber: serviceOnly ? serviceMemberNumber : null,
+        serviceIds: data.serviceIds ?? [],
       },
     });
     return { id: finalMemberId };
@@ -6606,12 +6806,14 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       loanId: string;
       decision: "approved" | "rejected";
       approvedAmount?: number;
+      termDays?: number;
       reviewedBy: string;
       note?: string;
     }) => ({
       loanId: String(data?.loanId ?? "").trim(),
       decision: data?.decision ?? "approved",
       approvedAmount: data?.approvedAmount == null ? undefined : Number(data.approvedAmount ?? 0),
+      termDays: data?.termDays == null ? undefined : Math.max(1, Math.floor(Number(data.termDays))),
       reviewedBy: String(data?.reviewedBy ?? "").trim(),
       note: data?.note?.trim() || undefined,
     }),
@@ -6668,7 +6870,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     const pricing = computeLoanPricing({
       netAmount: approvedAmount,
       ratePct: Number(loan.rate ?? 0),
-      termDays: Number(loan.term_days ?? 0) || undefined,
+      termDays: data.termDays ?? (Number(loan.term_days ?? 0) || undefined),
       termMonths: Number(loan.term_months ?? 0) || undefined,
       processingFeeMode: String(loan.processing_fee_mode ?? "financed"),
       insuranceFeeMode: String(loan.insurance_fee_mode ?? "financed"),
@@ -6683,6 +6885,8 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         .update({
           approved_amount: approvedAmount,
           financed_principal_amount: pricing.financedPrincipal,
+          term_days: pricing.termDays,
+          term_months: pricing.termMonths,
           net_disbursed_amount: 0,
           processing_fee_amount: 0,
           insurance_fee_amount: 0,
@@ -6708,6 +6912,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
           memberId: loan.member_id,
           approvedAmount,
           financedPrincipalAmount: approvedAmount,
+          termDays: pricing.termDays,
           loanKind,
           note: clipAuditText(data.note, 160),
           productChargeAmount: pricing.productChargeAmount,
@@ -6758,6 +6963,8 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         processing_fee_amount: pricing.processing,
         insurance_fee_amount: pricing.insurance,
         transaction_fee_amount: pricing.transactionFee,
+        term_days: pricing.termDays,
+        term_months: pricing.termMonths,
         processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
         status: "active",
@@ -7741,6 +7948,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       targetSupplierId?: string;
       kind?: "info" | "warning" | "alert";
       expiresAt?: string;
+      documentKind?: "memo" | "letter";
+      letterMeta?: Record<string, unknown>;
     }) => ({
       title: String(data?.title ?? "").trim(),
       body: String(data?.body ?? "").trim(),
@@ -7759,6 +7968,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       targetSupplierId: data?.targetSupplierId?.trim() || undefined,
       kind: data?.kind === "warning" || data?.kind === "alert" ? data.kind : "info",
       expiresAt: data?.expiresAt?.trim() || undefined,
+      documentKind: data?.documentKind === "letter" ? "letter" : "memo",
+      letterMeta: asJsonObject(data?.letterMeta),
     }),
   )
   .handler(async ({ data }) => {
@@ -7786,6 +7997,8 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
       target_supplier_id: data.audience === "supplier" ? data.targetSupplierId : null,
       notice_kind: data.kind,
       expires_at: data.expiresAt ?? null,
+      document_kind: data.documentKind,
+      letter_meta: data.letterMeta,
     });
     if (error) throw new Error(error.message);
     await auditAction({
@@ -7801,11 +8014,106 @@ export const createStaffMemoRecord = createServerFn({ method: "POST" })
         targetSupplierId: data.targetSupplierId ?? null,
         kind: data.kind,
         expiresAt: data.expiresAt ?? null,
+        documentKind: data.documentKind,
+        letterMeta: data.letterMeta,
         title: clipAuditText(data.title, 120),
         bodyPreview: clipAuditText(data.body, 180),
       },
     });
     return { id };
+  });
+
+export const polishMemberLetterRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      memberId: string;
+      intent: string;
+      draft: string;
+      includedFacts?: Record<string, unknown>;
+    }) => ({
+      memberId: String(data?.memberId ?? "").trim(),
+      intent: String(data?.intent ?? "").trim(),
+      draft: String(data?.draft ?? "").trim(),
+      includedFacts: asJsonObject(data?.includedFacts),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.memberId) throw new Error("Choose the member for the letter first.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const [memberResult, loansResult, penaltiesResult, docketResult] = await Promise.all([
+      runtimeDb.from("members").select("*").eq("id", data.memberId).maybeSingle(),
+      runtimeDb
+        .from("loans")
+        .select("*")
+        .eq("member_id", data.memberId)
+        .order("start_date", { ascending: false })
+        .limit(10),
+      runtimeDb
+        .from("penalties")
+        .select("*")
+        .eq("member_id", data.memberId)
+        .order("date", { ascending: false })
+        .limit(10),
+      runtimeDb.from("member_docket_balances").select("*").eq("member_id", data.memberId),
+    ]);
+    if (memberResult.error) throw new Error(memberResult.error.message);
+    if (loansResult.error) throw new Error(loansResult.error.message);
+    if (penaltiesResult.error) throw new Error(penaltiesResult.error.message);
+    if (docketResult.error && !isMissingRelationError(docketResult.error)) {
+      throw new Error(docketResult.error.message);
+    }
+    if (!memberResult.data) throw new Error("The selected member could not be found.");
+
+    const member = memberResult.data as Record<string, unknown>;
+    const context = {
+      member: {
+        id: member.id,
+        name: member.name,
+        phone: member.phone,
+        serviceMemberNumber: member.service_member_number ?? null,
+        savingsBalance: member.savings_balance ?? 0,
+        shares: member.shares ?? 0,
+        category: member.member_category ?? "member",
+      },
+      activeLoans: (loansResult.data ?? []).filter((loan: any) =>
+        ["active", "defaulted", "pending"].includes(String(loan.status ?? "")),
+      ),
+      penalties: penaltiesResult.data ?? [],
+      docketBalances: docketResult.error ? [] : (docketResult.data ?? []),
+      selectedFacts: data.includedFacts,
+    };
+
+    const { completeGroqChat } = await import("@/lib/groq.server");
+    const answer = await completeGroqChat([
+      {
+        role: "system",
+        content:
+          "You polish official Sauti Microfinance member letters. Write plain text only, no markdown. Keep the tone firm, respectful, concise, and Kenyan SACCO appropriate. Do not invent facts; use only the provided context. Start with Dear member name, and end with Sauti Microfinance.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          instruction: data.intent || "Polish this member letter for delivery.",
+          draft: data.draft,
+          context,
+        }),
+      },
+    ]);
+
+    await auditAction({
+      actor,
+      action: "letter.polished",
+      targetType: "member",
+      targetId: data.memberId,
+      summary: `${actor.name} polished a member letter for ${member.name}`,
+      details: {
+        intent: clipAuditText(data.intent, 160),
+        draftPreview: clipAuditText(data.draft, 200),
+      },
+    });
+    return { body: String(answer ?? "").trim() };
   });
 
 export const deleteStaffMemoRecord = createServerFn({ method: "POST" })
@@ -8068,6 +8376,146 @@ export const deleteFeePolicyRecord = createServerFn({ method: "POST" })
     return { ok: true, redistribution };
   });
 
+export const upsertServiceCatalogRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      id?: string;
+      name: string;
+      description?: string;
+      price: number;
+      billingFrequency?: ServiceBillingFrequency;
+      scope?: ServiceScope;
+      selectedMemberIds?: string[];
+      deductionMode?: "normal" | "override_all" | "amended_override";
+      feeOverrides?: Record<string, unknown>;
+      active?: boolean;
+    }) => ({
+      id: String(data?.id ?? "").trim() || undefined,
+      name: String(data?.name ?? "").trim(),
+      description: data?.description?.trim() || undefined,
+      price: Math.max(0, Number(data?.price ?? 0)),
+      billingFrequency: normalizeServiceBillingFrequency(data?.billingFrequency),
+      scope: normalizeServiceScope(data?.scope),
+      selectedMemberIds: Array.isArray(data?.selectedMemberIds)
+        ? uniqueTextValues(data.selectedMemberIds)
+        : [],
+      deductionMode:
+        data?.deductionMode === "override_all" || data?.deductionMode === "amended_override"
+          ? data.deductionMode
+          : "normal",
+      feeOverrides: asJsonObject(data?.feeOverrides),
+      active: data?.active !== false,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireManagerOrDirectorActor();
+    if (!data.name) throw new Error("Service name is required.");
+    if (data.scope === "selected_members" && data.selectedMemberIds.length === 0) {
+      throw new Error("Select at least one member for this service.");
+    }
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const id = data.id ?? makeId("SRV");
+    const { error } = await runtimeDb.from("service_catalog").upsert({
+      id,
+      name: data.name,
+      description: data.description ?? null,
+      price: data.price,
+      billing_frequency: data.billingFrequency,
+      scope: data.scope,
+      selected_member_ids: data.scope === "selected_members" ? data.selectedMemberIds : [],
+      deduction_mode: data.deductionMode,
+      fee_overrides: data.feeOverrides,
+      active: data.active,
+      created_by: actor.id,
+    });
+    if (error) throw new Error(error.message);
+
+    if (data.active) {
+      const { data: members, error: membersError } = await runtimeDb
+        .from("members")
+        .select("id, member_category, member_tags, is_investor");
+      if (membersError) throw new Error(membersError.message);
+
+      const targetMemberIds = (members ?? [])
+        .filter((member: any) => {
+          if (data.scope === "selected_members") return data.selectedMemberIds.includes(member.id);
+          const tags = normalizeMemberTags(
+            member.member_tags,
+            member.member_category,
+            member.is_investor,
+          );
+          if (data.scope === "service_members") return tags.includes("service");
+          return tags.includes("member") || tags.includes("service");
+        })
+        .map((member: any) => String(member.id));
+      if (targetMemberIds.length > 0) {
+        const now = new Date().toISOString();
+        const rows = targetMemberIds.map((memberId: string) => ({
+          member_id: memberId,
+          service_id: id,
+          status: "active",
+          assigned_by: actor.id,
+          assigned_at: now,
+          updated_at: now,
+        }));
+        const { error: subError } = await runtimeDb
+          .from("member_service_subscriptions")
+          .upsert(rows);
+        if (subError) throw new Error(subError.message);
+      }
+    }
+
+    await auditAction({
+      actor,
+      action: "service_catalog.upserted",
+      targetType: "service",
+      targetId: id,
+      summary: `${actor.name} saved service ${data.name}`,
+      details: {
+        price: data.price,
+        billingFrequency: data.billingFrequency,
+        scope: data.scope,
+        selectedMemberIds: data.scope === "selected_members" ? data.selectedMemberIds : [],
+        deductionMode: data.deductionMode,
+        active: data.active,
+      },
+    });
+    return { id };
+  });
+
+export const deleteServiceCatalogRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { id: string }) => ({ id: String(data?.id ?? "").trim() }))
+  .handler(async ({ data }) => {
+    const actor = await requireManagerOrDirectorActor();
+    if (!data.id) throw new Error("Service id is required.");
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: service, error: serviceError } = await runtimeDb
+      .from("service_catalog")
+      .select("name")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (serviceError) throw new Error(serviceError.message);
+    const { error } = await runtimeDb
+      .from("service_catalog")
+      .update({ active: false })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    const { error: subError } = await runtimeDb
+      .from("member_service_subscriptions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("service_id", data.id);
+    if (subError && !isMissingRelationError(subError)) throw new Error(subError.message);
+    await auditAction({
+      actor,
+      action: "service_catalog.deactivated",
+      targetType: "service",
+      targetId: data.id,
+      summary: `${actor.name} deactivated service ${service?.name ?? data.id}`,
+    });
+    return { ok: true };
+  });
+
 export const upsertPolicySettingRecord = createServerFn({ method: "POST" })
   .inputValidator((data: { key: PolicySettingKey; value: unknown; notes?: string }) => ({
     key: (data?.key ?? "percentages") as PolicySettingKey,
@@ -8217,6 +8665,7 @@ type MemberDocket =
   | "share_reserve"
   | "purpose_pool"
   | "investment"
+  | "service_wallet"
   | "penalty_payment";
 
 type SupplierKind = "fuel" | "stock" | "service";
@@ -8224,6 +8673,8 @@ type SupplierType = "individual" | "company";
 type SupplierRegistrationCategory = "goods" | "services" | "works";
 type SupplierClass = "normal" | "special_broker";
 type SupplierAgpoCategory = "youth" | "women" | "pwd" | "not_applicable";
+type ServiceBillingFrequency = "one_time" | "daily" | "weekly" | "monthly" | "yearly";
+type ServiceScope = "all_members" | "service_members" | "selected_members";
 
 const MEMBER_DOCKETS: MemberDocket[] = [
   "withdrawable_savings",
@@ -8233,6 +8684,7 @@ const MEMBER_DOCKETS: MemberDocket[] = [
   "share_reserve",
   "purpose_pool",
   "investment",
+  "service_wallet",
   "penalty_payment",
 ];
 
@@ -8261,6 +8713,12 @@ const DOCKET_ACCOUNT_ALIASES: Record<string, MemberDocket> = {
   PURPOSE_POOL: "purpose_pool",
   INVESTMENT: "investment",
   INVEST: "investment",
+  SERVICE: "service_wallet",
+  SERVICES: "service_wallet",
+  SERVICEWALLET: "service_wallet",
+  SERVICE_WALLET: "service_wallet",
+  SUBSCRIPTION: "service_wallet",
+  SUBSCRIPTIONS: "service_wallet",
   PENALTY: "penalty_payment",
   PENALTIES: "penalty_payment",
   PAYPENALTY: "penalty_payment",
@@ -8305,6 +8763,19 @@ function parseMpesaAccountDocket(rawAccount: string) {
 
 function normalizeSupplierKind(value: unknown): SupplierKind {
   return value === "fuel" || value === "stock" || value === "service" ? value : "stock";
+}
+
+function normalizeServiceBillingFrequency(value: unknown): ServiceBillingFrequency {
+  return value === "one_time" ||
+    value === "daily" ||
+    value === "weekly" ||
+    value === "yearly"
+    ? value
+    : "monthly";
+}
+
+function normalizeServiceScope(value: unknown): ServiceScope {
+  return value === "service_members" || value === "selected_members" ? value : "all_members";
 }
 
 function normalizeSupplierType(value: unknown): SupplierType {

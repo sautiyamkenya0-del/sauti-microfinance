@@ -81,6 +81,19 @@ function logicalLoanStatus(
   return "active";
 }
 
+function liveLoanCycleNumber(loan: Loan, loans: Loan[]) {
+  return (
+    loans
+      .filter(
+        (item) =>
+          item.memberId === loan.memberId &&
+          (item.loanKind ?? "financial") === (loan.loanKind ?? "financial"),
+      )
+      .sort((a, b) => `${a.startDate}-${a.id}`.localeCompare(`${b.startDate}-${b.id}`))
+      .findIndex((item) => item.id === loan.id) + 1
+  );
+}
+
 /** Daily compliance contribution tier as per common SBC plans. */
 function dailyTotalOf(l: Loan): number {
   return loanSummary(l).dailyCollectionAmount;
@@ -493,6 +506,12 @@ export function LoanBook({
                     >
                       {loanKindLabel(row.loan.loanKind ?? "financial")}
                     </Badge>
+                    <div className="mt-1 text-[10px] uppercase text-muted-foreground">
+                      Cycle{" "}
+                      {row.kind === "live"
+                        ? liveLoanCycleNumber(liveLoan, loans)
+                        : legacyLoan.loanCycleNumber}
+                    </div>
                   </td>
                   <td className="px-5 py-3">
                     <div className="font-medium uppercase text-xs">

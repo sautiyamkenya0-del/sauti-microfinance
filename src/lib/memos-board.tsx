@@ -16,6 +16,8 @@ export type StaffMemo = {
   targetSupplierId?: string;
   kind?: "info" | "warning" | "alert";
   expiresAt?: string;
+  documentKind?: "memo" | "letter";
+  letterMeta?: Record<string, unknown>;
   createdAt: string;
 };
 
@@ -69,6 +71,8 @@ export function useStaffMemos(enabled = true) {
       targetSupplierId?: string;
       kind?: "info" | "warning" | "alert";
       expiresAt?: string;
+      documentKind?: "memo" | "letter";
+      letterMeta?: Record<string, unknown>;
     }) => {
       const result = await createMemo({ data: memo });
       await refresh();
