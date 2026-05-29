@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
-import { downloadLetterheadHtml } from "@/components/LetterheadDocument";
+import { downloadLetterheadHtml, LetterheadDocument } from "@/components/LetterheadDocument";
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
@@ -205,6 +205,11 @@ function Portal() {
   const [fuelLoanVehicle, setFuelLoanVehicle] = useState("");
   const [fuelLoanType, setFuelLoanType] = useState("");
   const [fuelLoanLitres, setFuelLoanLitres] = useState("");
+  const [vehicleChangePlate, setVehicleChangePlate] = useState("");
+  const [vehicleChangeReason, setVehicleChangeReason] = useState("");
+  const [stockRequestItemId, setStockRequestItemId] = useState("");
+  const [stockRequestQuantity, setStockRequestQuantity] = useState("");
+  const [stockRequestPurpose, setStockRequestPurpose] = useState("");
   useEffect(() => {
     setPhone(member?.phone ?? "");
   }, [member]);
@@ -269,6 +274,13 @@ function Portal() {
       );
   }, [isStaffView, loadCarryoverLoans, loadServiceWorkspace, memberId]);
   useEffect(() => {
+    setVehicleChangePlate(member?.vehiclePlate ?? "");
+  }, [member?.vehiclePlate]);
+  useEffect(() => {
+    if (stockRequestItemId || !serviceWorkspace.stockItems[0]?.id) return;
+    setStockRequestItemId(String(serviceWorkspace.stockItems[0].id));
+  }, [serviceWorkspace.stockItems, stockRequestItemId]);
+  useEffect(() => {
     if (authMode !== "member") return;
     loadSupplierWorkspace()
       .then(() => navigate({ to: "/supplier-portal" }))
@@ -284,6 +296,13 @@ function Portal() {
   const clientLetters = useMemo(
     () => clientNotices.filter((notice) => notice.documentKind === "letter"),
     [clientNotices],
+  );
+  const canRequestStock =
+    !!member &&
+    !memberIsServiceOnly(member) &&
+    (member.category === "stock" || member.memberTags?.includes("stock"));
+  const selectedStockItem = serviceWorkspace.stockItems.find(
+    (item) => String(item.id) === stockRequestItemId,
   );
 
   const clientAlerts = useMemo<ClientAlert[]>(() => {
@@ -726,9 +745,22 @@ function Portal() {
                               Download letter
                             </button>
                           </div>
-                          <p className="mt-3 text-sm text-muted-foreground whitespace-pre-wrap">
-                            {letter.body}
-                          </p>
+                          <div className="mt-3 max-w-3xl">
+                            <LetterheadDocument
+                              title={letter.title}
+                              body={letter.body}
+                              date={letter.date}
+                              recipientName={String(
+                                letter.letterMeta?.recipientName ?? member.name,
+                              )}
+                              recipientId={String(letter.letterMeta?.recipientId ?? member.id)}
+                              facts={
+                                Array.isArray(letter.letterMeta?.facts)
+                                  ? (letter.letterMeta.facts as any[])
+                                  : []
+                              }
+                            />
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -765,6 +797,36 @@ function Portal() {
                         icon={<MessageSquare className="h-5 w-5" />}
                       />
                     </div>
+                    {serviceWorkspace.subscriptions.length > 0 ? (
+                      <div className="grid gap-2 px-5 pb-5 sm:grid-cols-2">
+                        {serviceWorkspace.subscriptions.map((subscription: any) => {
+                          const service =
+                            serviceWorkspace.services.find(
+                              (row) =>
+                                String(row.id) ===
+                                String(subscription.service_id ?? subscription.serviceId),
+                            ) ?? subscription.service;
+                          return (
+                            <div
+                              key={subscription.id}
+                              className="rounded-md border border-border bg-muted/20 px-3 py-2 text-sm"
+                            >
+                              <div className="font-medium">
+                                {service?.name ?? subscription.service_id ?? "Service"}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {fmtKES(Number(service?.price ?? 0))} /{" "}
+                                {String(
+                                  service?.billingFrequency ??
+                                    service?.billing_frequency ??
+                                    "monthly",
+                                ).replace(/_/g, " ")}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </Section>
                 ) : null}
                 <Section title="My Penalties">
@@ -910,6 +972,76 @@ function Portal() {
                     </div>
                   </Section>
                 )}
+                {!isStaffView && canRequestStock && (
+                  <Section title="Request stock">
+                    <div className="grid gap-3 p-5 sm:grid-cols-2">
+                      <select
+                        value={stockRequestItemId}
+                        onChange={(event) => setStockRequestItemId(event.target.value)}
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      >
+                        <option value="">Choose stock item</option>
+                        {serviceWorkspace.stockItems.map((item: any) => (
+                          <option key={item.id} value={item.id}>
+                            {item.item_name ?? item.itemName ?? item.name} -{" "}
+                            {fmtKES(Number(item.unit_price ?? item.unitPrice ?? 0))}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={stockRequestQuantity}
+                        onChange={(event) => setStockRequestQuantity(event.target.value)}
+                        type="number"
+                        min={1}
+                        placeholder="Quantity"
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={stockRequestPurpose}
+                        onChange={(event) => setStockRequestPurpose(event.target.value)}
+                        placeholder="Purpose / note"
+                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-2"
+                      />
+                      <div className="sm:col-span-2">
+                        <button
+                          onClick={async () => {
+                            if (!selectedStockItem) return toast.error("Choose a stock item.");
+                            const quantity = Math.max(1, Number(stockRequestQuantity) || 1);
+                            const unitPrice = Number(
+                              selectedStockItem.unit_price ?? selectedStockItem.unitPrice ?? 0,
+                            );
+                            const itemName =
+                              selectedStockItem.item_name ??
+                              selectedStockItem.itemName ??
+                              selectedStockItem.name ??
+                              "Stock item";
+                            await submit({
+                              kind: "other",
+                              title: "Stock request",
+                              detail: `${member.name} requests ${quantity} x ${itemName}. Purpose: ${stockRequestPurpose || "not stated"}.`,
+                              requestedBy: member.id,
+                              requestedByName: member.name,
+                              payload: {
+                                requestType: "stock_request",
+                                itemId: selectedStockItem.id,
+                                itemName,
+                                quantity,
+                                estimatedAmount: unitPrice * quantity,
+                                purpose: stockRequestPurpose,
+                              },
+                            });
+                            toast.success("Stock request submitted for approval");
+                            setStockRequestQuantity("");
+                            setStockRequestPurpose("");
+                          }}
+                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Submit stock request
+                        </button>
+                      </div>
+                    </div>
+                  </Section>
+                )}
               </>
             )}
 
@@ -952,6 +1084,56 @@ function Portal() {
                   />
                   <Field label="Business address" value={member.businessAddress} />
                   <Field label="Field officer" value={fieldOfficerName ?? member.fieldOfficerId} />
+                  {(member.category === "locomotive" ||
+                    member.memberTags?.includes("locomotive") ||
+                    member.vehiclePlate) && (
+                    <div className="sm:col-span-2 rounded-md border border-border bg-muted/20 p-3">
+                      <div className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+                        Vehicle change request
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                        <input
+                          value={vehicleChangePlate}
+                          onChange={(event) =>
+                            setVehicleChangePlate(event.target.value.toUpperCase())
+                          }
+                          placeholder="Vehicle / plate"
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm"
+                        />
+                        <input
+                          value={vehicleChangeReason}
+                          onChange={(event) => setVehicleChangeReason(event.target.value)}
+                          placeholder="Reason"
+                          className="rounded-md border border-border bg-card px-3 py-2 text-sm"
+                        />
+                        <button
+                          onClick={async () => {
+                            if (!vehicleChangePlate.trim()) {
+                              return toast.error("Enter the vehicle plate.");
+                            }
+                            await submit({
+                              kind: "profile_update",
+                              title: "Vehicle change request",
+                              detail: `${member.name} requests vehicle change from ${member.vehiclePlate || "none"} to ${vehicleChangePlate}. Reason: ${vehicleChangeReason || "not stated"}.`,
+                              requestedBy: member.id,
+                              requestedByName: member.name,
+                              payload: {
+                                field: "vehicle_plate",
+                                from: member.vehiclePlate,
+                                to: vehicleChangePlate,
+                                reason: vehicleChangeReason,
+                              },
+                            });
+                            toast.success("Vehicle change submitted for approval");
+                            setVehicleChangeReason("");
+                          }}
+                          className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground"
+                        >
+                          Submit
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="sm:col-span-2 mt-2 pt-3 border-t border-border space-y-3">
                     <div className="text-[11px] uppercase tracking-wider text-muted-foreground">

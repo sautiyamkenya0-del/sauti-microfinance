@@ -1465,6 +1465,289 @@ function PolicyCenterPage() {
           </>
         )}
 
+        {tab === "services" && (
+          <div className="space-y-6">
+            <Section
+              title="Service catalog"
+              action={
+                <button
+                  onClick={() => setServiceDraft(blankServiceDraft())}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New service
+                </button>
+              }
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-5 py-3 text-left">Service</th>
+                      <th className="px-5 py-3 text-right">Price</th>
+                      <th className="px-5 py-3 text-left">Frequency</th>
+                      <th className="px-5 py-3 text-left">Subjected to</th>
+                      <th className="px-5 py-3 text-left">Deduction mode</th>
+                      <th className="px-5 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {serviceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-8 text-center text-muted-foreground">
+                          No services have been created yet.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {serviceRows.map((service) => {
+                      const selectedMemberIds =
+                        service.selectedMemberIds ?? service.selected_member_ids ?? [];
+                      const feeOverrides = service.feeOverrides ?? service.fee_overrides ?? {};
+                      const active = service.active ?? service.is_active ?? true;
+                      return (
+                        <tr key={service.id}>
+                          <td className="px-5 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{service.name}</span>
+                              <Badge tone={active ? "success" : "muted"}>
+                                {active ? "Active" : "Inactive"}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {service.description || "No description"}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-right font-semibold">
+                            {fmtKES(Number(service.price ?? 0))}
+                          </td>
+                          <td className="px-5 py-3 capitalize">
+                            {String(service.billingFrequency ?? service.billing_frequency ?? "monthly").replace(
+                              /_/g,
+                              " ",
+                            )}
+                          </td>
+                          <td className="px-5 py-3 capitalize">
+                            {String(service.scope ?? "all_members").replace(/_/g, " ")}
+                            {selectedMemberIds.length ? ` (${selectedMemberIds.length})` : ""}
+                          </td>
+                          <td className="px-5 py-3 capitalize">
+                            {String(service.deductionMode ?? service.deduction_mode ?? "normal").replace(
+                              /_/g,
+                              " ",
+                            )}
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <button
+                              onClick={() =>
+                                setServiceDraft({
+                                  id: service.id,
+                                  name: service.name ?? "",
+                                  description: service.description ?? "",
+                                  price: Number(service.price ?? 0),
+                                  billingFrequency:
+                                    service.billingFrequency ??
+                                    service.billing_frequency ??
+                                    "monthly",
+                                  scope: service.scope ?? "all_members",
+                                  selectedMemberIds,
+                                  deductionMode:
+                                    service.deductionMode ?? service.deduction_mode ?? "normal",
+                                  feeOverridesText: JSON.stringify(feeOverrides, null, 2),
+                                  active,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                            >
+                              <Pencil className="h-3 w-3" />
+                              Edit
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await deleteService({ data: { id: service.id } });
+                                await refreshServices();
+                                toast.success("Service deactivated");
+                              }}
+                              className="ml-2 inline-flex items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+
+            <Section title={serviceDraft.id ? "Edit service" : "Create service"}>
+              <div className="grid max-w-5xl gap-4 p-5 sm:grid-cols-2">
+                <Field label="Service name">
+                  <input
+                    value={serviceDraft.name}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({ ...current, name: event.target.value }))
+                    }
+                    className="input"
+                  />
+                </Field>
+                <NumberField
+                  label="Price (KES)"
+                  value={serviceDraft.price}
+                  onChange={(value) =>
+                    setServiceDraft((current) => ({ ...current, price: Math.max(0, value) }))
+                  }
+                />
+                <Field label="Billing frequency">
+                  <select
+                    value={serviceDraft.billingFrequency}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        billingFrequency: event.target.value as ServiceDraft["billingFrequency"],
+                      }))
+                    }
+                    className="input"
+                  >
+                    <option value="one_time">One time</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                </Field>
+                <Field label="Subjected to">
+                  <select
+                    value={serviceDraft.scope}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        scope: event.target.value as ServiceDraft["scope"],
+                        selectedMemberIds:
+                          event.target.value === "selected_members"
+                            ? current.selectedMemberIds
+                            : [],
+                      }))
+                    }
+                    className="input"
+                  >
+                    <option value="all_members">All members</option>
+                    <option value="service_members">Service members only</option>
+                    <option value="selected_members">Specific members</option>
+                  </select>
+                </Field>
+                <Field label="Deduction behavior">
+                  <select
+                    value={serviceDraft.deductionMode}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        deductionMode: event.target.value as ServiceDraft["deductionMode"],
+                      }))
+                    }
+                    className="input"
+                  >
+                    <option value="normal">Apply with all deductions</option>
+                    <option value="override_all">Override all deductions</option>
+                    <option value="amended_override">Amended override</option>
+                  </select>
+                </Field>
+                <Field label="Status">
+                  <label className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={serviceDraft.active}
+                      onChange={(event) =>
+                        setServiceDraft((current) => ({
+                          ...current,
+                          active: event.target.checked,
+                        }))
+                      }
+                    />
+                    Active and visible during registration
+                  </label>
+                </Field>
+                <Field label="Description" className="sm:col-span-2">
+                  <textarea
+                    rows={2}
+                    value={serviceDraft.description}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }))
+                    }
+                    className="input"
+                  />
+                </Field>
+                {serviceDraft.scope === "selected_members" ? (
+                  <Field label="Specific members" className="sm:col-span-2">
+                    <div className="grid max-h-72 gap-2 overflow-y-auto rounded-xl border border-border bg-muted/20 p-3 md:grid-cols-2">
+                      {memberAccounts.map((member) => {
+                        const checked = serviceDraft.selectedMemberIds.includes(member.id);
+                        return (
+                          <label
+                            key={member.id}
+                            className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) =>
+                                setServiceDraft((current) => ({
+                                  ...current,
+                                  selectedMemberIds: event.target.checked
+                                    ? Array.from(new Set([...current.selectedMemberIds, member.id]))
+                                    : current.selectedMemberIds.filter((id) => id !== member.id),
+                                }))
+                              }
+                            />
+                            <span>
+                              <span className="font-medium">{member.name}</span>
+                              <span className="block text-xs text-muted-foreground">
+                                {member.id} | {member.phone}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                ) : null}
+                <Field label="Amended fee overrides JSON" className="sm:col-span-2">
+                  <textarea
+                    rows={4}
+                    value={serviceDraft.feeOverridesText}
+                    onChange={(event) =>
+                      setServiceDraft((current) => ({
+                        ...current,
+                        feeOverridesText: event.target.value,
+                      }))
+                    }
+                    className="input font-mono text-xs"
+                  />
+                </Field>
+                <div className="sm:col-span-2 flex flex-wrap gap-2">
+                  <button
+                    disabled={serviceBusy}
+                    onClick={() => void saveServiceDraft()}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    <Save className="h-4 w-4" />
+                    Save service
+                  </button>
+                  <button
+                    onClick={() => setServiceDraft(blankServiceDraft())}
+                    className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </Section>
+          </div>
+        )}
+
         {tab === "percentages" && (
           <Section
             title="Percentages and thresholds"
@@ -3441,6 +3724,20 @@ function blankFee(): FeePolicy {
     effectiveFrom: new Date().toISOString().slice(0, 10),
     custom: true,
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function blankServiceDraft(): ServiceDraft {
+  return {
+    name: "",
+    description: "",
+    price: 0,
+    billingFrequency: "monthly",
+    scope: "all_members",
+    selectedMemberIds: [],
+    deductionMode: "normal",
+    feeOverridesText: "{}",
+    active: true,
   };
 }
 

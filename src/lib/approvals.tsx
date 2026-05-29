@@ -75,13 +75,20 @@ export function useApprovals() {
   );
 
   const decide = useCallback(
-    async (id: string, decision: "approved" | "rejected", by: string, note?: string) => {
+    async (
+      id: string,
+      decision: "approved" | "rejected",
+      by: string,
+      note?: string,
+      adjustedAmount?: number,
+    ) => {
       await decideApproval({
         data: {
           id,
           decision,
           reviewedBy: by,
           note,
+          adjustedAmount,
         },
       });
       await refresh();
@@ -119,13 +126,20 @@ export function useApprovalActions() {
   );
 
   const decide = useCallback(
-    async (id: string, decision: "approved" | "rejected", by: string, note?: string) => {
+    async (
+      id: string,
+      decision: "approved" | "rejected",
+      by: string,
+      note?: string,
+      adjustedAmount?: number,
+    ) => {
       await decideApproval({
         data: {
           id,
           decision,
           reviewedBy: by,
           note,
+          adjustedAmount,
         },
       });
     },

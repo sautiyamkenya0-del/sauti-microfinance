@@ -27,6 +27,7 @@ type MoneyDocket =
   | "shares"
   | "share_reserve"
   | "purpose_pool"
+  | "service_wallet"
   | "investment"
   | "penalty_payment";
 
@@ -37,6 +38,7 @@ const MONEY_DOCKETS: Array<[MoneyDocket, string]> = [
   ["shares", "Shares"],
   ["share_reserve", "Share reserve"],
   ["purpose_pool", "Full purpose pool"],
+  ["service_wallet", "Service wallet"],
   ["investment", "Investment"],
   ["penalty_payment", "Penalty payment reserve"],
 ];
@@ -106,6 +108,7 @@ function SavingsPage() {
         shares: Number(member.shares ?? 0) * 100,
         share_reserve: Number(member.share_reserve_balance ?? 0),
         purpose_pool: 0,
+        service_wallet: Number(member.service_wallet ?? member.service_wallet_balance ?? 0),
         investment: 0,
         penalty_payment: 0,
       });
@@ -153,6 +156,7 @@ function SavingsPage() {
         shares: 0,
         share_reserve: 0,
         purpose_pool: 0,
+        service_wallet: 0,
         investment: 0,
         penalty_payment: 0,
       };
@@ -161,6 +165,26 @@ function SavingsPage() {
     }
     return map;
   }, [carryoverProfiles, docketBalances, members, movements]);
+
+  const selectedTransferBalances = useMemo(
+    () => balancesByMember.get(transferForm.memberId) ?? {},
+    [balancesByMember, transferForm.memberId],
+  );
+  const availableTransferFromDockets = useMemo(() => {
+    const available = TRANSFER_DOCKETS.filter(
+      ([docket]) => Number(selectedTransferBalances[docket] ?? 0) > 0,
+    );
+    return available.length > 0 ? available : TRANSFER_DOCKETS;
+  }, [selectedTransferBalances]);
+
+  useEffect(() => {
+    if (!transferForm.memberId) return;
+    if (availableTransferFromDockets.some(([docket]) => docket === transferForm.fromDocket)) return;
+    setTransferForm((current) => ({
+      ...current,
+      fromDocket: availableTransferFromDockets[0]?.[0] ?? "mandatory_savings",
+    }));
+  }, [availableTransferFromDockets, transferForm.fromDocket, transferForm.memberId]);
 
   const complianceTotal = members.reduce(
     (sum: number, member: any) => sum + Math.max(0, Number(member.savings_balance ?? 0)),
@@ -186,6 +210,10 @@ function SavingsPage() {
     (sum, row) => sum + Number(row.penalty_payment ?? 0),
     0,
   );
+  const serviceWalletTotal = Array.from(balancesByMember.values()).reduce(
+    (sum, row) => sum + Number(row.service_wallet ?? 0),
+    0,
+  );
 
   const memberRows = members.map((member: any) => {
     const balances = balancesByMember.get(member.id) ?? {};
@@ -194,6 +222,7 @@ function SavingsPage() {
     const withdrawable = Number(balances.withdrawable_savings ?? 0);
     const loanSavings = Number(balances.loan_savings ?? 0);
     const purposePool = Number(balances.purpose_pool ?? 0);
+    const serviceWallet = Number(balances.service_wallet ?? 0);
     const investment = Number(balances.investment ?? 0);
     const penaltyPayment = Number(balances.penalty_payment ?? 0);
     const shareValue = Number(member.shares ?? 0) * 100 + Number(member.share_reserve_balance ?? 0);
@@ -206,6 +235,7 @@ function SavingsPage() {
       withdrawable,
       loanSavings,
       purposePool,
+      serviceWallet,
       investment,
       penaltyPayment,
       shareValue,
@@ -260,6 +290,7 @@ function SavingsPage() {
             icon={<ArrowRightLeft className="h-5 w-5" />}
           />
           <StatCard label="Full purpose pool" value={fmtKES(purposePoolTotal)} />
+          <StatCard label="Service wallet" value={fmtKES(serviceWalletTotal)} />
           <StatCard label="Investment docket" value={fmtKES(investmentTotal)} />
           <StatCard label="Penalty reserve" value={fmtKES(penaltyPaymentTotal)} />
         </div>
@@ -301,6 +332,8 @@ function SavingsPage() {
                       ? `Loan savings opens only after compliance contribution ${fmtKES(policyThreshold)} and share threshold ${fmtKES(shareThreshold)} are both met.`
                       : depositForm.docket === "purpose_pool"
                         ? "Receiving into full purpose pool includes Operations/Admin as part of the pool."
+                        : depositForm.docket === "service_wallet"
+                          ? "Service wallet funds are reserved for services and service-subjected payments."
                         : depositForm.docket === "shares"
                           ? "Share deposits must be in exact share-price increments."
                           : depositForm.docket === "penalty_payment"
@@ -344,23 +377,39 @@ function SavingsPage() {
                 }
               />
               <div className="grid grid-cols-2 gap-2">
-                <Select
-                  value={transferForm.fromDocket}
-                  onChange={(value) =>
-                    setTransferForm((current) => ({
-                      ...current,
-                      fromDocket: value as MoneyDocket,
-                    }))
-                  }
-                  options={TRANSFER_DOCKETS}
-                />
-                <Select
-                  value={transferForm.toDocket}
-                  onChange={(value) =>
-                    setTransferForm((current) => ({ ...current, toDocket: value as MoneyDocket }))
-                  }
-                  options={TRANSFER_DOCKETS}
-                />
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  <span>From</span>
+                  <Select
+                    value={transferForm.fromDocket}
+                    onChange={(value) =>
+                      setTransferForm((current) => ({
+                        ...current,
+                        fromDocket: value as MoneyDocket,
+                      }))
+                    }
+                    options={availableTransferFromDockets}
+                  />
+                </label>
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  <span>To</span>
+                  <Select
+                    value={transferForm.toDocket}
+                    onChange={(value) =>
+                      setTransferForm((current) => ({ ...current, toDocket: value as MoneyDocket }))
+                    }
+                    options={TRANSFER_DOCKETS}
+                  />
+                </label>
+              </div>
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+                  Source balance:{" "}
+                  {fmtKES(Number(selectedTransferBalances[transferForm.fromDocket] ?? 0))}
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+                  Target balance:{" "}
+                  {fmtKES(Number(selectedTransferBalances[transferForm.toDocket] ?? 0))}
+                </div>
               </div>
               <Input
                 type="number"
@@ -452,6 +501,7 @@ function SavingsPage() {
                     </td>
                     <td className="px-5 py-3 text-right text-xs">
                       <div>Purpose {fmtKES(row.purposePool)}</div>
+                      <div>Service {fmtKES(row.serviceWallet)}</div>
                       <div>Investment {fmtKES(row.investment)}</div>
                       <div>Penalty {fmtKES(row.penaltyPayment)}</div>
                     </td>

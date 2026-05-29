@@ -326,6 +326,21 @@ function MemosPage() {
                   {polishing ? "Polishing..." : "Polish letter with AI"}
                 </button>
                 <button
+                  onClick={() =>
+                    void downloadLetterheadHtml({
+                      title: title || "Member Notice",
+                      body: body || "Your letter will appear here.",
+                      recipientName: selectedMember?.name,
+                      recipientId: selectedMember?.id,
+                      facts: selectedLetterFacts,
+                    })
+                  }
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                >
+                  <Download className="h-4 w-4" />
+                  Download draft
+                </button>
+                <button
                   onClick={() => {
                     setDocumentKind("letter");
                     setAudience("member");

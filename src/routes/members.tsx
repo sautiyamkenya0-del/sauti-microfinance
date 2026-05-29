@@ -198,6 +198,9 @@ function MembersPage() {
   const showMemberFields = !formInvestorOnly;
   const showInvestorFields =
     isInvestorCategory(form.category) || form.memberTags.includes("investor");
+  const activeServiceRows = serviceRows.filter(
+    (service) => (service.active ?? service.is_active ?? true) !== false,
+  );
 
   return (
     <>
@@ -651,6 +654,48 @@ function MembersPage() {
                       onChange={(e) => setForm({ ...form, fieldOfficerId: e.target.value })}
                     />
                   </Field>
+                  {activeServiceRows.length > 0 && (
+                    <div className="col-span-2 rounded-md border border-border bg-muted/20 p-3">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Services subjected to this member
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {activeServiceRows.map((service) => {
+                          const checked = form.serviceIds.includes(service.id);
+                          return (
+                            <label
+                              key={service.id}
+                              className="flex items-start gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) =>
+                                  setForm({
+                                    ...form,
+                                    serviceIds: event.target.checked
+                                      ? Array.from(new Set([...form.serviceIds, service.id]))
+                                      : form.serviceIds.filter((id) => id !== service.id),
+                                  })
+                                }
+                              />
+                              <span>
+                                <span className="font-medium">{service.name}</span>
+                                <span className="block text-xs text-muted-foreground">
+                                  {fmtKES(Number(service.price ?? 0))} /{" "}
+                                  {String(
+                                    service.billingFrequency ??
+                                      service.billing_frequency ??
+                                      "monthly",
+                                  ).replace(/_/g, " ")}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 

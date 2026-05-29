@@ -18,6 +18,8 @@ export type LoanDailyLedgerRow = {
   endingCarryForward: number;
   totalBalanceBeforePenalty: number;
   totalBalance: number;
+  totalDue: number;
+  defaultedAmount: number;
 };
 
 export type LoanDailyLedgerSummary = {
@@ -185,9 +187,12 @@ export function buildLoanDailyLedger(args: {
     const unpaidToday = Math.max(0, dailyBalance);
     const totalBalanceBeforePenalty = Math.max(0, roundMoney(totalExpected - cumulativePaid));
     const penaltyRatePct = isDefaultPhase ? defaultPenaltyPct : penaltyPct;
+    const totalDueBeforePenalty = roundMoney(
+      totalBalanceBeforePenalty + priorPenaltyAmount + automaticPenaltyAmount,
+    );
     const capRemaining =
       isDefaultPhase && defaultedAmountCap > 0
-        ? Math.max(0, roundMoney(defaultedAmountCap - totalBalanceBeforePenalty))
+        ? Math.max(0, roundMoney(defaultedAmountCap - totalDueBeforePenalty))
         : Number.POSITIVE_INFINITY;
     let penalty =
       unpaidToday > 0 && penaltyRatePct > 0 && capRemaining > 0
@@ -211,10 +216,12 @@ export function buildLoanDailyLedger(args: {
     automaticPenaltyAmount = roundMoney(automaticPenaltyAmount + penalty);
     carryForward = dailyBalance < 0 ? dailyBalance : roundMoney(dailyBalance + penalty);
     displayCarryForward = dailyBalance;
-    const totalBalance = Math.max(
+    const totalBalance = Math.max(0, roundMoney(totalExpected - cumulativePaid));
+    const totalDue = Math.max(
       0,
-      roundMoney(totalExpected - cumulativePaid),
+      roundMoney(totalBalance + priorPenaltyAmount + automaticPenaltyAmount),
     );
+    const defaultedAmount = isDefaultPhase && totalDue > 0 ? totalDue : 0;
 
     rows.push({
       date,
@@ -231,6 +238,8 @@ export function buildLoanDailyLedger(args: {
       endingCarryForward: carryForward,
       totalBalanceBeforePenalty,
       totalBalance,
+      totalDue,
+      defaultedAmount,
     });
   }
 

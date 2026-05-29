@@ -1,0 +1,498 @@
+-- Lead Way Petrol Station fuel reconciliation seed.
+-- Source: FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx.
+-- Fuel amounts are supplier payments by Sauti; the related member balances remain fuel loans.
+
+begin;
+
+insert into public.members (id, name, phone, joined_at, status, member_category, member_tags, business_name, vehicle_plate, fee_membership, fee_card, fee_sticker)
+values
+  ('SUP0001K', 'LEAD WAY PETROL STATION', '0700000000', '2025-11-15', 'active', 'supplier', array['supplier']::text[], 'LEAD WAY PETROL STATION', null, true, true, true),
+  ('SBC0399K', 'JAMES GACHERU', '0700000399', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDQ 524R', true, true, true),
+  ('SBC0408K', 'MOSES NJENGA', '0700000408', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDC 229W', true, true, true),
+  ('SBC0402K', 'DAVID KARANJA', '0700000402', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDQ 717X', true, true, true),
+  ('SBC0401K', 'DENNIS OBWAYO', '0700000401', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KMGR 067R', true, true, true),
+  ('SBC0410K', 'JAMES GATUMUTA', '0700000410', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDN 704B', true, true, true),
+  ('SBC0413K', 'LINDA WANJIRU', '0700000413', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDU 434P', true, true, true),
+  ('SBC0428K', 'PETER MUNDERU', '0700000428', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDC 259Z', true, true, true),
+  ('SBC0002K', 'LOISE NYAMBURA KINITI', '0722240299', '2025-03-24', 'active', 'locomotive', array['locomotive']::text[], 'NYALOI ENTERPRISES', 'KAX 542T', true, true, true),
+  ('SBC0425K', 'JAMES MURIRA', '0700000425', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDU139M', true, true, true),
+  ('SBC0429K', 'PETER KIRIITA', '0700000429', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDV 143G', true, true, true),
+  ('SBC0103K', 'Kere Eddie Kimiti', '0710459412', '2025-03-31', 'active', 'locomotive', array['locomotive']::text[], 'county carwash', 'KDD 037E', true, true, true),
+  ('SBC0458K', 'KEVIN MANYEKI', '0700000458', '2025-11-15', 'active', 'locomotive', array['locomotive']::text[], 'Fuel customer', 'KDT 318X / KDW 221X', true, true, true)
+on conflict (id) do update set
+  member_category = excluded.member_category,
+  member_tags = excluded.member_tags,
+  vehicle_plate = coalesce(public.members.vehicle_plate, excluded.vehicle_plate),
+  updated_at = now();
+
+insert into public.suppliers (
+  id, name, kind, phone, contact_person, location, notes, status, member_id,
+  supplier_type, registration_category, business_registration_number,
+  physical_location, mpesa_paybill_till, supplier_class
+)
+values (
+  'SUP-LEAD-WAY-PETROL',
+  'LEAD WAY PETROL STATION',
+  'fuel',
+  '0700000000',
+  'Accounts',
+  'Kiambu',
+  'Seeded from fuel consumption and payment reconciliation workbook.',
+  'active',
+  'SUP0001K',
+  'company',
+  'goods',
+  'LEAD-WAY-PETROL',
+  'Kiambu',
+  'LEADWAY',
+  'normal'
+)
+on conflict (id) do update set
+  name = excluded.name,
+  kind = excluded.kind,
+  member_id = excluded.member_id,
+  notes = excluded.notes,
+  updated_at = now();
+
+insert into public.supplier_inventory_items (id, supplier_id, item_name, item_kind, unit, quantity_available, unit_price, sku, notes)
+values
+  ('INV-LEAD-WAY-FUEL', 'SUP-LEAD-WAY-PETROL', 'Fuel', 'fuel', 'KES', 0, 1, 'LEADWAY-FUEL', 'Open fuel credit line from reconciliation seed.')
+on conflict (id) do update set
+  supplier_id = excluded.supplier_id,
+  item_name = excluded.item_name,
+  item_kind = excluded.item_kind,
+  unit = excluded.unit,
+  unit_price = excluded.unit_price,
+  notes = excluded.notes,
+  updated_at = now();
+
+with fuel(member_id, member_name, plate, fuel_amount, entry_date) as (
+values
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-15')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 3000.00, '2025-11-16')
+    ('SBC0399K', 'JAMES GACHERU', '', 2600.00, '2025-11-17')
+    ('SBC0399K', 'JAMES GACHERU', '', 4000.00, '2025-11-18')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-20')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 4000.00, '2025-11-21')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-22')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-24')
+    ('SBC0401K', 'DENNIS   OBWAYO', 'KMGR 067R', 1000.00, '2025-11-24')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-25')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-26')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-28')
+    ('SBC0402K', 'DAVID KARANJA', 'KDQ 717X', 3000.00, '2025-11-28')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-29')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-30')
+    ('SBC0402K', 'DAVID KARANJA', 'KDQ 717X', 3000.00, '2025-11-30')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-01-12')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-06-12')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-08-12')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 3000.00, '2025-10-12')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-11-12')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-12-12')
+    ('SBC0402K', 'DAVID KARANJA', 'KDQ 717X', 3000.00, '2025-12-13')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 2000.00, '2025-12-14')
+    ('SBC0399K', 'JAMES GACHERU', 'KDQ 524R', 3000.00, '2025-12-16')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 2000.00, '2025-12-16')
+    ('SBC0402K', 'DAVID KARANJA', 'KDQ 717X', 3000.00, '2025-12-16')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 2500.00, '2025-12-17')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-18')
+    ('SBC0410K', 'JAMES GATUMUTA', 'KDN 704B', 3000.00, '2025-12-18')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-19')
+    ('SBC0410K', 'JAMES GATUMUTA', 'KDN 704B', 3000.00, '2025-12-20')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC229W', 3000.00, '2025-12-21')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-23')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-24')
+    ('SBC0410K', 'JAMES GATUMUTA', 'KDN 704B', 2000.00, '2025-12-24')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-26')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2025-12-28')
+    ('SBC0410K', 'JAMES GATUMUTA', 'KDN 704B', 2000.00, '2025-12-31')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2026-01-01')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2026-03-01')
+    ('SBC0401K', 'DENNIS   OBWAYO', 'KMGR 067R', 500.00, '2026-03-01')
+    ('SBC0408K', 'MOSES NJENGA', 'KDC 229W', 3000.00, '2026-06-01')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 3000.00, '2026-06-01')
+    ('SBC0002K', 'LOISE NYAMBURA', 'KAX 542T', 5008.00, '2026-08-01')
+    ('SBC0401K', 'DENNIS   OBWAYO', 'KMGR 067R', 500.00, '2026-01-13')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 1500.00, '2026-01-13')
+    ('SBC0401K', 'DENNIS   OBWAYO', 'KMGR 067R', 500.00, '2026-01-14')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 7060.00, '2026-01-16')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2612.00, '2026-01-17')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3000.00, '2026-01-20')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3500.00, '2026-01-21')
+    ('SBC0428K', 'PETER MUNDERU', 'KDC 259Z', 1500.00, '2026-01-22')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3500.00, '2026-01-22')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3500.00, '2026-01-23')
+    ('SBC0429K', 'PETER KIRIITA', 'KDV 143G', 2500.00, '2026-01-23')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 4388.00, '2026-01-26')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 39823.00, '2026-01-28')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 2500.00, '2026-01-28')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3500.00, '2026-01-29')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-01-31')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-02-02')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 5921.00, '2026-02-02')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 4000.00, '2026-02-04')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 2110.00, '2026-02-04')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 7475.00, '2026-02-09')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-02-19')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 3500.00, '2026-02-20')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2000.00, '2026-02-21')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-02-23')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-02-24')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3500.00, '2026-02-24')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3000.00, '2026-02-25')
+    ('SBC0103K', 'EDDY KERE', 'KDD 037E', 2000.00, '2026-02-25')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3000.00, '2026-02-26')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 1000.00, '2026-02-26')
+    ('SBC0002K', 'LOISE NYAMBURA', 'KAX 542T', 5910.00, '2026-02-27')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3000.00, '2026-02-28')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-03-02')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-03-03')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 3500.00, '2026-03-10')
+    ('SBC0425K', 'JAMES MURIRA', 'KDU139M', 3000.00, '2026-03-10')
+    ('SBC0428K', 'PETER MUNDERU', 'KDC 259Z', 1500.00, '2026-03-11')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 1500.00, '2026-03-12')
+    ('SBC0428K', 'PETER MUNDERU', 'KDC 259Z', 1500.00, '2026-03-12')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-03-13')
+    ('SBC0002K', 'LOISE NYAMBURA', 'KAX 542T', 3003.00, '2026-03-13')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 3500.00, '2026-03-14')
+    ('SBC0103K', 'EDDY KERE', 'KDD 037E', 1000.00, '2026-03-16')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2500.00, '2026-03-19')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2674.00, '2026-03-20')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2674.00, '2026-03-21')
+    ('SBC0103K', 'EDDY KERE', 'KDD 037E', 1500.00, '2026-03-24')
+    ('SBC0413K', 'LINDA WANJIRU', 'KDU 434P', 2674.00, '2026-03-26')
+    ('SBC0458K', 'KEVIN MANYEKI', 'KDT 318X', 2500.00, '2026-04-02')
+    ('SBC0458K', 'KEVIN MANYEKI', 'KDT 318X', 3000.00, '2026-04-03')
+    ('SBC0458K', 'KEVIN MANYEKI', 'KDW 221X', 4410.50, '2026-05-02')
+    ('SBC0458K', 'KEVIN MANYEKI', 'KDW 221X', 3000.00, '06/05/202')
+),
+prepared as (
+  select
+    'LW-FUEL-' || member_id || '-' || to_char(entry_date::date,'YYYYMMDD') as loan_id,
+    member_id,
+    member_name,
+    plate,
+    fuel_amount,
+    entry_date,
+    100.00 as fuel_charge
+  from fuel
+)
+insert into public.loans (
+  id, member_id, principal, approved_amount, financed_principal_amount,
+  net_disbursed_amount, processing_fee_amount, insurance_fee_amount, transaction_fee_amount,
+  processing_fee_mode, insurance_fee_mode, disbursement_status, rate, term_months, term_days,
+  start_date, status, officer_id, paid, purpose, loan_kind, supplier_id,
+  supplier_request_status, supplier_payload, reviewed_by, review_note
+)
+select
+  loan_id,
+  member_id,
+  fuel_amount,
+  fuel_amount,
+  fuel_amount + fuel_charge,
+  0,
+  0,
+  0,
+  0,
+  'upfront',
+  'upfront',
+  'paid',
+  0,
+  0,
+  30,
+  entry_date,
+  'active',
+  'S1',
+  0,
+  'Lead Way Petrol Station fuel consumption reconciliation',
+  'fuel',
+  'SUP-LEAD-WAY-PETROL',
+  'paid',
+  jsonb_build_object(
+    'supplierName', 'LEAD WAY PETROL STATION',
+    'vehiclePlate', plate,
+    'estimatedTotal', fuel_amount,
+    'fuelCharge', fuel_charge,
+    'productChargeAmount', fuel_charge,
+    'sourceWorkbook', 'FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx',
+    'entryDate', entry_date,
+    'jobCard', jsonb_build_object(
+      'rows', jsonb_build_array(jsonb_build_object(
+        'date', entry_date,
+        'fuelType', 'Fuel',
+        'total', fuel_amount,
+        'fuelCharge', fuel_charge,
+        'vehiclePlate', plate,
+        'attendantName', 'LEAD WAY PETROL STATION'
+      ))
+    )
+  ),
+  'S1',
+  'Seeded from Lead Way reconciliation workbook'
+from prepared
+on conflict (id) do update set
+  principal = excluded.principal,
+  approved_amount = excluded.approved_amount,
+  financed_principal_amount = excluded.financed_principal_amount,
+  supplier_payload = excluded.supplier_payload,
+  updated_at = now();
+
+with fuel(member_id, amount, entry_date, plate) as (
+values
+    ('SBC0399K', 2000.00, '2025-11-15', 'KDQ 524R'),
+    ('SBC0399K', 3000.00, '2025-11-16', 'KDQ 524R'),
+    ('SBC0399K', 2600.00, '2025-11-17', ''),
+    ('SBC0399K', 4000.00, '2025-11-18', ''),
+    ('SBC0399K', 2000.00, '2025-11-20', 'KDQ 524R'),
+    ('SBC0399K', 4000.00, '2025-11-21', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-22', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-24', 'KDQ 524R'),
+    ('SBC0401K', 1000.00, '2025-11-24', 'KMGR 067R'),
+    ('SBC0399K', 2000.00, '2025-11-25', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-26', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-28', 'KDQ 524R'),
+    ('SBC0402K', 3000.00, '2025-11-28', 'KDQ 717X'),
+    ('SBC0399K', 2000.00, '2025-11-29', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-30', 'KDQ 524R'),
+    ('SBC0402K', 3000.00, '2025-11-30', 'KDQ 717X'),
+    ('SBC0399K', 2000.00, '2025-01-12', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-06-12', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-08-12', 'KDQ 524R'),
+    ('SBC0399K', 3000.00, '2025-10-12', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-11-12', 'KDQ 524R'),
+    ('SBC0399K', 2000.00, '2025-12-12', 'KDQ 524R'),
+    ('SBC0402K', 3000.00, '2025-12-13', 'KDQ 717X'),
+    ('SBC0399K', 2000.00, '2025-12-14', 'KDQ 524R'),
+    ('SBC0399K', 3000.00, '2025-12-16', 'KDQ 524R'),
+    ('SBC0408K', 2000.00, '2025-12-16', 'KDC 229W'),
+    ('SBC0402K', 3000.00, '2025-12-16', 'KDQ 717X'),
+    ('SBC0408K', 2500.00, '2025-12-17', 'KDC 229W'),
+    ('SBC0408K', 3000.00, '2025-12-18', 'KDC 229W'),
+    ('SBC0410K', 3000.00, '2025-12-18', 'KDN 704B'),
+    ('SBC0408K', 3000.00, '2025-12-19', 'KDC 229W'),
+    ('SBC0410K', 3000.00, '2025-12-20', 'KDN 704B'),
+    ('SBC0408K', 3000.00, '2025-12-21', 'KDC229W'),
+    ('SBC0408K', 3000.00, '2025-12-23', 'KDC 229W'),
+    ('SBC0408K', 3000.00, '2025-12-24', 'KDC 229W'),
+    ('SBC0410K', 2000.00, '2025-12-24', 'KDN 704B'),
+    ('SBC0408K', 3000.00, '2025-12-26', 'KDC 229W'),
+    ('SBC0408K', 3000.00, '2025-12-28', 'KDC 229W'),
+    ('SBC0410K', 2000.00, '2025-12-31', 'KDN 704B'),
+    ('SBC0408K', 3000.00, '2026-01-01', 'KDC 229W'),
+    ('SBC0408K', 3000.00, '2026-03-01', 'KDC 229W'),
+    ('SBC0401K', 500.00, '2026-03-01', 'KMGR 067R'),
+    ('SBC0408K', 3000.00, '2026-06-01', 'KDC 229W'),
+    ('SBC0413K', 3000.00, '2026-06-01', 'KDU 434P'),
+    ('SBC002K', 5008.00, '2026-08-01', 'KAX 542T'),
+    ('SBC0401K', 500.00, '2026-01-13', 'KMGR 067R'),
+    ('SBC0413K', 1500.00, '2026-01-13', 'KDU 434P'),
+    ('SBC0401K', 500.00, '2026-01-14', 'KMGR 067R'),
+    ('SBC0413K', 7060.00, '2026-01-16', 'KDU 434P'),
+    ('SBC0413K', 2612.00, '2026-01-17', 'KDU 434P'),
+    ('SBC0425K', 3000.00, '2026-01-20', 'KDU139M'),
+    ('SBC0425K', 3500.00, '2026-01-21', 'KDU139M'),
+    ('SBC0428K', 1500.00, '2026-01-22', 'KDC 259Z'),
+    ('SBC0425K', 3500.00, '2026-01-22', 'KDU139M'),
+    ('SBC0425K', 3500.00, '2026-01-23', 'KDU139M'),
+    ('SBC0429K', 2500.00, '2026-01-23', 'KDV 143G'),
+    ('SBC0413K', 4388.00, '2026-01-26', 'KDU 434P'),
+    ('SBC0413K', 39823.00, '2026-01-28', 'KDU 434P'),
+    ('SBC0425K', 2500.00, '2026-01-28', 'KDU139M'),
+    ('SBC0425K', 3500.00, '2026-01-29', 'KDU139M'),
+    ('SBC0413K', 2500.00, '2026-01-31', 'KDU 434P'),
+    ('SBC0413K', 2500.00, '2026-02-02', 'KDU 434P'),
+    ('SBC0425K', 5921.00, '2026-02-02', 'KDU139M'),
+    ('SBC0413K', 4000.00, '2026-02-04', 'KDU 434P'),
+    ('SBC0425K', 2110.00, '2026-02-04', 'KDU139M'),
+    ('SBC0425K', 7475.00, '2026-02-09', 'KDU139M'),
+    ('SBC0413K', 2500.00, '2026-02-19', 'KDU 434P'),
+    ('SBC0413K', 3500.00, '2026-02-20', 'KDU 434P'),
+    ('SBC0413K', 2000.00, '2026-02-21', 'KDU 434P'),
+    ('SBC0413K', 2500.00, '2026-02-23', 'KDU 434P'),
+    ('SBC0413K', 2500.00, '2026-02-24', 'KDU 434P'),
+    ('SBC0425K', 3500.00, '2026-02-24', 'KDU139M'),
+    ('SBC0425K', 3000.00, '2026-02-25', 'KDU139M'),
+    ('SBC0103K', 2000.00, '2026-02-25', 'KDD 037E'),
+    ('SBC0425K', 3000.00, '2026-02-26', 'KDU139M'),
+    ('SBC0425K', 1000.00, '2026-02-26', 'KDU139M'),
+    ('SBC002K', 5910.00, '2026-02-27', 'KAX 542T'),
+    ('SBC0425K', 3000.00, '2026-02-28', 'KDU139M'),
+    ('SBC0413K', 2500.00, '2026-03-02', 'KDU 434P'),
+    ('SBC0413K', 2500.00, '2026-03-03', 'KDU 434P'),
+    ('SBC0413K', 3500.00, '2026-03-10', 'KDU 434P'),
+    ('SBC0425K', 3000.00, '2026-03-10', 'KDU139M'),
+    ('SBC0428K', 1500.00, '2026-03-11', 'KDC 259Z'),
+    ('SBC0413K', 1500.00, '2026-03-12', 'KDU 434P'),
+    ('SBC0428K', 1500.00, '2026-03-12', 'KDC 259Z'),
+    ('SBC0413K', 2500.00, '2026-03-13', 'KDU 434P'),
+    ('SBC002K', 3003.00, '2026-03-13', 'KAX 542T'),
+    ('SBC0413K', 3500.00, '2026-03-14', 'KDU 434P'),
+    ('SBC0103K', 1000.00, '2026-03-16', 'KDD 037E'),
+    ('SBC0413K', 2500.00, '2026-03-19', 'KDU 434P'),
+    ('SBC0413K', 2674.00, '2026-03-20', 'KDU 434P'),
+    ('SBC0413K', 2674.00, '2026-03-21', 'KDU 434P'),
+    ('SBC0103K', 1500.00, '2026-03-24', 'KDD 037E'),
+    ('SBC0413K', 2674.00, '2026-03-26', 'KDU 434P'),
+    ('SBC0458K', 2500.00, '2026-04-02', 'KDT 318X'),
+    ('SBC0458K', 3000.00, '2026-04-03', 'KDT 318X'),
+    ('SBC0458K', 4410.50, '2026-05-02', 'KDW 221X'),
+    ('SBC0458K', 3000.00, '06/05/202', 'KDW 221X')
+)
+insert into public.supplier_fulfillment_requests (
+  id, supplier_id, loan_id, member_id, kind, amount, detail, status,
+  requested_by, fulfilled_by_name, fulfilled_at, commodity_name, unit_of_measure,
+  vehicle_plate, fuel_type, driver_member_id, verified_at, verified_by_member_id,
+  verification_note
+)
+select
+  'SFR-' || member_id || '-' || to_char(entry_date::date,'YYYYMMDD'),
+  'SUP-LEAD-WAY-PETROL',
+  'LW-FUEL-' || member_id || '-' || to_char(entry_date::date,'YYYYMMDD'),
+  member_id,
+  'fuel',
+  amount,
+  jsonb_build_object('sourceWorkbook','FUEL CONSUMPTION AND PAYMENT RECONCILIATION SHEET UPDATED.xlsx'),
+  'fulfilled',
+  'S1',
+  'LEAD WAY PETROL STATION',
+  now(),
+  'Fuel',
+  'KES',
+  plate,
+  'Fuel',
+  member_id,
+  now(),
+  member_id,
+  'Seeded as fulfilled from reconciliation workbook'
+from fuel
+on conflict (id) do update set
+  amount = excluded.amount,
+  status = excluded.status,
+  detail = excluded.detail,
+  updated_at = now();
+
+with fuel(member_id, amount, entry_date) as (
+values
+    ('SBC0399K', 2000.00, '2025-11-15'),
+    ('SBC0399K', 3000.00, '2025-11-16'),
+    ('SBC0399K', 2600.00, '2025-11-17'),
+    ('SBC0399K', 4000.00, '2025-11-18'),
+    ('SBC0399K', 2000.00, '2025-11-20'),
+    ('SBC0399K', 4000.00, '2025-11-21'),
+    ('SBC0399K', 2000.00, '2025-11-22'),
+    ('SBC0399K', 2000.00, '2025-11-24'),
+    ('SBC0401K', 1000.00, '2025-11-24'),
+    ('SBC0399K', 2000.00, '2025-11-25'),
+    ('SBC0399K', 2000.00, '2025-11-26'),
+    ('SBC0399K', 2000.00, '2025-11-28'),
+    ('SBC0402K', 3000.00, '2025-11-28'),
+    ('SBC0399K', 2000.00, '2025-11-29'),
+    ('SBC0399K', 2000.00, '2025-11-30'),
+    ('SBC0402K', 3000.00, '2025-11-30'),
+    ('SBC0399K', 2000.00, '2025-01-12'),
+    ('SBC0399K', 2000.00, '2025-06-12'),
+    ('SBC0399K', 2000.00, '2025-08-12'),
+    ('SBC0399K', 3000.00, '2025-10-12'),
+    ('SBC0399K', 2000.00, '2025-11-12'),
+    ('SBC0399K', 2000.00, '2025-12-12'),
+    ('SBC0402K', 3000.00, '2025-12-13'),
+    ('SBC0399K', 2000.00, '2025-12-14'),
+    ('SBC0399K', 3000.00, '2025-12-16'),
+    ('SBC0408K', 2000.00, '2025-12-16'),
+    ('SBC0402K', 3000.00, '2025-12-16'),
+    ('SBC0408K', 2500.00, '2025-12-17'),
+    ('SBC0408K', 3000.00, '2025-12-18'),
+    ('SBC0410K', 3000.00, '2025-12-18'),
+    ('SBC0408K', 3000.00, '2025-12-19'),
+    ('SBC0410K', 3000.00, '2025-12-20'),
+    ('SBC0408K', 3000.00, '2025-12-21'),
+    ('SBC0408K', 3000.00, '2025-12-23'),
+    ('SBC0408K', 3000.00, '2025-12-24'),
+    ('SBC0410K', 2000.00, '2025-12-24'),
+    ('SBC0408K', 3000.00, '2025-12-26'),
+    ('SBC0408K', 3000.00, '2025-12-28'),
+    ('SBC0410K', 2000.00, '2025-12-31'),
+    ('SBC0408K', 3000.00, '2026-01-01'),
+    ('SBC0408K', 3000.00, '2026-03-01'),
+    ('SBC0401K', 500.00, '2026-03-01'),
+    ('SBC0408K', 3000.00, '2026-06-01'),
+    ('SBC0413K', 3000.00, '2026-06-01'),
+    ('SBC002K', 5008.00, '2026-08-01'),
+    ('SBC0401K', 500.00, '2026-01-13'),
+    ('SBC0413K', 1500.00, '2026-01-13'),
+    ('SBC0401K', 500.00, '2026-01-14'),
+    ('SBC0413K', 7060.00, '2026-01-16'),
+    ('SBC0413K', 2612.00, '2026-01-17'),
+    ('SBC0425K', 3000.00, '2026-01-20'),
+    ('SBC0425K', 3500.00, '2026-01-21'),
+    ('SBC0428K', 1500.00, '2026-01-22'),
+    ('SBC0425K', 3500.00, '2026-01-22'),
+    ('SBC0425K', 3500.00, '2026-01-23'),
+    ('SBC0429K', 2500.00, '2026-01-23'),
+    ('SBC0413K', 4388.00, '2026-01-26'),
+    ('SBC0413K', 39823.00, '2026-01-28'),
+    ('SBC0425K', 2500.00, '2026-01-28'),
+    ('SBC0425K', 3500.00, '2026-01-29'),
+    ('SBC0413K', 2500.00, '2026-01-31'),
+    ('SBC0413K', 2500.00, '2026-02-02'),
+    ('SBC0425K', 5921.00, '2026-02-02'),
+    ('SBC0413K', 4000.00, '2026-02-04'),
+    ('SBC0425K', 2110.00, '2026-02-04'),
+    ('SBC0425K', 7475.00, '2026-02-09'),
+    ('SBC0413K', 2500.00, '2026-02-19'),
+    ('SBC0413K', 3500.00, '2026-02-20'),
+    ('SBC0413K', 2000.00, '2026-02-21'),
+    ('SBC0413K', 2500.00, '2026-02-23'),
+    ('SBC0413K', 2500.00, '2026-02-24'),
+    ('SBC0425K', 3500.00, '2026-02-24'),
+    ('SBC0425K', 3000.00, '2026-02-25'),
+    ('SBC0103K', 2000.00, '2026-02-25'),
+    ('SBC0425K', 3000.00, '2026-02-26'),
+    ('SBC0425K', 1000.00, '2026-02-26'),
+    ('SBC002K', 5910.00, '2026-02-27'),
+    ('SBC0425K', 3000.00, '2026-02-28'),
+    ('SBC0413K', 2500.00, '2026-03-02'),
+    ('SBC0413K', 2500.00, '2026-03-03'),
+    ('SBC0413K', 3500.00, '2026-03-10'),
+    ('SBC0425K', 3000.00, '2026-03-10'),
+    ('SBC0428K', 1500.00, '2026-03-11'),
+    ('SBC0413K', 1500.00, '2026-03-12'),
+    ('SBC0428K', 1500.00, '2026-03-12'),
+    ('SBC0413K', 2500.00, '2026-03-13'),
+    ('SBC002K', 3003.00, '2026-03-13'),
+    ('SBC0413K', 3500.00, '2026-03-14'),
+    ('SBC0103K', 1000.00, '2026-03-16'),
+    ('SBC0413K', 2500.00, '2026-03-19'),
+    ('SBC0413K', 2674.00, '2026-03-20'),
+    ('SBC0413K', 2674.00, '2026-03-21'),
+    ('SBC0103K', 1500.00, '2026-03-24'),
+    ('SBC0413K', 2674.00, '2026-03-26'),
+    ('SBC0458K', 2500.00, '2026-04-02'),
+    ('SBC0458K', 3000.00, '2026-04-03'),
+    ('SBC0458K', 4410.50, '2026-05-02'),
+    ('SBC0458K', 3000.00, '06/05/202')
+)
+insert into public.system_outflows (
+  id, kind, amount, receiver_name, receiver_phone, method, supplier_id, loan_id,
+  transaction_id, note, by_staff, created_at
+)
+select
+  'OUT-LEADWAY-' || member_id || '-' || to_char(entry_date::date,'YYYYMMDD'),
+  'supplier_payment',
+  amount,
+  'LEAD WAY PETROL STATION',
+  '0700000000',
+  'mpesa',
+  'SUP-LEAD-WAY-PETROL',
+  'LW-FUEL-' || member_id || '-' || to_char(entry_date::date,'YYYYMMDD'),
+  null,
+  'Sauti payment to Lead Way for member fuel consumption. Member owes Sauti through the linked fuel loan.',
+  'S1',
+  now()
+from fuel
+on conflict (id) do update set
+  amount = excluded.amount,
+  note = excluded.note;
+
+commit;

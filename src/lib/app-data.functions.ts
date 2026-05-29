@@ -8232,17 +8232,36 @@ export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
       decision: "approved" | "rejected";
       reviewedBy: string;
       note?: string;
+      adjustedAmount?: number;
     }) => ({
       id: String(data?.id ?? "").trim(),
       decision: data?.decision ?? "approved",
       reviewedBy: String(data?.reviewedBy ?? "").trim(),
       note: data?.note?.trim() || undefined,
+      adjustedAmount:
+        data?.adjustedAmount == null || !Number.isFinite(Number(data.adjustedAmount))
+          ? undefined
+          : Math.max(0, Number(data.adjustedAmount)),
     }),
   )
   .handler(async ({ data }) => {
     const actor = await requireManagerOrDirectorActor();
     if (!data.id) throw new Error("Approval decision is incomplete.");
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    let mergedPayload: Record<string, unknown> | undefined;
+    if (data.adjustedAmount != null) {
+      const existing = await runtimeDb
+        .from("approval_requests")
+        .select("payload")
+        .eq("id", data.id)
+        .maybeSingle();
+      if (existing.error) throw new Error(existing.error.message);
+      mergedPayload = {
+        ...((existing.data?.payload as Record<string, unknown> | null) ?? {}),
+        approvedAmount: data.adjustedAmount,
+        adjustedAmount: data.adjustedAmount,
+      };
+    }
     const { error } = await runtimeDb
       .from("approval_requests")
       .update({
@@ -8250,6 +8269,7 @@ export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
         reviewed_by: actor.id,
         review_note: data.note ?? null,
         reviewed_at: new Date().toISOString(),
+        ...(mergedPayload ? { payload: mergedPayload } : {}),
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
@@ -8262,6 +8282,7 @@ export const decideApprovalRequestRecord = createServerFn({ method: "POST" })
       details: {
         decision: data.decision,
         note: clipAuditText(data.note, 160),
+        adjustedAmount: data.adjustedAmount,
       },
     });
     return { ok: true };

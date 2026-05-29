@@ -177,8 +177,8 @@ function ApprovalsPage() {
                 key={r.id}
                 req={r}
                 canDecide={canDecide}
-                onDecide={async (d, note) => {
-                  await decide(r.id, d, currentUser.id, note);
+                onDecide={async (d, note, adjustedAmount) => {
+                  await decide(r.id, d, currentUser.id, note, adjustedAmount);
                   toast.success(`Request ${d}`);
                 }}
               />
@@ -262,9 +262,19 @@ function RequestRow({
 }: {
   req: ApprovalRequest;
   canDecide: boolean;
-  onDecide: (d: "approved" | "rejected", note?: string) => Promise<void>;
+  onDecide: (
+    d: "approved" | "rejected",
+    note?: string,
+    adjustedAmount?: number,
+  ) => Promise<void>;
 }) {
   const [note, setNote] = useState("");
+  const [adjustedAmount, setAdjustedAmount] = useState("");
+  const payload = (req.payload ?? {}) as Record<string, unknown>;
+  const requestType = String(payload.requestType ?? "");
+  const supportsAdjustment = ["loan", "fuel_loan", "stock_request", "service_request"].includes(
+    requestType,
+  );
   const tone =
     req.status === "approved" ? "success" : req.status === "rejected" ? "destructive" : "warning";
   const Icon =
@@ -297,6 +307,16 @@ function RequestRow({
       </div>
       {req.status === "pending" && canDecide && (
         <div className="flex flex-col gap-2 min-w-[180px]">
+          {supportsAdjustment && (
+            <input
+              type="number"
+              min={0}
+              value={adjustedAmount}
+              onChange={(e) => setAdjustedAmount(e.target.value)}
+              placeholder="Approved amount"
+              className="bg-muted border border-border rounded-md px-2 py-1 text-xs"
+            />
+          )}
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -305,7 +325,21 @@ function RequestRow({
           />
           <div className="flex gap-2">
             <button
-              onClick={() => void onDecide("approved", note)}
+              onClick={() => {
+                const finalNote =
+                  adjustedAmount.trim() && supportsAdjustment
+                    ? [note, `Approved adjusted amount: ${fmtKES(Number(adjustedAmount) || 0)}`]
+                        .filter(Boolean)
+                        .join(" | ")
+                    : note;
+                void onDecide(
+                  "approved",
+                  finalNote,
+                  adjustedAmount.trim() && supportsAdjustment
+                    ? Math.max(0, Number(adjustedAmount) || 0)
+                    : undefined,
+                );
+              }}
               className="flex-1 text-xs px-2 py-1 rounded-md bg-success/15 text-success hover:bg-success/25"
             >
               Approve
