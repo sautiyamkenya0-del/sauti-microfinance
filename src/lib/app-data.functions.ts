@@ -7387,6 +7387,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       termDays?: number;
       reviewedBy: string;
       note?: string;
+      disbursementMode?: "none" | "mpesa" | "cash";
     }) => ({
       loanId: String(data?.loanId ?? "").trim(),
       decision: data?.decision ?? "approved",
@@ -7394,6 +7395,12 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       termDays: data?.termDays == null ? undefined : Math.max(1, Math.floor(Number(data.termDays))),
       reviewedBy: String(data?.reviewedBy ?? "").trim(),
       note: data?.note?.trim() || undefined,
+      disbursementMode:
+        data?.disbursementMode === "none" ||
+        data?.disbursementMode === "cash" ||
+        data?.disbursementMode === "mpesa"
+          ? data.disbursementMode
+          : "mpesa",
     }),
   )
   .handler(async ({ data }) => {
@@ -7525,13 +7532,6 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       return { ok: true, supplierPending: true };
     }
 
-    const cashSummary = await computeSystemCashSummary(supabaseAdmin);
-    if (cashSummary.available < approvedAmount) {
-      throw new Error(
-        `Insufficient paybill balance. Available ${cashSummary.available}/=, required ${approvedAmount}/=.`,
-      );
-    }
-
     const { data: member, error: memberError } = await supabaseAdmin
       .from("members")
       .select("id, name, phone")
@@ -7540,30 +7540,59 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     if (memberError) throw new Error(memberError.message);
     if (!member) throw new Error("The member linked to this loan could not be found.");
 
-    const payoutRequest = await createSystemPayoutRequest(supabaseAdmin, {
-      purpose: "loan_disbursement",
-      amount: approvedAmount,
-      phone: member.phone,
-      accountReference: formatMembershipNumber(member.id),
-      receiverName: member.name,
-      remarks: data.note ?? loan.purpose ?? `Loan disbursement ${loan.id}`,
-      requestedBy: actor,
-      loanId: loan.id,
-      memberId: member.id,
-      targetId: loan.id,
-      raw: {
-        approvedAmount,
-        financedPrincipalAmount: pricing.financedPrincipal,
-        transactionFeeAmount: pricing.transactionFee,
-      },
-    });
+    let payoutRequest: { id: string } | null = null;
+    let cashTransactionId: string | null = null;
+    const now = new Date().toISOString();
+
+    if (data.disbursementMode === "mpesa") {
+      const cashSummary = await computeSystemCashSummary(supabaseAdmin);
+      if (cashSummary.available < approvedAmount) {
+        throw new Error(
+          `Insufficient paybill balance. Available ${cashSummary.available}/=, required ${approvedAmount}/=.`,
+        );
+      }
+
+      payoutRequest = await createSystemPayoutRequest(supabaseAdmin, {
+        purpose: "loan_disbursement",
+        amount: approvedAmount,
+        phone: member.phone,
+        accountReference: formatMembershipNumber(member.id),
+        receiverName: member.name,
+        remarks: data.note ?? loan.purpose ?? `Loan disbursement ${loan.id}`,
+        requestedBy: actor,
+        loanId: loan.id,
+        memberId: member.id,
+        targetId: loan.id,
+        raw: {
+          approvedAmount,
+          financedPrincipalAmount: pricing.financedPrincipal,
+          transactionFeeAmount: pricing.transactionFee,
+        },
+      });
+    }
+
+    if (data.disbursementMode === "cash") {
+      cashTransactionId = await insertTransactionRow({
+        date: now.slice(0, 10),
+        created_at: now,
+        type: "loan_disbursement",
+        amount: approvedAmount,
+        member_id: member.id,
+        loan_id: loan.id,
+        by_staff: actor.id,
+        ref: `CASH-${loan.id}`,
+        account: formatMembershipNumber(member.id),
+        payer_name: member.name,
+        note: data.note ?? loan.purpose ?? `Cash loan disbursement ${loan.id}`,
+      });
+    }
 
     const { error } = await supabaseAdmin
       .from("loans")
       .update({
         approved_amount: approvedAmount,
         financed_principal_amount: pricing.financedPrincipal,
-        net_disbursed_amount: approvedAmount,
+        net_disbursed_amount: data.disbursementMode === "none" ? 0 : approvedAmount,
         processing_fee_amount: pricing.processing,
         insurance_fee_amount: pricing.insurance,
         transaction_fee_amount: pricing.transactionFee,
@@ -7573,9 +7602,15 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
         rate: pricing.ratePct,
         status: "active",
-        disbursement_status: "requested",
-        disbursement_requested_at: new Date().toISOString(),
-        payout_request_id: payoutRequest.id,
+        disbursement_status:
+          data.disbursementMode === "mpesa"
+            ? "requested"
+            : data.disbursementMode === "cash"
+              ? "paid"
+              : "not_requested",
+        disbursement_requested_at: data.disbursementMode === "mpesa" ? now : null,
+        disbursement_completed_at: data.disbursementMode === "cash" ? now : null,
+        payout_request_id: payoutRequest?.id ?? null,
         reviewed_by: actor.id,
         review_note: data.note ?? null,
       })
@@ -7592,11 +7627,13 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         memberId: loan.member_id,
         approvedAmount,
         financedPrincipalAmount: pricing.financedPrincipal,
-        payoutRequestId: payoutRequest.id,
+        disbursementMode: data.disbursementMode,
+        payoutRequestId: payoutRequest?.id ?? null,
+        cashTransactionId,
         note: clipAuditText(data.note, 160),
       },
     });
-    return { ok: true, payoutRequestId: payoutRequest.id };
+    return { ok: true, payoutRequestId: payoutRequest?.id, cashTransactionId };
   });
 
 export const updateLoanRecord = createServerFn({ method: "POST" })

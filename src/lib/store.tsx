@@ -600,6 +600,7 @@ type Store = {
     by: string,
     note?: string,
     termDays?: number,
+    disbursementMode?: "none" | "mpesa" | "cash",
   ) => Promise<void>;
   rejectLoan: (loanId: string, by: string, note?: string) => Promise<void>;
   recordTransaction: (
@@ -995,7 +996,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await refreshAfterMutation("Loan was saved, but background sync failed.");
         return result.id;
       },
-      approveLoan: async (loanId, approvedAmount, by, note, termDays) => {
+      approveLoan: async (loanId, approvedAmount, by, note, termDays, disbursementMode) => {
         await reviewLoan({
           data: {
             loanId,
@@ -1004,6 +1005,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             termDays,
             reviewedBy: by,
             note,
+            disbursementMode,
           },
         });
         refreshAfterMutation("Loan was approved, but background sync failed.");

@@ -22,6 +22,11 @@ function ApprovalsPage() {
   const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
   const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
   const [repaymentDays, setRepaymentDays] = useState<Record<string, number | "">>({});
+  const [approvalChoice, setApprovalChoice] = useState<{
+    loanId: string;
+    reviewedAmount: number;
+    repaymentDays: number;
+  } | null>(null);
 
   const canDecide = currentUser.role === "director";
   const pendingLoans = loans.filter((l) => l.status === "pending");
@@ -48,6 +53,34 @@ function ApprovalsPage() {
       .then(setSupplierWorkspace)
       .catch(() => {});
   }, [loadSupplierWorkspace]);
+
+  async function decideLoanApproval(mode: "none" | "mpesa" | "cash") {
+    if (!approvalChoice) return;
+    try {
+      await approveLoan(
+        approvalChoice.loanId,
+        approvalChoice.reviewedAmount,
+        currentUser.id,
+        mode === "cash"
+          ? "Approved and disbursed in cash from queue"
+          : mode === "mpesa"
+            ? "Approved and payout requested from queue"
+            : "Approved from queue without immediate disbursement",
+        approvalChoice.repaymentDays,
+        mode,
+      );
+      toast.success(
+        mode === "cash"
+          ? "Loan approved and cash disbursement recorded"
+          : mode === "mpesa"
+            ? "Loan approved and payout requested"
+            : "Loan approved without immediate disbursement",
+      );
+      setApprovalChoice(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to approve loan.");
+    }
+  }
 
   return (
     <>
@@ -166,22 +199,11 @@ function ApprovalsPage() {
                                   );
                                   return;
                                 }
-                                try {
-                                  await approveLoan(
-                                    l.id,
-                                    reviewedAmount,
-                                    currentUser.id,
-                                    "Approved from queue",
-                                    approvalRepaymentDays,
-                                  );
-                                  toast.success("Loan approved and payout requested");
-                                } catch (error) {
-                                  toast.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Failed to approve loan.",
-                                  );
-                                }
+                                setApprovalChoice({
+                                  loanId: l.id,
+                                  reviewedAmount,
+                                  repaymentDays: approvalRepaymentDays,
+                                });
                               }}
                               className="rounded-md bg-success/15 px-2 py-1 text-xs text-success hover:bg-success/25 disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -206,6 +228,49 @@ function ApprovalsPage() {
             </table>
           </div>
         </Section>
+
+        {approvalChoice ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+            <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl">
+              <div className="text-base font-semibold">Approve loan {approvalChoice.loanId}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Choose whether to disburse now or only approve the loan for later disbursement.
+              </div>
+              <div className="mt-4 grid gap-2">
+                <button
+                  type="button"
+                  onClick={() => void decideLoanApproval("none")}
+                  className="rounded-md border border-border px-3 py-2 text-left text-sm hover:bg-muted"
+                >
+                  Approve only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void decideLoanApproval("mpesa")}
+                  className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-left text-sm text-primary hover:bg-primary/15"
+                >
+                  Approve and disburse by M-Pesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void decideLoanApproval("cash")}
+                  className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-left text-sm text-success hover:bg-success/15"
+                >
+                  Approve and disburse in cash
+                </button>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setApprovalChoice(null)}
+                  className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Member / staff requests */}
         <Section title="Member & Staff Requests">
