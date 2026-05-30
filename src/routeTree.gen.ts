@@ -28,6 +28,7 @@ import { Route as PayrollRouteImport } from './routes/payroll'
 import { Route as MemosRouteImport } from './routes/memos'
 import { Route as MembersRouteImport } from './routes/members'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as LocomotiveRouteImport } from './routes/locomotive'
 import { Route as LoansRouteImport } from './routes/loans'
 import { Route as InvestorsRouteImport } from './routes/investors'
 import { Route as FeesPolicyRouteImport } from './routes/fees-policy'
@@ -144,6 +145,11 @@ const MembersRoute = MembersRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LocomotiveRoute = LocomotiveRouteImport.update({
+  id: '/locomotive',
+  path: '/locomotive',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoansRoute = LoansRouteImport.update({
@@ -271,6 +277,7 @@ export interface FileRoutesByFullPath {
   '/fees-policy': typeof FeesPolicyRoute
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
+  '/locomotive': typeof LocomotiveRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -314,6 +321,7 @@ export interface FileRoutesByTo {
   '/fees-policy': typeof FeesPolicyRoute
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
+  '/locomotive': typeof LocomotiveRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -358,6 +366,7 @@ export interface FileRoutesById {
   '/fees-policy': typeof FeesPolicyRoute
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
+  '/locomotive': typeof LocomotiveRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -403,6 +412,7 @@ export interface FileRouteTypes {
     | '/fees-policy'
     | '/investors'
     | '/loans'
+    | '/locomotive'
     | '/login'
     | '/members'
     | '/memos'
@@ -446,6 +456,7 @@ export interface FileRouteTypes {
     | '/fees-policy'
     | '/investors'
     | '/loans'
+    | '/locomotive'
     | '/login'
     | '/members'
     | '/memos'
@@ -489,6 +500,7 @@ export interface FileRouteTypes {
     | '/fees-policy'
     | '/investors'
     | '/loans'
+    | '/locomotive'
     | '/login'
     | '/members'
     | '/memos'
@@ -533,6 +545,7 @@ export interface RootRouteChildren {
   FeesPolicyRoute: typeof FeesPolicyRoute
   InvestorsRoute: typeof InvestorsRoute
   LoansRoute: typeof LoansRoute
+  LocomotiveRoute: typeof LocomotiveRoute
   LoginRoute: typeof LoginRoute
   MembersRoute: typeof MembersRoute
   MemosRoute: typeof MemosRoute
@@ -704,6 +717,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/locomotive': {
+      id: '/locomotive'
+      path: '/locomotive'
+      fullPath: '/locomotive'
+      preLoaderRoute: typeof LocomotiveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/loans': {
       id: '/loans'
       path: '/loans'
@@ -869,6 +889,7 @@ const rootRouteChildren: RootRouteChildren = {
   FeesPolicyRoute: FeesPolicyRoute,
   InvestorsRoute: InvestorsRoute,
   LoansRoute: LoansRoute,
+  LocomotiveRoute: LocomotiveRoute,
   LoginRoute: LoginRoute,
   MembersRoute: MembersRoute,
   MemosRoute: MemosRoute,

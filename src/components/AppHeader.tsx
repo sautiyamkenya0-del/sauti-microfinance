@@ -17,6 +17,7 @@ import {
   IdCard,
   ShieldCheck,
   Package,
+  ReceiptText,
   Truck,
   type LucideIcon,
 } from "lucide-react";
@@ -53,6 +54,13 @@ const ENTRIES: Entry[] = [
   },
   { id: "suppliers", to: "/suppliers", label: "Suppliers", icon: Truck, requires: ["suppliers"] },
   { id: "stock", to: "/stock", label: "Stock", icon: Package, requires: ["stock"] },
+  {
+    id: "locomotive",
+    to: "/locomotive",
+    label: "Locomotive Admin",
+    icon: ReceiptText,
+    requires: ["locomotive_dashboard", "locomotive_members", "locomotive_ledger"],
+  },
   {
     id: "lending",
     to: "/loans",

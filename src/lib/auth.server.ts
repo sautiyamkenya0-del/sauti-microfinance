@@ -17,8 +17,9 @@ type AppSessionData = {
 export type StaffActor = {
   id: string;
   name: string;
-  role: "director" | "manager" | "loan_officer";
+  role: "director" | "manager" | "loan_officer" | "locomotive_admin";
   canMarkAttendance: boolean;
+  memberId?: string;
 };
 
 export type MemberActor = {
@@ -114,7 +115,7 @@ export async function requireStaffActor() {
   const supabaseAdmin = await requireSupabaseAdmin();
   const { data, error } = await supabaseAdmin
     .from("staff")
-    .select("id, name, role, can_mark_attendance")
+    .select("id, name, role, can_mark_attendance, member_id")
     .eq("id", session.staffId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -129,6 +130,7 @@ export async function requireStaffActor() {
     name: data.name,
     role: data.role,
     canMarkAttendance: data.can_mark_attendance,
+    memberId: data.member_id ?? undefined,
   } satisfies StaffActor;
 }
 

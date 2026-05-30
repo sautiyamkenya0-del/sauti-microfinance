@@ -3729,6 +3729,7 @@ function mapStaffRow(row: any) {
     id: row.id,
     name: row.name,
     role: row.role,
+    memberId: row.member_id ?? undefined,
     email: row.email ?? undefined,
     phone: row.phone ?? undefined,
     nationalId: row.national_id ?? undefined,
@@ -5966,7 +5967,8 @@ export const createStaffRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
       name: string;
-      role: "director" | "manager" | "loan_officer";
+      role: "director" | "manager" | "loan_officer" | "locomotive_admin";
+      memberId?: string;
       firstName?: string;
       secondName?: string;
       thirdName?: string;
@@ -5982,6 +5984,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     }) => ({
       name: String(data?.name ?? "").trim(),
       role: data?.role ?? "loan_officer",
+      memberId: data?.memberId?.trim() || undefined,
       firstName: data?.firstName?.trim() || undefined,
       secondName: data?.secondName?.trim() || undefined,
       thirdName: data?.thirdName?.trim() || undefined,
@@ -6014,12 +6017,23 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     if (existingError) throw new Error(existingError.message);
     if (existing)
       throw new Error("That email address is already assigned to another staff account.");
+    if (data.role === "locomotive_admin" && data.memberId) {
+      const { data: linkedMember, error: linkedMemberError } = await supabaseAdmin
+        .from("members")
+        .select("id")
+        .eq("id", data.memberId)
+        .maybeSingle();
+      if (linkedMemberError) throw new Error(linkedMemberError.message);
+      if (!linkedMember)
+        throw new Error("Linked locomotive admin membership number was not found.");
+    }
 
     const staffId = await nextPrefixedId("staff", "S", 1);
     const { error } = await supabaseAdmin.from("staff").insert({
       id: staffId,
       name: data.name,
       role: data.role as never,
+      member_id: data.memberId ?? null,
       email: data.email,
       phone: data.phone ?? null,
       national_id: data.nationalId ?? null,
@@ -6039,6 +6053,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
       summary: `${actor.name} created staff account ${data.name}`,
       details: {
         role: data.role,
+        memberId: data.memberId ?? null,
         email: data.email,
         canMarkAttendance: data.role === "director" ? true : data.canMarkAttendance,
         fingerprintEnrolled: data.fingerprintEnrolled,
@@ -6047,13 +6062,221 @@ export const createStaffRecord = createServerFn({ method: "POST" })
     return { id: staffId };
   });
 
+export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      name: string;
+      phone?: string;
+      businessName?: string;
+      vehiclePlate?: string;
+      route?: string;
+      stage?: string;
+    }) => ({
+      name: String(data?.name ?? "").trim(),
+      phone: String(data?.phone ?? "").trim(),
+      businessName: String(data?.businessName ?? "").trim() || undefined,
+      vehiclePlate:
+        String(data?.vehiclePlate ?? "")
+          .trim()
+          .toUpperCase() || undefined,
+      route: String(data?.route ?? "").trim() || undefined,
+      stage: String(data?.stage ?? "").trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (
+      actor.role !== "locomotive_admin" &&
+      actor.role !== "director" &&
+      actor.role !== "manager"
+    ) {
+      throw new Error(
+        "Only locomotive admins and management can register locomotive business members.",
+      );
+    }
+    if (!data.name) throw new Error("Member name is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: existingServiceMembers, error: serviceNumberError } = await runtimeDb
+      .from("members")
+      .select("service_member_number");
+    if (serviceNumberError && !isMissingColumnError(serviceNumberError, "service_member_number")) {
+      throw new Error(serviceNumberError.message);
+    }
+    const serviceMemberNumber = serviceNumberError
+      ? makeId("SM")
+      : nextPrefixedKNumber(
+          "SM",
+          (existingServiceMembers ?? []).map(
+            (row: { service_member_number?: string | null }) => row.service_member_number,
+          ),
+        );
+    const memberId = serviceMemberNumber;
+    const locomotiveDetails = {
+      vehicleRegistrationNumber: data.vehiclePlate ?? null,
+      routeOfOperation: data.route ?? null,
+      stageOfOperation: data.stage ?? null,
+      registeredByLocomotiveAdmin: actor.id,
+    };
+
+    const { error } = await runtimeDb.from("members").insert({
+      id: memberId,
+      name: data.name,
+      phone: data.phone || "0700000000",
+      joined_at: todayInKenya(),
+      status: "active",
+      shares: 0,
+      savings_balance: 0,
+      member_category: "service",
+      member_tags: ["service", "locomotive_business"],
+      business_name: data.businessName ?? null,
+      business_type: "locomotive_business",
+      business_description: "Locomotive business member registered under a locomotive admin.",
+      vehicle_plate: data.vehiclePlate ?? null,
+      service_member_number: serviceMemberNumber,
+      locomotive_details: locomotiveDetails,
+      locomotive_business_member: true,
+      locomotive_admin_staff_id: actor.id,
+      locomotive_admin_member_id: actor.memberId ?? null,
+      fee_membership: false,
+      fee_card: false,
+      fee_sticker: false,
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "locomotive_business_member.created",
+      targetType: "member",
+      targetId: memberId,
+      summary: `${actor.name} registered locomotive business member ${data.name}`,
+      details: {
+        memberId,
+        serviceMemberNumber,
+        vehiclePlate: data.vehiclePlate ?? null,
+        route: data.route ?? null,
+        stage: data.stage ?? null,
+      },
+    });
+    return { id: memberId, serviceMemberNumber };
+  });
+
+function locomotiveBusinessDeductionAmount(service: any, grossAmount: number) {
+  const deductions =
+    service?.normal_deductions && typeof service.normal_deductions === "object"
+      ? service.normal_deductions
+      : {};
+  const fixed = Number(
+    deductions.fixedAmount ?? deductions.amount ?? deductions.deductionAmount ?? 0,
+  );
+  const pct = Number(deductions.percentage ?? deductions.percent ?? deductions.deductionPct ?? 0);
+  const serviceCharge = Number(service?.service_charge ?? service?.price ?? 0);
+  const raw =
+    (Number.isFinite(fixed) ? fixed : 0) +
+    (Number.isFinite(pct) ? (grossAmount * pct) / 100 : 0) +
+    (Number.isFinite(serviceCharge) ? serviceCharge : 0);
+  return Math.min(grossAmount, Math.max(0, raw));
+}
+
+export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      beneficiaryMemberId: string;
+      grossAmount: number;
+      serviceId?: string;
+      purpose?: string;
+      note?: string;
+    }) => ({
+      beneficiaryMemberId: String(data?.beneficiaryMemberId ?? "").trim(),
+      grossAmount: Math.max(0, Number(data?.grossAmount ?? 0)),
+      serviceId: String(data?.serviceId ?? "").trim() || undefined,
+      purpose: String(data?.purpose ?? "").trim() || "service",
+      note: String(data?.note ?? "").trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (
+      actor.role !== "locomotive_admin" &&
+      actor.role !== "director" &&
+      actor.role !== "manager"
+    ) {
+      throw new Error(
+        "Only locomotive admins and management can allocate locomotive business wallet funds.",
+      );
+    }
+    if (!data.beneficiaryMemberId) throw new Error("Select a locomotive business member.");
+    if (data.grossAmount <= 0) throw new Error("Allocation amount must be above zero.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const { data: member, error: memberError } = await runtimeDb
+      .from("members")
+      .select("id, name, locomotive_business_member, locomotive_admin_staff_id")
+      .eq("id", data.beneficiaryMemberId)
+      .maybeSingle();
+    if (memberError) throw new Error(memberError.message);
+    if (!member?.locomotive_business_member) {
+      throw new Error("Selected member is not a locomotive business member.");
+    }
+    if (actor.role === "locomotive_admin" && member.locomotive_admin_staff_id !== actor.id) {
+      throw new Error("You can only allocate funds to members registered under your portal.");
+    }
+
+    const { data: service, error: serviceError } = data.serviceId
+      ? await runtimeDb.from("service_catalog").select("*").eq("id", data.serviceId).maybeSingle()
+      : await runtimeDb
+          .from("service_catalog")
+          .select("*")
+          .eq("service_category", "locomotive_business_wallet")
+          .eq("active", true)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+    if (serviceError && !isMissingRelationError(serviceError))
+      throw new Error(serviceError.message);
+
+    const deductionAmount = locomotiveBusinessDeductionAmount(service, data.grossAmount);
+    const netAmount = Math.max(0, data.grossAmount - deductionAmount);
+    const id = makeId("LBWA");
+    const { error } = await runtimeDb.from("locomotive_business_wallet_allocations").insert({
+      id,
+      admin_staff_id: actor.id,
+      admin_member_id: actor.memberId ?? null,
+      beneficiary_member_id: data.beneficiaryMemberId,
+      service_id: data.serviceId ?? service?.id ?? null,
+      gross_amount: data.grossAmount,
+      deduction_amount: deductionAmount,
+      net_amount: netAmount,
+      purpose: data.purpose,
+      note: data.note ?? null,
+    });
+    if (error) throw new Error(error.message);
+
+    await auditAction({
+      actor,
+      action: "locomotive_business_wallet.allocated",
+      targetType: "locomotive_business_wallet_allocation",
+      targetId: id,
+      summary: `${actor.name} allocated ${data.grossAmount} to ${member.name}`,
+      details: {
+        beneficiaryMemberId: data.beneficiaryMemberId,
+        serviceId: data.serviceId ?? service?.id ?? null,
+        grossAmount: data.grossAmount,
+        deductionAmount,
+        netAmount,
+      },
+    });
+    return { id, deductionAmount, netAmount };
+  });
+
 export const updateStaffRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
       id: string;
       patch: {
         name?: string;
-        role?: "director" | "manager" | "loan_officer";
+        role?: "director" | "manager" | "loan_officer" | "locomotive_admin";
+        memberId?: string;
         firstName?: string;
         secondName?: string;
         thirdName?: string;
@@ -6088,6 +6311,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
     const updates: Record<string, unknown> = {};
     if (hasPatch("name")) updates.name = patch.name?.trim() || undefined;
     if (hasPatch("role")) updates.role = patch.role as never;
+    if (hasPatch("memberId")) updates.member_id = patch.memberId?.trim() || null;
     if (hasPatch("email")) updates.email = patch.email?.trim().toLowerCase() || undefined;
     if (hasPatch("phone")) updates.phone = patch.phone?.trim() || null;
     if (hasPatch("nationalId")) updates.national_id = patch.nationalId?.trim() || null;
@@ -6113,6 +6337,7 @@ export const updateStaffRecord = createServerFn({ method: "POST" })
       details: {
         name: patch.name?.trim() || undefined,
         role: patch.role,
+        memberId: patch.memberId ?? null,
         email: patch.email?.trim() || undefined,
         phone: patch.phone?.trim() || undefined,
         canMarkAttendance: patch.role === "director" ? true : patch.canMarkAttendance,

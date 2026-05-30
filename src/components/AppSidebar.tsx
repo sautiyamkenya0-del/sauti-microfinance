@@ -7,6 +7,7 @@ import {
   LogOut,
   MessageSquare,
   Package,
+  ReceiptText,
   ShieldCheck,
   Sparkles,
   Truck,
@@ -48,6 +49,13 @@ const ENTRIES: Entry[] = [
     requires: ["suppliers"],
   },
   { id: "stock", to: "/stock", label: "Stock", icon: Package, requires: ["stock"] },
+  {
+    id: "locomotive",
+    to: "/locomotive",
+    label: "Locomotive Admin",
+    icon: ReceiptText,
+    requires: ["locomotive_dashboard", "locomotive_members", "locomotive_ledger"],
+  },
   {
     id: "lending",
     to: "/loans",

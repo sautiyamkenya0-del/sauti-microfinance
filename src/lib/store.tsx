@@ -64,7 +64,7 @@ import {
 } from "@/lib/policy-settings";
 import { listStaffMessages } from "@/lib/runtime-data.functions";
 
-export type Role = "director" | "manager" | "loan_officer";
+export type Role = "director" | "manager" | "loan_officer" | "locomotive_admin";
 export type AppMode = "lite" | "complex";
 
 export type MandatoryFees = {
@@ -292,6 +292,7 @@ export type Staff = {
   id: string;
   name: string;
   role: Role;
+  memberId?: string;
   firstName?: string;
   secondName?: string;
   thirdName?: string;
@@ -1179,6 +1180,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           id: result.user.id,
           name: result.user.name,
           role: result.user.role,
+          memberId: result.user.memberId,
           canMarkAttendance: result.user.role === "director" || result.user.canMarkAttendance,
         } satisfies Staff;
         setIsAuthenticated(true);
@@ -1203,6 +1205,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           data: {
             name: s.name,
             role: s.role,
+            memberId: s.memberId,
             firstName: s.firstName,
             secondName: s.secondName,
             thirdName: s.thirdName,
@@ -1227,6 +1230,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             patch: {
               name: patch.name,
               role: patch.role,
+              memberId: patch.memberId,
               firstName: patch.firstName,
               secondName: patch.secondName,
               thirdName: patch.thirdName,
@@ -1976,6 +1980,7 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "ai",
     "portal",
   ],
+  locomotive_admin: ["locomotive_dashboard", "locomotive_members", "locomotive_ledger"],
 };
 
 const DIRECTOR_ONLY = new Set(["staffmgmt", "investors", "fees"]);
@@ -2021,4 +2026,10 @@ export function scoreLoan(inputs: {
 }
 
 export const roleLabel = (r: Role) =>
-  r === "director" ? "Director" : r === "manager" ? "Manager" : "Loan Officer";
+  r === "director"
+    ? "Director"
+    : r === "manager"
+      ? "Manager"
+      : r === "locomotive_admin"
+        ? "Locomotive Admin"
+        : "Loan Officer";

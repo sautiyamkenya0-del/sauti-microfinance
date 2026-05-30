@@ -84,7 +84,7 @@ export const signInStaff = createServerFn({ method: "POST" })
     const supabaseAdmin = requireSupabaseAdmin();
     const { data: staffRow, error } = await supabaseAdmin
       .from("staff")
-      .select("id, name, role, temp_password, can_mark_attendance")
+      .select("id, name, role, temp_password, can_mark_attendance, member_id")
       .ilike("email", data.email)
       .limit(1)
       .maybeSingle();
@@ -138,6 +138,7 @@ export const signInStaff = createServerFn({ method: "POST" })
         name: staffRow.name,
         role: staffRow.role,
         canMarkAttendance: !!staffRow.can_mark_attendance,
+        memberId: staffRow.member_id ?? undefined,
       },
     };
   });

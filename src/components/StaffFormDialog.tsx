@@ -19,7 +19,7 @@ type Props = {
 };
 
 export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
-  const { addStaff, updateStaff } = useStore();
+  const { addStaff, updateStaff, members } = useStore();
 
   const [photo, setPhoto] = useState<string | undefined>(editing?.photo);
   const [firstName, setFirstName] = useState(
@@ -36,6 +36,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
   const [nationalId, setNationalId] = useState(editing?.nationalId ?? "");
   const [address, setAddress] = useState(editing?.address ?? "");
   const [role, setRole] = useState<Role>(editing?.role ?? "loan_officer");
+  const [memberId, setMemberId] = useState(editing?.memberId ?? "");
   const [tempPassword, setTempPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [notes, setNotes] = useState(editing?.notes ?? "");
@@ -54,6 +55,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
     setNationalId(editing?.nationalId ?? "");
     setAddress(editing?.address ?? "");
     setRole(editing?.role ?? "loan_officer");
+    setMemberId(editing?.memberId ?? "");
     setTempPassword("");
     setShowPwd(false);
     setNotes(editing?.notes ?? "");
@@ -85,6 +87,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
       secondName,
       thirdName,
       role,
+      memberId: role === "locomotive_admin" ? memberId.trim() || undefined : undefined,
       email: email.trim(),
       phone,
       nationalId,
@@ -227,6 +230,7 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
               >
                 <option value="loan_officer">Loan Officer</option>
                 <option value="manager">Manager</option>
+                <option value="locomotive_admin">Locomotive Admin</option>
                 <option value="director">Director</option>
               </select>
             </Field>
@@ -254,6 +258,28 @@ export function StaffFormDialog({ open, onOpenChange, editing }: Props) {
               </div>
             </Field>
           </div>
+
+          {role === "locomotive_admin" && (
+            <Field label="Linked admin membership number">
+              <select
+                value={memberId}
+                onChange={(e) => setMemberId(e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Register without linked member</option>
+                {members
+                  .filter(
+                    (member) =>
+                      member.memberTags?.includes("locomotive") || member.category === "locomotive",
+                  )
+                  .map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.id} - {member.name}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          )}
 
           <Field label="Notes">
             <textarea

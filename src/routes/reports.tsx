@@ -28,6 +28,7 @@ import {
 import {
   listAllCarryoverLoans,
   listReportSnapshots,
+  listServiceAdministrationReports,
   listSupplierWorkspaceRecord,
 } from "@/lib/runtime-data.functions";
 import {
@@ -103,6 +104,7 @@ function ReportsPage() {
   const loadSnapshots = useServerFn(listReportSnapshots);
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
+  const loadServiceReports = useServerFn(listServiceAdministrationReports);
   const {
     loans,
     members,
@@ -124,6 +126,12 @@ function ReportsPage() {
   const [fuelMemberId, setFuelMemberId] = useState("");
   const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
   const [supplierReportId, setSupplierReportId] = useState("");
+  const [serviceReports, setServiceReports] = useState<any>({
+    dashboard: null,
+    members: [],
+    invoices: [],
+    locomotiveAllocations: [],
+  });
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -154,6 +162,19 @@ function ReportsPage() {
       .then(setSupplierWorkspace)
       .catch(() => setSupplierWorkspace(null));
   }, [loadSupplierWorkspace]);
+
+  useEffect(() => {
+    loadServiceReports()
+      .then(setServiceReports)
+      .catch(() =>
+        setServiceReports({
+          dashboard: null,
+          members: [],
+          invoices: [],
+          locomotiveAllocations: [],
+        }),
+      );
+  }, [loadServiceReports]);
 
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const supplierRows = supplierWorkspace?.suppliers ?? [];
@@ -431,23 +452,21 @@ function ReportsPage() {
       "",
     ),
   ];
-  const loanCategoryReportRows = (["financial", "fuel", "stock", "service"] as const).map(
-    (kind) => {
-      const rows = allLoanHealth.filter((row) => row.kind === kind);
-      return {
-        key: kind,
-        label: `${kind[0].toUpperCase()}${kind.slice(1)} loans`,
-        active: rows.filter((row) => row.status === "active").length,
-        defaulted: rows.filter((row) => row.status === "defaulted").length,
-        closed: rows.filter((row) => row.status === "closed").length,
-        expected: rows.reduce((sum, row) => sum + row.expected, 0),
-        paid: rows.reduce((sum, row) => sum + row.paid, 0),
-        penalties: rows.reduce((sum, row) => sum + row.penalties, 0),
-        defaultedAmount: rows.reduce((sum, row) => sum + row.defaulted, 0),
-        balance: rows.reduce((sum, row) => sum + row.balance, 0),
-      };
-    },
-  );
+  const loanCategoryReportRows = (["financial", "fuel", "stock"] as const).map((kind) => {
+    const rows = allLoanHealth.filter((row) => row.kind === kind);
+    return {
+      key: kind,
+      label: `${kind[0].toUpperCase()}${kind.slice(1)} loans`,
+      active: rows.filter((row) => row.status === "active").length,
+      defaulted: rows.filter((row) => row.status === "defaulted").length,
+      closed: rows.filter((row) => row.status === "closed").length,
+      expected: rows.reduce((sum, row) => sum + row.expected, 0),
+      paid: rows.reduce((sum, row) => sum + row.paid, 0),
+      penalties: rows.reduce((sum, row) => sum + row.penalties, 0),
+      defaultedAmount: rows.reduce((sum, row) => sum + row.defaulted, 0),
+      balance: rows.reduce((sum, row) => sum + row.balance, 0),
+    };
+  });
   const fuelReportRows = buildFuelReportRows({ loans, carryoverLoans, members }).filter(
     (row) =>
       (!fuelMemberId || row.memberId === fuelMemberId) && inReportWindow(row.entry.date || ""),
@@ -819,6 +838,81 @@ function ReportsPage() {
                     <td className="px-5 py-3 text-right">{row.activeLoans}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="Service Records">
+          <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
+            <MiniStat
+              label="Service Members"
+              value={String(serviceReports.dashboard?.total_service_members ?? 0)}
+            />
+            <MiniStat
+              label="Pending Applications"
+              value={String(serviceReports.dashboard?.pending_applications ?? 0)}
+            />
+            <MiniStat
+              label="Service Revenue"
+              value={fmtKES(serviceReports.dashboard?.revenue_collected ?? 0)}
+            />
+            <MiniStat
+              label="Locomotive Business Deductions"
+              value={fmtKES(serviceReports.dashboard?.locomotive_business_wallet_deductions ?? 0)}
+            />
+          </div>
+          <div className="overflow-x-auto border-t border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-3 text-left">Invoice</th>
+                  <th className="px-5 py-3 text-left">Member</th>
+                  <th className="px-5 py-3 text-right">County</th>
+                  <th className="px-5 py-3 text-right">SBC charges</th>
+                  <th className="px-5 py-3 text-right">Waiver</th>
+                  <th className="px-5 py-3 text-right">Final</th>
+                  <th className="px-5 py-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {serviceReports.invoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted-foreground">
+                      No service billing records yet. Saved service applications from Policy Center
+                      will appear here.
+                    </td>
+                  </tr>
+                ) : (
+                  serviceReports.invoices.slice(0, 12).map((invoice: any) => {
+                    const sbcCharges =
+                      Number(invoice.service_fee ?? 0) +
+                      Number(invoice.processing_fee ?? 0) +
+                      Number(invoice.registration_fee ?? 0) +
+                      Number(invoice.custom_charges ?? 0) +
+                      Number(invoice.penalty_amount ?? 0);
+                    return (
+                      <tr key={invoice.id}>
+                        <td className="px-5 py-3 font-medium">{invoice.invoice_number}</td>
+                        <td className="px-5 py-3">{invoice.member_id}</td>
+                        <td className="px-5 py-3 text-right">
+                          {fmtKES(invoice.county_charges ?? 0)}
+                        </td>
+                        <td className="px-5 py-3 text-right">{fmtKES(sbcCharges)}</td>
+                        <td className="px-5 py-3 text-right">
+                          {fmtKES(
+                            Number(invoice.waiver_amount ?? 0) +
+                              Number(invoice.discount_amount ?? 0),
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold">
+                          {fmtKES(invoice.final_amount ?? 0)}
+                        </td>
+                        <td className="px-5 py-3 capitalize">{invoice.status}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

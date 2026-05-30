@@ -612,6 +612,111 @@ export const listMemberServiceSubscriptions = createServerFn({ method: "GET" }).
   },
 );
 
+export const listServiceAdministrationReports = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireStaffActor();
+    const supabaseAdmin = requireSupabaseAdmin();
+    const [dashboardResult, memberReportsResult, invoicesResult, allocationsResult] =
+      await Promise.all([
+        supabaseAdmin.from("service_module_dashboard").select("*").maybeSingle(),
+        supabaseAdmin.from("service_member_reports").select("*").order("name", { ascending: true }),
+        supabaseAdmin
+          .from("service_billing_invoices")
+          .select("*")
+          .order("issued_at", { ascending: false })
+          .limit(200),
+        supabaseAdmin
+          .from("locomotive_business_wallet_allocations")
+          .select("*")
+          .order("allocated_at", { ascending: false })
+          .limit(200),
+      ]);
+
+    const failed = [dashboardResult, memberReportsResult, invoicesResult, allocationsResult].find(
+      (result) => result.error && !isMissingRelationError(result.error),
+    );
+    if (failed?.error) throw new Error(failed.error.message);
+
+    return {
+      dashboard: dashboardResult.error ? null : ((dashboardResult.data ?? null) as DbRow | null),
+      members: memberReportsResult.error ? [] : ((memberReportsResult.data ?? []) as DbRow[]),
+      invoices: invoicesResult.error ? [] : ((invoicesResult.data ?? []) as DbRow[]),
+      locomotiveAllocations: allocationsResult.error
+        ? []
+        : ((allocationsResult.data ?? []) as DbRow[]),
+    };
+  },
+);
+
+export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const actor = await requireStaffActor();
+    const supabaseAdmin = requireSupabaseAdmin();
+    const adminFilter =
+      actor.role === "locomotive_admin"
+        ? { column: "locomotive_admin_staff_id", value: actor.id }
+        : null;
+
+    const memberQuery = supabaseAdmin
+      .from("members")
+      .select("*")
+      .eq("locomotive_business_member", true)
+      .order("joined_at", { ascending: false });
+    if (adminFilter) memberQuery.eq(adminFilter.column, adminFilter.value);
+
+    const allocationQuery = supabaseAdmin
+      .from("locomotive_business_wallet_allocations")
+      .select("*")
+      .order("allocated_at", { ascending: false })
+      .limit(200);
+    if (actor.role === "locomotive_admin") allocationQuery.eq("admin_staff_id", actor.id);
+
+    const depositQuery = supabaseAdmin
+      .from("transactions")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (actor.memberId) depositQuery.eq("member_id", actor.memberId);
+
+    const [membersResult, allocationsResult, servicesResult, depositsResult] = await Promise.all([
+      memberQuery,
+      allocationQuery,
+      supabaseAdmin
+        .from("service_catalog")
+        .select("*")
+        .eq("active", true)
+        .eq("service_category", "locomotive_business_wallet")
+        .order("name", { ascending: true }),
+      depositQuery,
+    ]);
+
+    const failed = [membersResult, allocationsResult, servicesResult, depositsResult].find(
+      (result) => result.error && !isMissingRelationError(result.error),
+    );
+    if (failed?.error) throw new Error(failed.error.message);
+
+    const deposits = depositsResult.error ? [] : ((depositsResult.data ?? []) as DbRow[]);
+    const depositTotal = deposits
+      .filter((row) => readText(row.type) === "deposit")
+      .reduce((sum, row) => sum + readNumber(row.amount), 0);
+    const allocatedTotal = (allocationsResult.error ? [] : (allocationsResult.data ?? [])).reduce(
+      (sum: number, row: DbRow) => sum + readNumber(row.gross_amount),
+      0,
+    );
+
+    return {
+      actorMemberId: actor.memberId ?? "",
+      members: membersResult.error ? [] : ((membersResult.data ?? []) as DbRow[]),
+      allocations: allocationsResult.error ? [] : ((allocationsResult.data ?? []) as DbRow[]),
+      services: servicesResult.error ? [] : ((servicesResult.data ?? []) as DbRow[]),
+      deposits,
+      depositTotal,
+      allocatedTotal,
+      availableBalance: Math.max(0, depositTotal - allocatedTotal),
+    };
+  },
+);
+
 export const listMemberSelfServiceWorkspaceRecord = createServerFn({ method: "GET" })
   .inputValidator((data: { memberId?: string } | undefined) => ({
     memberId: data?.memberId?.trim() || undefined,
