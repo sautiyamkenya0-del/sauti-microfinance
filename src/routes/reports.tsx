@@ -197,6 +197,20 @@ function ReportsPage() {
       .toLowerCase()
       .includes("purpose pool"),
   );
+  const fuelBufferTransactions = transactions.filter((transaction) =>
+    transactionNoteIncludes(transaction.note, "locomotive fuel buffer", "fuel buffer"),
+  );
+  const stockBufferTransactions = transactions.filter((transaction) =>
+    transactionNoteIncludes(transaction.note, "stock buffer"),
+  );
+  const serviceWalletTransactions = transactions.filter((transaction) =>
+    transactionNoteIncludes(
+      transaction.note,
+      "service wallet",
+      "member service account",
+      "service payment",
+    ),
+  );
   const mandatoryFeeTransactions = feeTransactions.filter(
     (transaction) =>
       !String(transaction.note ?? "")
@@ -285,6 +299,15 @@ function ReportsPage() {
       date.slice(0, 10) <= reportWindowRange.end);
   const periodMembersJoined = memberAccounts.filter((member) => inReportWindow(member.joinedAt));
   const periodTransactions = transactions.filter((transaction) => inReportWindow(transaction.date));
+  const periodFuelBufferTransactions = fuelBufferTransactions.filter((transaction) =>
+    inReportWindow(transaction.date),
+  );
+  const periodStockBufferTransactions = stockBufferTransactions.filter((transaction) =>
+    inReportWindow(transaction.date),
+  );
+  const periodServiceWalletTransactions = serviceWalletTransactions.filter((transaction) =>
+    inReportWindow(transaction.date),
+  );
   const periodPenalties = penalties.filter((penalty) => inReportWindow(penalty.date));
   const periodRoundOff = roundOff.filter((entry) => inReportWindow(entry.date));
   const periodPettyCash = pettyCash.filter((entry) => inReportWindow(entry.date));
@@ -388,6 +411,27 @@ function ReportsPage() {
       "Membership, card, sticker, purpose-pool, and related fee collections.",
     ),
     movementRow(
+      "fuel_buffer",
+      "Fuel buffer",
+      periodFuelBufferTransactions.length,
+      periodFuelBufferTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      "Locomotive fuel-buffer money detected from fee/deposit routing.",
+    ),
+    movementRow(
+      "stock_buffer",
+      "Stock buffer",
+      periodStockBufferTransactions.length,
+      periodStockBufferTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      "Stock-buffer money detected from stock member routing.",
+    ),
+    movementRow(
+      "service_wallet",
+      "Service wallet",
+      periodServiceWalletTransactions.length,
+      periodServiceWalletTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      "Service-wallet and member service account allocations.",
+    ),
+    movementRow(
       "investor_contributions",
       "Investor contributions",
       periodTransactions,
@@ -472,6 +516,18 @@ function ReportsPage() {
       (!fuelMemberId || row.memberId === fuelMemberId) && inReportWindow(row.entry.date || ""),
   );
   const fuelReportSummary = summarizeFuelJobCardRows(fuelReportRows.map((row) => row.entry));
+  const fuelBufferTotal = fuelBufferTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
+  const stockBufferTotal = stockBufferTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
+  const serviceWalletTotal = serviceWalletTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
 
   const totalRevenue =
     interestEarned +
@@ -564,6 +620,27 @@ function ReportsPage() {
       count: mandatoryFeeTransactions.length,
       amount: mandatoryFees,
       note: "Collected through fee-payment transactions.",
+    },
+    {
+      key: "fuel_buffer_payments",
+      label: "Fuel buffer",
+      count: fuelBufferTransactions.length,
+      amount: fuelBufferTotal,
+      note: "Locomotive member buffer collections separated from general fees.",
+    },
+    {
+      key: "stock_buffer_payments",
+      label: "Stock buffer",
+      count: stockBufferTransactions.length,
+      amount: stockBufferTotal,
+      note: "Stock member buffer collections separated from general fees.",
+    },
+    {
+      key: "service_wallet_payments",
+      label: "Service wallet",
+      count: serviceWalletTransactions.length,
+      amount: serviceWalletTotal,
+      note: "Service-wallet allocations and service account payments.",
     },
     {
       key: "purpose_pool_income",
@@ -727,6 +804,104 @@ function ReportsPage() {
       sharePct: investor.sharePct,
     };
   });
+  const supplierPendingRequests = supplierRequests.filter(
+    (request: any) => String(request.status ?? "") !== "fulfilled",
+  );
+  const supplierFulfilledRequests = supplierRequests.filter(
+    (request: any) => String(request.status ?? "") === "fulfilled",
+  );
+  const supplierRequestedTotal = supplierRequests.reduce(
+    (sum: number, request: any) => sum + Number(request.amount ?? 0),
+    0,
+  );
+  const supplierPaidTotal = supplierOutflows.reduce(
+    (sum: number, outflow: any) => sum + Number(outflow.amount ?? 0),
+    0,
+  );
+  const internalStoreRows = supplierWorkspace?.internalStore ?? [];
+  const stockInventoryValue = internalStoreRows.reduce(
+    (sum: number, row: any) =>
+      sum +
+      Number(row.quantity_available ?? row.quantity ?? 0) *
+        Number(row.selling_price ?? row.unit_price ?? row.cost_price ?? 0),
+    0,
+  );
+  const operationalCoverageRows: BookRow[] = [
+    {
+      key: "fuel_buffer",
+      label: "Fuel buffer",
+      count: fuelBufferTransactions.length,
+      amount: fuelBufferTotal,
+      note: "Dedicated locomotive fuel-buffer collections.",
+    },
+    {
+      key: "fuel_job_cards",
+      label: "Fuel job card records",
+      count: fuelReportRows.length,
+      amount: fuelReportSummary.totalAmount,
+      note: `${fuelReportSummary.totalLiters.toFixed(2)} litres captured in the selected report window.`,
+    },
+    {
+      key: "stock_buffer",
+      label: "Stock buffer",
+      count: stockBufferTransactions.length,
+      amount: stockBufferTotal,
+      note: "Dedicated stock-buffer collections.",
+    },
+    {
+      key: "stock_inventory",
+      label: "Stock inventory",
+      count: internalStoreRows.length,
+      amount: stockInventoryValue,
+      note: "Available internal stock inventory value from supplier fulfilment/store records.",
+    },
+    {
+      key: "service_wallet",
+      label: "Service wallet",
+      count: serviceWalletTransactions.length,
+      amount: serviceWalletTotal,
+      note: "Service payment and wallet transactions routed outside ordinary loan reports.",
+    },
+    {
+      key: "service_billing",
+      label: "Service billing",
+      count: serviceReports.invoices.length,
+      amount: serviceReports.invoices.reduce(
+        (sum: number, invoice: any) => sum + Number(invoice.final_amount ?? 0),
+        0,
+      ),
+      note: "County/SBC service invoices visible to administration reports.",
+    },
+    {
+      key: "supplier_pipeline",
+      label: "Supplier pipeline",
+      count: supplierRequests.length,
+      amount: supplierRequestedTotal,
+      note: `${supplierPendingRequests.length} pending and ${supplierFulfilledRequests.length} fulfilled supplier requests.`,
+    },
+    {
+      key: "supplier_payments",
+      label: "Supplier payments",
+      count: supplierOutflows.length,
+      amount: supplierPaidTotal,
+      note: "Supplier outflows matched against supplier requests.",
+    },
+    {
+      key: "locomotive_business_wallet",
+      label: "Locomotive business wallet",
+      count: serviceReports.locomotiveAllocations.length,
+      amount: serviceReports.locomotiveAllocations.reduce(
+        (sum: number, row: any) => sum + Number(row.gross_amount ?? 0),
+        0,
+      ),
+      note: `${fmtKES(
+        serviceReports.locomotiveAllocations.reduce(
+          (sum: number, row: any) => sum + Number(row.deduction_amount ?? 0),
+          0,
+        ),
+      )} deducted by service rules.`,
+    },
+  ];
 
   return (
     <>
@@ -804,6 +979,15 @@ function ReportsPage() {
             />
           </div>
         </Section>
+
+        <BookTable
+          title="Operational Guardrail Coverage"
+          rows={operationalCoverageRows}
+          totalLabel="Tracked operational coverage"
+          totalCount={operationalCoverageRows.reduce((sum, row) => sum + row.count, 0)}
+          totalAmount={operationalCoverageRows.reduce((sum, row) => sum + row.amount, 0)}
+          totalNote="Fuel buffer, stock buffer, service wallet, suppliers, stock inventory, and locomotive business wallet shown separately from ordinary fee and loan lines."
+        />
 
         <BookTable
           title="Period Movement"
@@ -1471,6 +1655,11 @@ function BookTable({
       ) : null}
     </Section>
   );
+}
+
+function transactionNoteIncludes(note: unknown, ...needles: string[]) {
+  const normalized = String(note ?? "").toLowerCase();
+  return needles.some((needle) => normalized.includes(needle.toLowerCase()));
 }
 
 function classifyPenalty(reason: string) {
