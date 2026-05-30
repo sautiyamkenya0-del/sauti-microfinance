@@ -278,29 +278,23 @@ function ReportsPage() {
     (sum, transaction) => sum + transaction.amount,
     0,
   );
-  const purposePoolRevenue = purposePoolTransactions.reduce(
-    (sum, transaction) => sum + transaction.amount,
+  const reconciledBooks = buildReconciledMemberBooks({
+    members: memberAccounts,
+    transactions,
+    loans,
+    carryoverLoans,
+    penalties,
+    sharePrice,
+    policySettings,
+  });
+  const purposePoolRevenue = Array.from(reconciledBooks.values()).reduce(
+    (sum, book) => sum + book.purposePool,
     0,
   );
-  const profilePurposePoolBalance = carryoverProfiles.reduce(
-    (sum, profile) =>
-      sum + numberValue(objectValue(profile.collectionBreakdown).purposePoolBalance),
-    0,
-  );
-  const purposePoolCurrentBalance =
-    carryoverProfiles.length > 0 ? profilePurposePoolBalance : purposePoolRevenue;
-  const filteredPurposePoolProfile = purposePoolMemberId
-    ? carryoverProfiles.find((profile) => profile.memberId === purposePoolMemberId)
-    : undefined;
-  const filteredPurposePoolRevenue = purposePoolMemberId
-    ? numberValue(objectValue(filteredPurposePoolProfile?.collectionBreakdown).purposePoolBalance)
+  const purposePoolCurrentBalance = purposePoolRevenue;
+  const filteredPurposePoolBalance = purposePoolMemberId
+    ? (reconciledBooks.get(purposePoolMemberId)?.purposePool ?? 0)
     : purposePoolCurrentBalance;
-  const filteredPurposePoolBalance =
-    purposePoolMemberId && !filteredPurposePoolProfile
-      ? purposePoolTransactions
-          .filter((transaction) => transaction.memberId === purposePoolMemberId)
-          .reduce((sum, transaction) => sum + transaction.amount, 0)
-      : filteredPurposePoolRevenue;
   const purposePoolRows = PURPOSE_POOL_DISTRIBUTION.map((row) => ({
     ...row,
     totalAmount: (purposePoolCurrentBalance * row.pct) / 100,
@@ -503,9 +497,6 @@ function ReportsPage() {
   const contributionCarryoverLoans = contributionMemberId
     ? carryoverLoans.filter((loan) => loan.memberId === contributionMemberId)
     : [];
-  const contributionCarryoverProfile = contributionMemberId
-    ? carryoverProfiles.find((profile) => profile.memberId === contributionMemberId)
-    : undefined;
   const contributionPurposePoolTransactions = contributionTransactions.filter((transaction) =>
     isPurposePoolTransaction(transaction),
   );
@@ -519,57 +510,52 @@ function ReportsPage() {
   const contributionPenaltyRows = penalties.filter(
     (penalty) => penalty.memberId === contributionMemberId,
   );
-  const contributionPurposePoolBalance = Math.max(
-    0,
-    numberValue(
-      objectValue(contributionCarryoverProfile?.collectionBreakdown).purposePoolBalance ??
-        contributionPurposePoolTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
-    ),
-  );
+  const contributionBook = contributionMemberId
+    ? reconciledBooks.get(contributionMemberId)
+    : undefined;
   const contributionRows: BookRow[] = [
     movementRow(
       "loan_repayment",
       "Loans",
       contributionLiveLoans.length + contributionCarryoverLoans.length,
-      contributionLiveLoans.reduce((sum, loan) => sum + loan.paid, 0) +
-        contributionCarryoverLoans.reduce((sum, loan) => sum + loan.paidToDate, 0),
-      "Paid amounts from live and carryover loan records.",
+      contributionBook?.loans ?? 0,
+      "Reconciled from lifetime net, capped so loans never exceed real member money.",
     ),
     movementRow(
       "savings",
       "Savings",
       contributionTransactions.filter((transaction) => transaction.type === "deposit").length,
-      contributionMember?.savingsBalance ?? 0,
-      "Current savings balance.",
+      contributionBook?.savings ?? 0,
+      "Reconciled current savings balance.",
     ),
     movementRow(
       "shares",
       "Shares",
       contributionTransactions.filter((transaction) => transaction.type === "share_purchase")
         .length,
-      (contributionMember?.shares ?? 0) * sharePrice,
-      "Current share value.",
+      contributionBook?.shares ?? 0,
+      "Reconciled current share value.",
     ),
     movementRow(
       "purpose_pool",
       "Purpose pool",
       contributionPurposePoolTransactions.length,
-      contributionPurposePoolBalance,
-      "",
+      contributionBook?.purposePool ?? 0,
+      "Remainder after savings, shares, actual fees, loans, and penalties.",
     ),
     movementRow(
       "fees",
       "Fees",
       contributionFeeTransactions.length,
-      contributionFeeTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      contributionBook?.fees ?? 0,
       "Actual member fees only; purpose-pool and operational routing rows are excluded.",
     ),
     movementRow(
       "penalties",
       "Penalties",
       contributionPenaltyRows.length,
-      contributionPenaltyRows.reduce((sum, penalty) => sum + penalty.amount, 0),
-      "",
+      contributionBook?.penalties ?? 0,
+      "Paid/outstanding penalties capped by lifetime net.",
     ),
   ];
   const loanCategoryReportRows = (["financial", "fuel", "stock", "service"] as const).map((kind) => {
@@ -914,7 +900,7 @@ function ReportsPage() {
       key: "fuel_job_cards",
       label: "Fuel job card records",
       count: fuelReportRows.length,
-      amount: fuelReportSummary.totalAmount,
+      amount: fuelReportSummary.totalCost,
       note: `${fuelReportSummary.totalLiters.toFixed(2)} litres captured in the selected report window.`,
     },
     {
@@ -1293,6 +1279,24 @@ function ReportsPage() {
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t border-border text-sm font-semibold">
+                  <tr>
+                    <td className="px-5 py-3">Allocated total</td>
+                    <td className="px-5 py-3 text-right">
+                      {contributionRows.reduce((sum, row) => sum + row.count, 0)}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {fmtKES(contributionRows.reduce((sum, row) => sum + row.amount, 0))}
+                    </td>
+                  </tr>
+                  <tr className="text-muted-foreground">
+                    <td className="px-5 py-3">Lifetime net</td>
+                    <td className="px-5 py-3 text-right">-</td>
+                    <td className="px-5 py-3 text-right">
+                      {fmtKES(contributionBook?.lifetimeNet ?? 0)}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
@@ -1889,6 +1893,145 @@ function movementRow(
     amount: Number(typeOrAmount ?? 0),
     note,
   };
+}
+
+type ReconciledMemberBook = {
+  lifetimeNet: number;
+  savings: number;
+  shares: number;
+  fees: number;
+  loans: number;
+  penalties: number;
+  purposePool: number;
+};
+
+function buildReconciledMemberBooks(args: {
+  members: ReturnType<typeof useStore>["members"];
+  transactions: ReturnType<typeof useStore>["transactions"];
+  loans: ReturnType<typeof useStore>["loans"];
+  carryoverLoans: LegacyCarryoverLoan[];
+  penalties: ReturnType<typeof useStore>["penalties"];
+  sharePrice: number;
+  policySettings: ReturnType<typeof useStore>["policySettings"];
+}) {
+  const transactionsByMember = new Map<string, typeof args.transactions>();
+  for (const transaction of args.transactions) {
+    if (!transaction.memberId) continue;
+    const group = transactionsByMember.get(transaction.memberId) ?? [];
+    group.push(transaction);
+    transactionsByMember.set(transaction.memberId, group);
+  }
+
+  const liveLoansByMember = new Map<string, typeof args.loans>();
+  for (const loan of args.loans) {
+    if (loan.status === "pending" || loan.status === "rejected") continue;
+    const group = liveLoansByMember.get(loan.memberId) ?? [];
+    group.push(loan);
+    liveLoansByMember.set(loan.memberId, group);
+  }
+
+  const carryoverLoansByMember = new Map<string, LegacyCarryoverLoan[]>();
+  for (const loan of args.carryoverLoans) {
+    const group = carryoverLoansByMember.get(loan.memberId) ?? [];
+    group.push(loan);
+    carryoverLoansByMember.set(loan.memberId, group);
+  }
+
+  const penaltiesByMember = new Map<string, typeof args.penalties>();
+  for (const penalty of args.penalties) {
+    const group = penaltiesByMember.get(penalty.memberId) ?? [];
+    group.push(penalty);
+    penaltiesByMember.set(penalty.memberId, group);
+  }
+
+  const books = new Map<string, ReconciledMemberBook>();
+  for (const member of args.members) {
+    const memberTransactions = transactionsByMember.get(member.id) ?? [];
+    const lifetimeNet = reportMoney(
+      memberTransactions.reduce((sum, transaction) => {
+        const amount = numberValue(transaction.amount);
+        if (
+          transaction.type === "deposit" ||
+          transaction.type === "loan_repayment" ||
+          transaction.type === "share_purchase" ||
+          transaction.type === "fee_payment" ||
+          transaction.type === "investor_contribution"
+        ) {
+          return sum + amount;
+        }
+        if (transaction.type === "withdrawal" || transaction.type === "loan_disbursement") {
+          return sum - amount;
+        }
+        return sum;
+      }, 0),
+    );
+
+    let remaining = lifetimeNet;
+    const take = (amount: number) => {
+      const value = Math.min(remaining, Math.max(0, reportMoney(amount)));
+      remaining = reportMoney(remaining - value);
+      return value;
+    };
+
+    const savings = take(member.savingsBalance);
+    const shares = take(member.shares * args.sharePrice + numberValue(member.shareReserveBalance));
+    const fees = take(
+      memberTransactions
+        .filter(
+          (transaction) =>
+            transaction.type === "fee_payment" &&
+            transaction.amount > 0 &&
+            !isPurposePoolTransaction(transaction) &&
+            !isOperationalRoutingTransaction(transaction),
+        )
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+    );
+
+    const loanTargets = [
+      ...(liveLoansByMember.get(member.id) ?? []).map((loan) => {
+        const summary = loanPenaltySummary(loan, args.transactions);
+        return {
+          date: loan.startDate,
+          id: loan.id,
+          expected: Math.max(0, summary.totalExpectedCollected),
+        };
+      }),
+      ...(carryoverLoansByMember.get(member.id) ?? []).map((loan) => {
+        const summary = summarizeLegacyCarryoverLoan(loan, args.policySettings);
+        return {
+          date: loan.startDate,
+          id: loan.id,
+          expected: Math.max(0, summary.totalExpectedCollected, summary.totalRepayment),
+        };
+      }),
+    ].sort((left, right) => {
+      const byDate = left.date.localeCompare(right.date);
+      if (byDate !== 0) return byDate;
+      return left.id.localeCompare(right.id);
+    });
+
+    const loans = loanTargets.reduce((sum, loan) => sum + take(loan.expected), 0);
+    const penalties = take(
+      (penaltiesByMember.get(member.id) ?? []).reduce((sum, penalty) => sum + penalty.amount, 0),
+    );
+    const purposePool = take(remaining);
+
+    books.set(member.id, {
+      lifetimeNet,
+      savings,
+      shares,
+      fees,
+      loans: reportMoney(loans),
+      penalties,
+      purposePool,
+    });
+  }
+
+  return books;
+}
+
+function reportMoney(value: number) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
