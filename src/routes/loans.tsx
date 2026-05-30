@@ -182,6 +182,7 @@ function LoansHub() {
         if ((loan.loanKind ?? "financial") !== loanKind) return false;
         if (loan.status === "rejected") return false;
         if (loan.status === "pending") return true;
+        if (loan.status === "closed") return false;
         const summary = loanSummary(loan);
         const balance = summary.balance;
         if (balance <= 0) return false;
@@ -553,8 +554,9 @@ function CarryoverEntry({
       if ((loan.loanKind ?? "financial") !== loanKind) return false;
       if (loan.status === "pending") return true;
       if (loan.status === "rejected") return false;
+      if (loan.status === "closed") return false;
       const summary = loanSummary(loan);
-      return summary.balance > 0 && (loan.status !== "closed" || summary.dueDate < todayIso);
+      return summary.balance > 0 && (loan.status === "active" || loan.status === "defaulted");
     });
     if (live)
       return `${openLoanStatusLabel(live.status)} ${loanKindLabel(loanKind)} loan ${live.id}`;

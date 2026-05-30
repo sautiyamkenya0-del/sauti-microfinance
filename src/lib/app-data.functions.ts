@@ -918,10 +918,7 @@ async function assertNoDuplicateOpenLoanKind(
     }
     if (status === "rejected") continue;
     const summary = await liveLoanAccountingSummary(supabaseAdmin, loan as any, policySettings);
-    if (status === "closed") {
-      if (summary.balance > 0) blockingLiveLoans.push(loan);
-      continue;
-    }
+    if (status === "closed") continue;
     if (["active", "defaulted"].includes(status) && summary.balance > 0) {
       blockingLiveLoans.push(loan);
     }
@@ -929,7 +926,7 @@ async function assertNoDuplicateOpenLoanKind(
   const blockingCarryoverLoans = (carryoverData ?? []).filter((loan: Record<string, unknown>) => {
     const status = String(loan.status ?? "active");
     const summary = carryoverLoanBalanceSummary(loan, policySettings);
-    if (status === "closed" || loan.finished === true) return summary.balance > 0;
+    if (status === "closed" || loan.finished === true) return false;
     return ["active", "defaulted"].includes(status) && summary.balance > 0;
   });
 
@@ -3708,6 +3705,27 @@ async function nextPrefixedId(
   return String(data);
 }
 
+async function nextAvailableStaffId(supabaseAdmin: any) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = await nextPrefixedId("staff", "S", 1);
+    const { data, error } = await supabaseAdmin
+      .from("staff")
+      .select("id")
+      .eq("id", candidate)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return candidate;
+  }
+
+  const { data, error } = await supabaseAdmin.from("staff").select("id");
+  if (error) throw new Error(error.message);
+  const maxNumericId = ((data ?? []) as Array<{ id?: string | null }>).reduce((max, row) => {
+    const match = String(row.id ?? "").match(/^S(\d+)$/i);
+    return match ? Math.max(max, Number(match[1]) || 0) : max;
+  }, 0);
+  return `S${maxNumericId + 1}`;
+}
+
 function approxDataUrlBytes(value: string) {
   const payload = value.includes(",") ? value.slice(value.indexOf(",") + 1) : value;
   return Math.ceil((payload.length * 3) / 4);
@@ -6017,23 +6035,32 @@ export const createStaffRecord = createServerFn({ method: "POST" })
         throw new Error("Linked locomotive admin membership number was not found.");
     }
 
-    const staffId = await nextPrefixedId("staff", "S", 1);
-    const { error } = await supabaseAdmin.from("staff").insert({
-      id: staffId,
-      name: data.name,
-      role: data.role as never,
-      member_id: data.memberId ?? null,
-      email: data.email,
-      phone: data.phone ?? null,
-      national_id: data.nationalId ?? null,
-      address: data.address ?? null,
-      notes: data.notes ?? null,
-      photo: data.photo ?? null,
-      temp_password: hashPassword(data.tempPassword),
-      can_mark_attendance: data.role === "director" ? true : data.canMarkAttendance,
-      fingerprint_enrolled: data.fingerprintEnrolled,
-    });
-    if (error) throw new Error(error.message);
+    let staffId = "";
+    let insertError: any = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      staffId = await nextAvailableStaffId(supabaseAdmin);
+      const { error } = await supabaseAdmin.from("staff").insert({
+        id: staffId,
+        name: data.name,
+        role: data.role as never,
+        member_id: data.memberId ?? null,
+        email: data.email,
+        phone: data.phone ?? null,
+        national_id: data.nationalId ?? null,
+        address: data.address ?? null,
+        notes: data.notes ?? null,
+        photo: data.photo ?? null,
+        temp_password: hashPassword(data.tempPassword),
+        can_mark_attendance: data.role === "director" ? true : data.canMarkAttendance,
+        fingerprint_enrolled: data.fingerprintEnrolled,
+      });
+      insertError = error;
+      if (!error) break;
+      if (error.code !== "23505" || !String(error.message ?? "").includes("staff_pkey")) {
+        throw new Error(error.message);
+      }
+    }
+    if (insertError) throw new Error(insertError.message);
     await auditAction({
       actor,
       action: "staff.created",

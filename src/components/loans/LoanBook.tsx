@@ -75,6 +75,7 @@ function logicalLoanStatus(
   dueDate: string,
   today: string = new Date().toISOString().slice(0, 10),
 ) {
+  if (status === "closed") return "closed";
   if (balance <= 0) return "closed";
   if (status === "rejected" || status === "pending") return status;
   if (status === "defaulted" || dueDate < today) return "defaulted";
