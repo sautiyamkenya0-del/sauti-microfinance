@@ -104,6 +104,27 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function receiptKey(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function dedupeMemberTransactions<T extends { id: string; type: string; amount: number; ref?: string; loanId?: string; date: string }>(
+  rows: T[],
+) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const ref = receiptKey(row.ref);
+    const key = ref
+      ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}`
+      : `id|${row.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export const Route = createFileRoute("/portal")({
   head: () => ({ meta: [{ title: "Member Portal — Sauti Microfinance" }] }),
   component: Portal,
@@ -171,6 +192,7 @@ function Portal() {
         .toLowerCase()
         .includes("purpose pool contribution"),
   );
+  const myUniqueTx = useMemo(() => dedupeMemberTransactions(myTx), [myTx]);
   const myPen = penalties.filter((p) => p.memberId === memberId);
   const canRequestLoans = member ? !memberIsServiceOnly(member) : false;
   const fees = feePolicies.filter(isFeeActive);
@@ -337,6 +359,27 @@ function Portal() {
   const selectedStockItem = serviceWorkspace.stockItems.find(
     (item) => String(item.id) === stockRequestItemId,
   );
+  const uniqueLoanRepaymentTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    myUniqueTx
+      .filter((transaction) => transaction.type === "loan_repayment" && transaction.loanId)
+      .forEach((transaction) => {
+        totals.set(
+          transaction.loanId ?? "",
+          (totals.get(transaction.loanId ?? "") ?? 0) + transaction.amount,
+        );
+      });
+    return totals;
+  }, [myUniqueTx]);
+  const displayLoanPaid = useCallback(
+    (loan: (typeof loans)[number]) => {
+      const receiptBackedTotal = uniqueLoanRepaymentTotals.get(loan.id) ?? 0;
+      return receiptBackedTotal > 0 && receiptBackedTotal < loan.paid
+        ? receiptBackedTotal
+        : loan.paid;
+    },
+    [uniqueLoanRepaymentTotals],
+  );
 
   const clientAlerts = useMemo<ClientAlert[]>(() => {
     if (!member) return [];
@@ -355,7 +398,7 @@ function Portal() {
         });
       });
 
-    const compliancePaidToday = myTx.some(
+    const compliancePaidToday = myUniqueTx.some(
       (transaction) =>
         transaction.date.slice(0, 10) === today &&
         (transaction.type === "deposit" || transaction.type === "loan_repayment"),
@@ -385,10 +428,10 @@ function Portal() {
     myLoans
       .filter((loan) => loan.status === "active")
       .forEach((loan) => {
-        const summary = loanSummary(loan);
+        const summary = loanSummary({ ...loan, paid: displayLoanPaid(loan) });
         if (summary.balance <= 0) return;
         const dailyDue = summary.dailyCollectionAmount;
-        const paidToday = myTx
+        const paidToday = myUniqueTx
           .filter(
             (transaction) =>
               transaction.type === "loan_repayment" &&
@@ -406,25 +449,31 @@ function Portal() {
         });
       });
 
-    myTx
-      .filter(
-        (transaction) =>
-          transaction.date.slice(0, 10) === today &&
-          ["deposit", "loan_repayment", "fee_payment", "share_purchase"].includes(transaction.type),
+    scopedMpesaReceiptRows
+      .filter((receipt: any) =>
+        String(receipt.exactReceivedAt ?? receipt.createdAt ?? "").slice(0, 10) === today,
       )
       .slice(0, 5)
-      .forEach((transaction) => {
+      .forEach((receipt: any) => {
         out.push({
-          id: `receipt-${transaction.id}`,
+          id: `receipt-${receipt.id}`,
           kind: "info",
           title: "Payment received",
-          detail: `${transaction.type.replace(/_/g, " ")} / ${fmtKES(transaction.amount)}`,
+          detail: `${receipt.typeLabel ?? "M-Pesa receipt"} / ${fmtKES(Number(receipt.originalAmount ?? receipt.amount ?? 0))}`,
           tab: "transactions",
         });
       });
 
     return out;
-  }, [clientNotices, member, myLoans, myPen, myTx]);
+  }, [
+    clientNotices,
+    displayLoanPaid,
+    member,
+    myLoans,
+    myPen,
+    myUniqueTx,
+    scopedMpesaReceiptRows,
+  ]);
 
   async function downloadClientLetter(notice: ClientNotice) {
     if (notice.documentKind !== "letter") return;
@@ -1440,7 +1489,9 @@ function Portal() {
                     <div className="text-sm text-muted-foreground">No loans on file.</div>
                   )}
                   {myLoans.map((l) => {
-                    const summary = loanSummary(l);
+                    const displayedPaid = displayLoanPaid(l);
+                    const displayLoan = { ...l, paid: displayedPaid };
+                    const summary = loanSummary(displayLoan);
                     const balance = summary.balance;
                     const end = new Date(summary.dueDate);
                     const start = new Date(`${l.startDate}T00:00:00`);
@@ -1462,7 +1513,7 @@ function Portal() {
                     );
                     const dailyDue = summary.dailyCollectionAmount;
                     const complianceExpected = summary.dailySavingsAmount * elapsedDays;
-                    const compliancePaid = Math.min(l.paid, complianceExpected);
+                    const compliancePaid = Math.min(displayedPaid, complianceExpected);
                     const loanPenalties = penalties.filter((p) => p.loanId === l.id);
                     const outstandingPen = loanPenalties
                       .filter((p) => p.status === "outstanding")
@@ -1498,7 +1549,7 @@ function Portal() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
                           <Stat label="Total payable" value={fmtKES(summary.total)} />
-                          <Stat label="Paid so far" value={fmtKES(l.paid)} />
+                          <Stat label="Paid so far" value={fmtKES(displayedPaid)} />
                           <Stat
                             label="Outstanding"
                             value={fmtKES(balance)}
@@ -1697,7 +1748,40 @@ function Portal() {
                   Original M-Pesa receipts are shown from the same receipt audit used in Capital
                   Operations.
                 </div>
-                <div className="max-h-[60vh] overflow-x-auto">
+                <div className="max-h-[60vh] overflow-y-auto">
+                  <div className="grid gap-3 p-4 md:hidden">
+                    {scopedMpesaReceiptRows.length === 0 && (
+                      <div className="rounded-md border border-border p-4 text-center text-sm text-muted-foreground">
+                        No original M-Pesa receipts found for this member yet.
+                      </div>
+                    )}
+                    {scopedMpesaReceiptRows.map((t: any) => (
+                      <div key={t.id} className="rounded-md border border-border bg-card p-3 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-xs font-semibold">
+                              {t.mpesaRef ?? t.id}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {t.exactReceivedAt || t.createdAt
+                                ? new Date(t.exactReceivedAt ?? t.createdAt).toLocaleString()
+                                : "-"}
+                            </div>
+                          </div>
+                          <div className="text-right font-semibold">
+                            {fmtKES(Number(t.originalAmount ?? t.amount ?? 0))}
+                          </div>
+                        </div>
+                        <div className="mt-3 text-xs text-muted-foreground">
+                          {t.note ?? t.ref ?? "M-Pesa receipt"}
+                        </div>
+                        <div className="mt-2 font-mono text-[11px] text-muted-foreground">
+                          Account {t.account ?? memberId}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hidden overflow-x-auto md:block">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                       <tr>
@@ -1733,6 +1817,7 @@ function Portal() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </Section>
             )}

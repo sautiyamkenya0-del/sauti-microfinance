@@ -242,6 +242,10 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
             }
 
             if (stkResult.ok) {
+              const checkoutRequestId =
+                String(stkResult.body.CheckoutRequestID ?? "").trim() || undefined;
+              const merchantRequestId =
+                String(stkResult.body.MerchantRequestID ?? "").trim() || undefined;
               try {
                 await recordMpesaStkPushRequestEvent({
                   raw: {
@@ -257,15 +261,12 @@ export const Route = createFileRoute("/api/public/mpesa/stkpush")({
                   account: accountRef.toUpperCase(),
                   amount,
                   phone: msisdn,
-                  checkoutRequestId:
-                    String(stkResult.body.CheckoutRequestID ?? "").trim() || undefined,
-                  merchantRequestId:
-                    String(stkResult.body.MerchantRequestID ?? "").trim() || undefined,
+                  checkoutRequestId,
+                  merchantRequestId,
                 });
               } catch (trackingError) {
                 console.error("stkpush request tracking error", trackingError);
               }
-
               return Response.json({
                 ok: true,
                 ...stkResult.body,

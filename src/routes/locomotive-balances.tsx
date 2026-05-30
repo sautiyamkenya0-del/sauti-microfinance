@@ -1,5 +1,6 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { RefreshCw, Send, Smartphone, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -11,7 +12,11 @@ import {
   useLocomotiveWorkspace,
 } from "@/components/locomotive/LocomotiveWorkspace";
 import { Section, StatCard } from "@/components/ui-bits";
-import { createLocomotiveBusinessWalletAllocationRecord } from "@/lib/app-data.functions";
+import {
+  createLocomotiveBusinessWalletAllocationRecord,
+  createLocomotiveBusinessWalletPromptRecord,
+  listMpesaReceiptAudit,
+} from "@/lib/app-data.functions";
 import { formatMembershipNumber } from "@/lib/membership";
 import { fmtKES, useStore } from "@/lib/store";
 
@@ -23,6 +28,8 @@ export const Route = createFileRoute("/locomotive-balances")({
 function LocomotiveBalancesPage() {
   const { currentUser } = useStore();
   const createAllocation = useServerFn(createLocomotiveBusinessWalletAllocationRecord);
+  const createPromptRecord = useServerFn(createLocomotiveBusinessWalletPromptRecord);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const { workspace, refresh } = useLocomotiveWorkspace();
   const [busy, setBusy] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
@@ -30,6 +37,7 @@ function LocomotiveBalancesPage() {
     beneficiaryMemberId: "",
     grossAmount: "",
     serviceId: "",
+    paymentMethod: "cash",
     note: "",
   });
   const [promptDraft, setPromptDraft] = useState({
@@ -77,6 +85,13 @@ function LocomotiveBalancesPage() {
     promptDraft.payer === "custom"
       ? promptDraft.phone
       : String(selectedPromptMember?.phone ?? "");
+  const { data: adminReceiptRows = [] } = useQuery({
+    queryKey: ["locomotive-admin-mpesa-receipts", workspace.actorMemberId],
+    queryFn: () => fetchMpesaAudit({ data: { memberId: workspace.actorMemberId } }),
+    enabled: !!workspace.actorMemberId,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
 
   if (!allowed) return <Navigate to="/" />;
 
@@ -88,12 +103,24 @@ function LocomotiveBalancesPage() {
           beneficiaryMemberId: allocationDraft.beneficiaryMemberId,
           grossAmount: Number(allocationDraft.grossAmount || 0),
           serviceId: allocationDraft.serviceId || undefined,
+          paymentMethod:
+            allocationDraft.paymentMethod === "mpesa_manual" ? "mpesa_manual" : "cash",
           note: allocationDraft.note,
         },
       });
-      setAllocationDraft({ beneficiaryMemberId: "", grossAmount: "", serviceId: "", note: "" });
+      setAllocationDraft({
+        beneficiaryMemberId: "",
+        grossAmount: "",
+        serviceId: "",
+        paymentMethod: "cash",
+        note: "",
+      });
       await refresh();
-      toast.success(`Allocated ${fmtKES(result.netAmount)} after deductions.`);
+      toast.success(
+        allocationDraft.paymentMethod === "cash"
+          ? `Cash recorded: ${fmtKES(result.netAmount)} after deductions.`
+          : "M-Pesa entry is pending until the exact wallet deposit is detected.",
+      );
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to allocate wallet funds.");
     } finally {
@@ -128,16 +155,43 @@ function LocomotiveBalancesPage() {
         body: JSON.stringify({
           phone: promptPhone,
           amount,
-          accountRef: adminAccountRef,
+          accountRef: `${adminAccountRef}-LW`,
           description: `Locomotive wallet deposit - ${payerName}${
             promptDraft.note ? ` - ${promptDraft.note}` : ""
           }`,
+          locomotiveWallet:
+            promptDraft.payer === "custom"
+              ? undefined
+              : {
+                  beneficiaryMemberId:
+                    promptDraft.payer === "self" ? workspace.actorMemberId : promptDraft.payer,
+                  note: promptDraft.note,
+                },
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
         toast.error(data.error ?? data.errorMessage ?? "STK prompt failed.");
         return;
+      }
+      if (promptDraft.payer !== "custom") {
+        try {
+          await createPromptRecord({
+            data: {
+              beneficiaryMemberId:
+                promptDraft.payer === "self" ? workspace.actorMemberId : promptDraft.payer,
+              grossAmount: amount,
+              expectedPhone: promptPhone,
+              checkoutRequestId: data.CheckoutRequestID,
+              merchantRequestId: data.MerchantRequestID,
+              note: promptDraft.note,
+            },
+          });
+        } catch (ledgerError: any) {
+          toast.warning("Prompt sent, but the pending ledger row was not created.", {
+            description: ledgerError?.message,
+          });
+        }
       }
       setPromptDraft({ payer: "self", phone: "", amount: "", note: "" });
       await refresh();
@@ -156,7 +210,7 @@ function LocomotiveBalancesPage() {
         subtitle="View your wallet balance and distribute funds to registered members."
       />
       <main className="flex-1 space-y-6 p-6 lg:p-8">
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <StatCard
             label="Admin Paybill account"
             value={adminAccountRef || "Not linked"}
@@ -165,6 +219,7 @@ function LocomotiveBalancesPage() {
           />
           <StatCard label="Detected deposits" value={fmtKES(workspace.depositTotal)} />
           <StatCard label="Allocated gross" value={fmtKES(workspace.allocatedTotal)} />
+          <StatCard label="Pending ledger" value={fmtKES(workspace.pendingTotal)} />
           <StatCard label="Available balance" value={fmtKES(workspace.availableBalance)} />
         </div>
 
@@ -227,7 +282,9 @@ function LocomotiveBalancesPage() {
             />
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm md:col-span-2">
               Account receiving payment:{" "}
-              <span className="font-mono font-semibold">{adminAccountRef || "Not linked"}</span>
+              <span className="font-mono font-semibold">
+                {adminAccountRef ? `${adminAccountRef}-LW` : "Not linked"}
+              </span>
             </div>
             <button
               disabled={promptBusy || !adminAccountRef}
@@ -274,6 +331,19 @@ function LocomotiveBalancesPage() {
                 </option>
               ))}
             </select>
+            <select
+              className={inputCls}
+              value={allocationDraft.paymentMethod}
+              onChange={(event) =>
+                setAllocationDraft((draft) => ({
+                  ...draft,
+                  paymentMethod: event.target.value,
+                }))
+              }
+            >
+              <option value="cash">Cash paid</option>
+              <option value="mpesa_manual">M-Pesa pending verification</option>
+            </select>
             <input
               className={inputCls}
               type="number"
@@ -315,36 +385,75 @@ function LocomotiveBalancesPage() {
               className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
             >
               <Send className="h-4 w-4" />
-              Allocate funds
+              {allocationDraft.paymentMethod === "cash"
+                ? "Record cash payment"
+                : "Record pending M-Pesa"}
             </button>
           </div>
         </Section>
 
-        <Section title={`Admin account deposits (${workspace.deposits.length})`}>
-          <DataTable
-            empty="No deposits have landed in the admin account yet."
-            headers={["Date", "Type", "Amount", "Account", "Payer", "Reference"]}
-            rows={workspace.deposits.slice(0, 30).map((row: any) => [
-              String(row.created_at ?? row.date ?? "").slice(0, 10),
-              row.type ?? "",
-              fmtKES(row.amount ?? 0),
-              row.account ?? adminAccountRef,
-              row.payer_name ?? "",
-              row.ref ?? "",
-            ])}
-          />
+        <Section title={`Original M-Pesa receipts (${(adminReceiptRows as any[]).length})`}>
+          <div className="grid gap-3 p-4 md:hidden">
+            {(adminReceiptRows as any[]).length === 0 && (
+              <div className="rounded-md border border-border p-4 text-center text-sm text-muted-foreground">
+                No original M-Pesa receipts have landed in the admin account yet.
+              </div>
+            )}
+            {(adminReceiptRows as any[]).slice(0, 30).map((row: any) => (
+              <div key={row.id} className="rounded-md border border-border bg-card p-3 text-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-mono text-xs font-semibold">
+                      {row.mpesaRef ?? row.id}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {row.exactReceivedAt || row.createdAt
+                        ? new Date(row.exactReceivedAt ?? row.createdAt).toLocaleString()
+                        : "-"}
+                    </div>
+                  </div>
+                  <div className="text-right font-semibold">
+                    {fmtKES(Number(row.originalAmount ?? row.amount ?? 0))}
+                  </div>
+                </div>
+                <div className="mt-3 text-xs text-muted-foreground">
+                  {row.note ?? "M-Pesa receipt"}
+                </div>
+                <div className="mt-2 font-mono text-[11px] text-muted-foreground">
+                  Account {row.account ?? adminAccountRef}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden md:block">
+            <DataTable
+              empty="No original M-Pesa receipts have landed in the admin account yet."
+              headers={["Date / Time", "Receipt", "Receipt detail", "Account", "Amount"]}
+              rows={(adminReceiptRows as any[]).slice(0, 30).map((row: any) => [
+                row.exactReceivedAt || row.createdAt
+                  ? new Date(row.exactReceivedAt ?? row.createdAt).toLocaleString()
+                  : "-",
+                row.mpesaRef ?? row.id,
+                row.note ?? "M-Pesa receipt",
+                row.account ?? adminAccountRef,
+                fmtKES(Number(row.originalAmount ?? row.amount ?? 0)),
+              ])}
+            />
+          </div>
         </Section>
 
         <Section title={`Allocations (${workspace.allocations.length})`}>
           <DataTable
             empty="No allocations posted yet."
-            headers={["Date", "Member", "Gross", "Deduction", "Net", "Note"]}
+            headers={["Date", "Member", "Gross", "Deduction", "Net", "Method", "Status", "Note"]}
             rows={workspace.allocations.map((row: any) => [
               String(row.allocated_at ?? "").slice(0, 10),
               row.beneficiary_member_id ?? "",
               fmtKES(row.gross_amount ?? 0),
               fmtKES(row.deduction_amount ?? 0),
               fmtKES(row.net_amount ?? 0),
+              String(row.payment_method ?? "mpesa").replace(/_/g, " "),
+              row.status ?? "confirmed",
               row.note ?? "",
             ])}
           />

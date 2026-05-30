@@ -714,20 +714,36 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
     const depositTotal = deposits
       .filter((row) => readText(row.type) === "deposit")
       .reduce((sum, row) => sum + readNumber(row.amount), 0);
-    const allocatedTotal = (allocationsResult.error ? [] : (allocationsResult.data ?? [])).reduce(
-      (sum: number, row: DbRow) => sum + readNumber(row.gross_amount),
-      0,
-    );
+    const allocations = allocationsResult.error ? [] : ((allocationsResult.data ?? []) as DbRow[]);
+    const allocatedTotal = allocations
+      .filter(
+        (row) =>
+          readText(row.status || "confirmed") === "confirmed" &&
+          readText(row.payment_method || "mpesa") !== "cash",
+      )
+      .reduce((sum: number, row: DbRow) => sum + readNumber(row.gross_amount), 0);
+    const pendingTotal = allocations
+      .filter((row) => readText(row.status || "confirmed") === "pending")
+      .reduce((sum: number, row: DbRow) => sum + readNumber(row.gross_amount), 0);
+    const cashTotal = allocations
+      .filter(
+        (row) =>
+          readText(row.status || "confirmed") === "confirmed" &&
+          readText(row.payment_method || "mpesa") === "cash",
+      )
+      .reduce((sum: number, row: DbRow) => sum + readNumber(row.gross_amount), 0);
 
     return {
       actorMemberId: actor.memberId ?? "",
       actorMember: actorMemberResult.error ? null : ((actorMemberResult.data ?? null) as DbRow | null),
       members: membersResult.error ? [] : ((membersResult.data ?? []) as DbRow[]),
-      allocations: allocationsResult.error ? [] : ((allocationsResult.data ?? []) as DbRow[]),
+      allocations,
       services: servicesResult.error ? [] : ((servicesResult.data ?? []) as DbRow[]),
       deposits,
       depositTotal,
       allocatedTotal,
+      pendingTotal,
+      cashTotal,
       availableBalance: Math.max(0, depositTotal - allocatedTotal),
     };
   },

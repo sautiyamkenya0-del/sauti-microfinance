@@ -21,6 +21,12 @@ create table if not exists public.locomotive_business_wallet_allocations (
   gross_amount numeric(14,2) not null default 0,
   deduction_amount numeric(14,2) not null default 0,
   net_amount numeric(14,2) not null default 0,
+  status text not null default 'confirmed',
+  payment_method text not null default 'mpesa',
+  expected_phone text,
+  prompt_checkout_request_id text,
+  prompt_merchant_request_id text,
+  confirmed_at timestamptz,
   purpose text not null default 'service',
   note text,
   allocated_at timestamptz not null default now(),
@@ -29,6 +35,30 @@ create table if not exists public.locomotive_business_wallet_allocations (
     check (gross_amount >= 0 and deduction_amount >= 0 and net_amount >= 0 and gross_amount >= deduction_amount)
 );
 
+alter table public.locomotive_business_wallet_allocations
+  add column if not exists status text not null default 'confirmed',
+  add column if not exists payment_method text not null default 'mpesa',
+  add column if not exists expected_phone text,
+  add column if not exists prompt_checkout_request_id text,
+  add column if not exists prompt_merchant_request_id text,
+  add column if not exists confirmed_at timestamptz;
+
+do $$
+begin
+  alter table public.locomotive_business_wallet_allocations
+    add constraint locomotive_business_wallet_status_check
+    check (status in ('pending','confirmed','cancelled'));
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter table public.locomotive_business_wallet_allocations
+    add constraint locomotive_business_wallet_payment_method_check
+    check (payment_method in ('mpesa','mpesa_prompt','mpesa_manual','cash'));
+exception when duplicate_object then null;
+end $$;
+
 alter table public.locomotive_business_wallet_allocations enable row level security;
 
 create index if not exists idx_locomotive_business_wallet_allocations_admin
@@ -36,6 +66,14 @@ on public.locomotive_business_wallet_allocations(admin_staff_id, allocated_at de
 
 create index if not exists idx_locomotive_business_wallet_allocations_member
 on public.locomotive_business_wallet_allocations(beneficiary_member_id, allocated_at desc);
+
+create index if not exists idx_locomotive_business_wallet_allocations_pending
+on public.locomotive_business_wallet_allocations(admin_member_id, status, gross_amount, created_at)
+where status = 'pending';
+
+create index if not exists idx_locomotive_business_wallet_allocations_checkout
+on public.locomotive_business_wallet_allocations(prompt_checkout_request_id)
+where prompt_checkout_request_id is not null;
 
 insert into public.service_catalog (
   id,

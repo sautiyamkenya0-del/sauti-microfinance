@@ -13,6 +13,8 @@ export type LocomotiveWorkspace = {
   deposits: any[];
   depositTotal: number;
   allocatedTotal: number;
+  pendingTotal: number;
+  cashTotal: number;
   availableBalance: number;
 };
 
@@ -25,6 +27,8 @@ const emptyWorkspace: LocomotiveWorkspace = {
   deposits: [],
   depositTotal: 0,
   allocatedTotal: 0,
+  pendingTotal: 0,
+  cashTotal: 0,
   availableBalance: 0,
 };
 

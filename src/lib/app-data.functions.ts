@@ -1892,16 +1892,20 @@ export async function applyMpesaPaymentToDatabase(args: {
   const notes: string[] = [];
   let paymentCreatedAt: string | undefined;
   let paymentDate = new Date().toISOString().slice(0, 10);
+  let checkoutRequestId: string | undefined;
 
   if (args.eventId) {
     const { data: event, error: eventError } = await supabaseAdmin
       .from("mpesa_events")
-      .select("processed, transaction_id, created_at")
+      .select("processed, transaction_id, created_at, raw")
       .eq("id", args.eventId)
       .maybeSingle();
     if (eventError) throw new Error(eventError.message);
     paymentCreatedAt = event?.created_at ? String(event.created_at) : undefined;
     paymentDate = paymentCreatedAt ? paymentCreatedAt.slice(0, 10) : paymentDate;
+    const raw = asJsonObject(event?.raw);
+    const stkCallback = asJsonObject(asJsonObject(raw.Body).stkCallback);
+    checkoutRequestId = String(stkCallback.CheckoutRequestID ?? raw.CheckoutRequestID ?? "").trim() || undefined;
     if (!norm || amount <= 0) {
       // If there's no account but a positive amount, create an unallocated ledger row
       if (!norm && amount > 0) {
@@ -3013,6 +3017,12 @@ export async function applyMpesaPaymentToDatabase(args: {
     notes.push(
       `Protected ${amount}/= in ${targetedDocket.replace(/_/g, " ")}; redistribution and carryover resets will not move it.`,
     );
+    await reconcileLocomotiveBusinessWalletPendingAllocations({
+      runtimeDb: supabaseAdmin,
+      adminMemberId: memberId,
+      transactionId: primaryTransactionId,
+      checkoutRequestId,
+    });
     await markMpesaEventProcessed(args.eventId, primaryTransactionId);
     return {
       matched: true,
@@ -3230,6 +3240,13 @@ export async function applyMpesaPaymentToDatabase(args: {
     memberId,
     actorId: MPESA_SYSTEM_STAFF_ID,
     reason: "M-Pesa allocation",
+  });
+
+  await reconcileLocomotiveBusinessWalletPendingAllocations({
+    runtimeDb: supabaseAdmin,
+    adminMemberId: memberId,
+    transactionId: primaryTransactionId,
+    checkoutRequestId,
   });
 
   await markMpesaEventProcessed(args.eventId, primaryTransactionId ?? null);
@@ -6196,18 +6213,221 @@ function locomotiveBusinessDeductionAmount(service: any, grossAmount: number) {
   return Math.min(grossAmount, Math.max(0, raw));
 }
 
+async function resolveLocomotiveBusinessWalletService(runtimeDb: any, serviceId?: string) {
+  const { data: service, error } = serviceId
+    ? await runtimeDb.from("service_catalog").select("*").eq("id", serviceId).maybeSingle()
+    : await runtimeDb
+        .from("service_catalog")
+        .select("*")
+        .eq("service_category", "locomotive_business_wallet")
+        .eq("active", true)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+  if (error && !isMissingRelationError(error)) throw new Error(error.message);
+  return service;
+}
+
+async function insertLocomotiveBusinessWalletAllocation(args: {
+  actor: Awaited<ReturnType<typeof requireStaffActor>>;
+  runtimeDb: any;
+  beneficiaryMemberId: string;
+  grossAmount: number;
+  serviceId?: string;
+  paymentMethod: "mpesa_prompt" | "mpesa_manual" | "cash";
+  status: "pending" | "confirmed";
+  expectedPhone?: string;
+  checkoutRequestId?: string;
+  merchantRequestId?: string;
+  note?: string;
+  sourceTransactionId?: string | null;
+}) {
+  const { data: member, error: memberError } = await args.runtimeDb
+    .from("members")
+    .select("id, name, locomotive_business_member, locomotive_admin_staff_id")
+    .eq("id", args.beneficiaryMemberId)
+    .maybeSingle();
+  if (memberError) throw new Error(memberError.message);
+  const isSelf = args.beneficiaryMemberId === args.actor.memberId;
+  if (!member || (!member.locomotive_business_member && !isSelf)) {
+    throw new Error("Selected member is not a locomotive business member.");
+  }
+  if (
+    args.actor.role === "locomotive_admin" &&
+    !isSelf &&
+    member.locomotive_admin_staff_id !== args.actor.id
+  ) {
+    throw new Error("You can only allocate funds to members registered under your portal.");
+  }
+
+  const service = await resolveLocomotiveBusinessWalletService(args.runtimeDb, args.serviceId);
+  const deductionAmount = locomotiveBusinessDeductionAmount(service, args.grossAmount);
+  const netAmount = Math.max(0, args.grossAmount - deductionAmount);
+  const id = makeId("LBWA");
+  const { error } = await args.runtimeDb.from("locomotive_business_wallet_allocations").insert({
+    id,
+    admin_staff_id: args.actor.id,
+    admin_member_id: args.actor.memberId ?? null,
+    beneficiary_member_id: args.beneficiaryMemberId,
+    source_transaction_id: args.sourceTransactionId ?? null,
+    service_id: args.serviceId ?? service?.id ?? null,
+    gross_amount: args.grossAmount,
+    deduction_amount: deductionAmount,
+    net_amount: netAmount,
+    payment_method: args.paymentMethod,
+    status: args.status,
+    expected_phone: args.expectedPhone ?? null,
+    prompt_checkout_request_id: args.checkoutRequestId ?? null,
+    prompt_merchant_request_id: args.merchantRequestId ?? null,
+    confirmed_at: args.status === "confirmed" ? new Date().toISOString() : null,
+    purpose: "service",
+    note: args.note ?? null,
+  });
+  if (error) throw new Error(error.message);
+
+  return { id, member, service, deductionAmount, netAmount };
+}
+
+async function createPendingLocomotiveBusinessWalletPrompt(args: {
+  beneficiaryMemberId: string;
+  grossAmount: number;
+  expectedPhone?: string;
+  checkoutRequestId?: string;
+  merchantRequestId?: string;
+  note?: string;
+}) {
+  const actor = await requireStaffActor();
+  if (
+    actor.role !== "locomotive_admin" &&
+    actor.role !== "director" &&
+    actor.role !== "manager"
+  ) {
+    throw new Error("Only locomotive admins and management can create wallet prompts.");
+  }
+  if (!actor.memberId) throw new Error("This staff account is not linked to a wallet member.");
+  if (!args.beneficiaryMemberId) throw new Error("Select the member being prompted.");
+  if (args.grossAmount <= 0) throw new Error("Prompt amount must be above zero.");
+
+  const runtimeDb = (await requireSupabaseAdmin()) as any;
+  const result = await insertLocomotiveBusinessWalletAllocation({
+    actor,
+    runtimeDb,
+    beneficiaryMemberId: args.beneficiaryMemberId,
+    grossAmount: args.grossAmount,
+    paymentMethod: "mpesa_prompt",
+    status: "pending",
+    expectedPhone: args.expectedPhone,
+    checkoutRequestId: args.checkoutRequestId,
+    merchantRequestId: args.merchantRequestId,
+    note: args.note,
+  });
+  await reconcileLocomotiveBusinessWalletPendingAllocations({
+    runtimeDb,
+    adminMemberId: actor.memberId,
+    amount: args.grossAmount,
+    checkoutRequestId: args.checkoutRequestId,
+  });
+  return result;
+}
+
+export const createLocomotiveBusinessWalletPromptRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      beneficiaryMemberId?: string;
+      grossAmount?: number;
+      expectedPhone?: string;
+      checkoutRequestId?: string;
+      merchantRequestId?: string;
+      note?: string;
+    }) => ({
+      beneficiaryMemberId: String(data?.beneficiaryMemberId ?? "").trim(),
+      grossAmount: Math.max(0, Number(data?.grossAmount ?? 0)),
+      expectedPhone: String(data?.expectedPhone ?? "").trim() || undefined,
+      checkoutRequestId: String(data?.checkoutRequestId ?? "").trim() || undefined,
+      merchantRequestId: String(data?.merchantRequestId ?? "").trim() || undefined,
+      note: String(data?.note ?? "").trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => createPendingLocomotiveBusinessWalletPrompt(data));
+
+async function reconcileLocomotiveBusinessWalletPendingAllocations(args: {
+  runtimeDb: any;
+  adminMemberId?: string | null;
+  transactionId?: string | null;
+  amount?: number;
+  checkoutRequestId?: string | null;
+}) {
+  const adminMemberId = String(args.adminMemberId ?? "").trim();
+  if (!adminMemberId) return null;
+
+  let transaction: any = null;
+  if (args.transactionId) {
+    const { data, error } = await args.runtimeDb
+      .from("transactions")
+      .select("id, type, amount, member_id, account, ref")
+      .eq("id", args.transactionId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    transaction = data;
+    if (!transaction || transaction.type !== "deposit") return null;
+    if (transaction.member_id !== adminMemberId) return null;
+  }
+
+  const amount = Number(transaction?.amount ?? args.amount ?? 0);
+  if (amount <= 0) return null;
+  if (!transaction) return null;
+
+  let query = args.runtimeDb
+    .from("locomotive_business_wallet_allocations")
+    .select("id, gross_amount, prompt_checkout_request_id")
+    .eq("admin_member_id", adminMemberId)
+    .eq("status", "pending")
+    .is("source_transaction_id", null)
+    .eq("gross_amount", amount)
+    .order("created_at", { ascending: true })
+    .limit(2);
+
+  const checkoutRequestId = String(args.checkoutRequestId ?? "").trim();
+  if (checkoutRequestId) {
+    query = query.eq("prompt_checkout_request_id", checkoutRequestId);
+  } else {
+    query = query.is("prompt_checkout_request_id", null);
+  }
+
+  const { data: pendingRows, error } = await query;
+  if (error) {
+    if (isMissingColumnError(error, "status")) return null;
+    throw new Error(error.message);
+  }
+  if ((pendingRows ?? []).length !== 1) return null;
+
+  const pending = pendingRows[0];
+  const { error: updateError } = await args.runtimeDb
+    .from("locomotive_business_wallet_allocations")
+    .update({
+      status: "confirmed",
+      source_transaction_id: transaction?.id ?? null,
+      confirmed_at: new Date().toISOString(),
+    })
+    .eq("id", pending.id);
+  if (updateError) throw new Error(updateError.message);
+  return pending.id as string;
+}
+
 export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
       beneficiaryMemberId: string;
       grossAmount: number;
       serviceId?: string;
+      paymentMethod?: "mpesa_manual" | "cash";
       purpose?: string;
       note?: string;
     }) => ({
       beneficiaryMemberId: String(data?.beneficiaryMemberId ?? "").trim(),
       grossAmount: Math.max(0, Number(data?.grossAmount ?? 0)),
       serviceId: String(data?.serviceId ?? "").trim() || undefined,
+      paymentMethod: data?.paymentMethod === "mpesa_manual" ? "mpesa_manual" : "cash",
       purpose: String(data?.purpose ?? "").trim() || "service",
       note: String(data?.note ?? "").trim() || undefined,
     }),
@@ -6227,64 +6447,45 @@ export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ m
     if (data.grossAmount <= 0) throw new Error("Allocation amount must be above zero.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
-    const { data: member, error: memberError } = await runtimeDb
-      .from("members")
-      .select("id, name, locomotive_business_member, locomotive_admin_staff_id")
-      .eq("id", data.beneficiaryMemberId)
-      .maybeSingle();
-    if (memberError) throw new Error(memberError.message);
-    if (!member?.locomotive_business_member) {
-      throw new Error("Selected member is not a locomotive business member.");
-    }
-    if (actor.role === "locomotive_admin" && member.locomotive_admin_staff_id !== actor.id) {
-      throw new Error("You can only allocate funds to members registered under your portal.");
-    }
-
-    const { data: service, error: serviceError } = data.serviceId
-      ? await runtimeDb.from("service_catalog").select("*").eq("id", data.serviceId).maybeSingle()
-      : await runtimeDb
-          .from("service_catalog")
-          .select("*")
-          .eq("service_category", "locomotive_business_wallet")
-          .eq("active", true)
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-    if (serviceError && !isMissingRelationError(serviceError))
-      throw new Error(serviceError.message);
-
-    const deductionAmount = locomotiveBusinessDeductionAmount(service, data.grossAmount);
-    const netAmount = Math.max(0, data.grossAmount - deductionAmount);
-    const id = makeId("LBWA");
-    const { error } = await runtimeDb.from("locomotive_business_wallet_allocations").insert({
-      id,
-      admin_staff_id: actor.id,
-      admin_member_id: actor.memberId ?? null,
-      beneficiary_member_id: data.beneficiaryMemberId,
-      service_id: data.serviceId ?? service?.id ?? null,
-      gross_amount: data.grossAmount,
-      deduction_amount: deductionAmount,
-      net_amount: netAmount,
-      purpose: data.purpose,
-      note: data.note ?? null,
+    const result = await insertLocomotiveBusinessWalletAllocation({
+      actor,
+      runtimeDb,
+      beneficiaryMemberId: data.beneficiaryMemberId,
+      grossAmount: data.grossAmount,
+      serviceId: data.serviceId,
+      paymentMethod: data.paymentMethod,
+      status: data.paymentMethod === "cash" ? "confirmed" : "pending",
+      note:
+        data.note ??
+        (data.paymentMethod === "cash"
+          ? "Cash payment recorded by locomotive admin"
+          : "Manual M-Pesa claim pending exact wallet deposit"),
     });
-    if (error) throw new Error(error.message);
+    if (data.paymentMethod === "mpesa_manual" && actor.memberId) {
+      await reconcileLocomotiveBusinessWalletPendingAllocations({
+        runtimeDb,
+        adminMemberId: actor.memberId,
+        amount: data.grossAmount,
+      });
+    }
 
     await auditAction({
       actor,
       action: "locomotive_business_wallet.allocated",
       targetType: "locomotive_business_wallet_allocation",
-      targetId: id,
-      summary: `${actor.name} allocated ${data.grossAmount} to ${member.name}`,
+      targetId: result.id,
+      summary: `${actor.name} recorded ${data.grossAmount} for ${result.member.name}`,
       details: {
         beneficiaryMemberId: data.beneficiaryMemberId,
-        serviceId: data.serviceId ?? service?.id ?? null,
+        serviceId: data.serviceId ?? result.service?.id ?? null,
         grossAmount: data.grossAmount,
-        deductionAmount,
-        netAmount,
+        deductionAmount: result.deductionAmount,
+        netAmount: result.netAmount,
+        paymentMethod: data.paymentMethod,
+        status: data.paymentMethod === "cash" ? "confirmed" : "pending",
       },
     });
-    return { id, deductionAmount, netAmount };
+    return { id: result.id, deductionAmount: result.deductionAmount, netAmount: result.netAmount };
   });
 
 export const updateStaffRecord = createServerFn({ method: "POST" })
@@ -10559,6 +10760,9 @@ const DOCKET_ACCOUNT_ALIASES: Record<string, MemberDocket> = {
   SERVICES: "service_wallet",
   SERVICEWALLET: "service_wallet",
   SERVICE_WALLET: "service_wallet",
+  LW: "service_wallet",
+  LOCOWALLET: "service_wallet",
+  LOCOMOTIVEWALLET: "service_wallet",
   SUBSCRIPTION: "service_wallet",
   SUBSCRIPTIONS: "service_wallet",
   PENALTY: "penalty_payment",
