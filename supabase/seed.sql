@@ -12,3 +12,6 @@
 \ir seeds/api_topups_7.sql
 \ir seeds/api_topups_8.sql
 \ir seeds/lead_way_fuel.sql
+\ir seeds/leadway2.sql
+\ir seeds/stock_loans.sql
+\ir seeds/kiambu_karuri_zone_b_revenue_schedule.sql

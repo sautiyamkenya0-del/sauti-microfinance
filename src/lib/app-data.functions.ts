@@ -9745,8 +9745,10 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
       id?: string;
+      applicationNumber?: string;
       memberId: string;
       serviceId?: string;
+      applicationKind?: "new" | "repeat";
       serviceType?: string;
       caseType?: "normal" | "overcharged_invoice" | "invoice_with_penalty" | "confiscated_items";
       priority?: "low" | "normal" | "high" | "urgent";
@@ -9776,8 +9778,10 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
       penaltyAmount?: number;
     }) => ({
       id: String(data?.id ?? "").trim() || undefined,
+      applicationNumber: String(data?.applicationNumber ?? "").trim() || undefined,
       memberId: String(data?.memberId ?? "").trim(),
       serviceId: String(data?.serviceId ?? "").trim() || undefined,
+      applicationKind: data?.applicationKind === "repeat" ? "repeat" : "new",
       serviceType: data?.serviceType?.trim() || undefined,
       caseType:
         data?.caseType === "overcharged_invoice" ||
@@ -9893,7 +9897,7 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
       finalAmount,
     };
 
-    let applicationNumber = data.id;
+    let applicationNumber = data.applicationNumber;
     if (!applicationNumber) {
       const { data: existingApps, error: appNumberError } = await runtimeDb
         .from("service_applications")
@@ -9923,6 +9927,7 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
       member_id: data.memberId,
       service_id: data.serviceId ?? null,
       application_number: applicationNumber,
+      application_kind: data.applicationKind,
       service_type: data.serviceType ?? service?.service_category ?? service?.name ?? null,
       case_type: data.caseType,
       priority: data.priority,
@@ -9954,7 +9959,16 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
     const { error: appError } = await runtimeDb
       .from("service_applications")
       .upsert(applicationPayload);
-    if (appError) throw new Error(appError.message);
+    if (appError) {
+      if (isMissingColumnError(appError, "application_kind")) {
+        const fallbackPayload = { ...applicationPayload } as Record<string, unknown>;
+        delete fallbackPayload.application_kind;
+        const retry = await runtimeDb.from("service_applications").upsert(fallbackPayload);
+        if (retry.error) throw new Error(retry.error.message);
+      } else {
+        throw new Error(appError.message);
+      }
+    }
 
     const { error: invoiceError } = await runtimeDb.from("service_billing_invoices").upsert({
       id: `${applicationId}-INV`,
@@ -9979,6 +9993,42 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
     });
     if (invoiceError) throw new Error(invoiceError.message);
 
+    const approvedForWallet =
+      data.status === "approved" ||
+      data.status === "final_approval" ||
+      data.workflowStage === "approved" ||
+      data.workflowStage === "final_approval";
+    if (approvedForWallet) {
+      const walletPayload = {
+        id: `WALLET-SERVICE-${data.memberId}`,
+        member_id: data.memberId,
+        wallet_type: "service_wallet",
+        balance: 0,
+        withdrawable_balance: 0,
+        reserved_balance: 0,
+        locked_balance: 0,
+        reserve_rules: {
+          source: "service_application_approval",
+          applicationId,
+          applicationNumber,
+          reservedBalanceDefaultPct: 20,
+          lockedBalanceDefaultPct: 30,
+        },
+      };
+      const { error: walletError } = await runtimeDb.from("member_wallets").upsert(walletPayload);
+      if (walletError && !isMissingRelationError(walletError)) throw new Error(walletError.message);
+
+      const { error: docketError } = await runtimeDb.from("member_docket_balances").upsert({
+        member_id: data.memberId,
+        docket: "service_wallet",
+        amount: 0,
+        protected: true,
+      });
+      if (docketError && !isMissingRelationError(docketError)) {
+        throw new Error(docketError.message);
+      }
+    }
+
     await auditAction({
       actor,
       action: "service_application.upserted",
@@ -9988,6 +10038,7 @@ export const upsertServiceApplicationRecord = createServerFn({ method: "POST" })
       details: {
         memberId: data.memberId,
         serviceId: data.serviceId ?? null,
+        applicationKind: data.applicationKind,
         caseType: data.caseType,
         paymentStatus: data.paymentStatus,
         calculatedCharges,

@@ -227,6 +227,7 @@ function mapServiceApplicationRow(row: DbRow) {
     applicationNumber: readText(row.application_number),
     memberId: readText(row.member_id),
     serviceId: optionalText(row.service_id),
+    applicationKind: readText(row.application_kind) || "new",
     serviceType: optionalText(row.service_type),
     caseType: readText(row.case_type) || "normal",
     priority: readText(row.priority) || "normal",
@@ -635,42 +636,37 @@ export const listMemberSelfServiceWorkspaceRecord = createServerFn({ method: "GE
     }
 
     const supabaseAdmin = requireSupabaseAdmin();
-    const [
-      servicesResult,
-      subscriptionsResult,
-      stockResult,
-      requestsResult,
-      serviceWalletResult,
-    ] = await Promise.all([
-      supabaseAdmin
-        .from("service_catalog")
-        .select("*")
-        .eq("active", true)
-        .order("name", { ascending: true }),
-      supabaseAdmin
-        .from("member_service_subscriptions")
-        .select("*")
-        .eq("member_id", targetMemberId)
-        .neq("status", "cancelled")
-        .order("updated_at", { ascending: false }),
-      supabaseAdmin
-        .from("internal_store_items")
-        .select("*")
-        .gt("quantity_available", 0)
-        .order("item_name", { ascending: true }),
-      supabaseAdmin
-        .from("supplier_fulfillment_requests")
-        .select("*")
-        .eq("member_id", targetMemberId)
-        .order("created_at", { ascending: false })
-        .limit(50),
-      supabaseAdmin
-        .from("member_docket_balances")
-        .select("amount")
-        .eq("member_id", targetMemberId)
-        .eq("docket", "service_wallet")
-        .maybeSingle(),
-    ]);
+    const [servicesResult, subscriptionsResult, stockResult, requestsResult, serviceWalletResult] =
+      await Promise.all([
+        supabaseAdmin
+          .from("service_catalog")
+          .select("*")
+          .eq("active", true)
+          .order("name", { ascending: true }),
+        supabaseAdmin
+          .from("member_service_subscriptions")
+          .select("*")
+          .eq("member_id", targetMemberId)
+          .neq("status", "cancelled")
+          .order("updated_at", { ascending: false }),
+        supabaseAdmin
+          .from("internal_store_items")
+          .select("*")
+          .gt("quantity_available", 0)
+          .order("item_name", { ascending: true }),
+        supabaseAdmin
+          .from("supplier_fulfillment_requests")
+          .select("*")
+          .eq("member_id", targetMemberId)
+          .order("created_at", { ascending: false })
+          .limit(50),
+        supabaseAdmin
+          .from("member_docket_balances")
+          .select("amount")
+          .eq("member_id", targetMemberId)
+          .eq("docket", "service_wallet")
+          .maybeSingle(),
+      ]);
 
     const failed = [
       servicesResult,

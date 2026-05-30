@@ -13,6 +13,8 @@ import { useServerFn } from "@tanstack/react-start";
 import {
   ArrowDown,
   ArrowUp,
+  CheckCircle2,
+  ClipboardList,
   Percent,
   Pencil,
   Plus,
@@ -151,8 +153,11 @@ type ServiceDraft = {
 };
 
 type ServiceApplicationDraft = {
+  id?: string;
+  applicationNumber?: string;
   memberId: string;
   serviceId: string;
+  applicationKind: "new" | "repeat";
   serviceType: string;
   caseType: "normal" | "overcharged_invoice" | "invoice_with_penalty" | "confiscated_items";
   priority: "low" | "normal" | "high" | "urgent";
@@ -174,6 +179,7 @@ type ServiceApplicationDraft = {
   confiscationReference: string;
   inventorySheetNumber: string;
   confiscationDate: string;
+  status: string;
   paymentStatus: string;
   workflowStage: string;
   manualCountyCharges: number;
@@ -817,6 +823,64 @@ function PolicyCenterPage() {
     () => parseServiceRenewalRulesDraft(serviceDraft.renewalRulesText),
     [serviceDraft.renewalRulesText],
   );
+  const selectedApplicationService = useMemo(
+    () => serviceRows.find((service) => service.id === serviceApplicationDraft.serviceId),
+    [serviceApplicationDraft.serviceId, serviceRows],
+  );
+  const selectedApplicationSchedule = useMemo(
+    () => countyScheduleRows.find((schedule) => schedule.id === serviceApplicationDraft.scheduleId),
+    [countyScheduleRows, serviceApplicationDraft.scheduleId],
+  );
+  const serviceApplicationChargePreview = useMemo(() => {
+    const customCharges = Array.isArray(selectedApplicationService?.customCharges)
+      ? selectedApplicationService.customCharges.reduce(
+          (sum: number, row: any) => sum + Math.max(0, Number(row?.amount ?? 0)),
+          0,
+        )
+      : 0;
+    const countyCharges = selectedApplicationSchedule
+      ? Number(selectedApplicationSchedule.totalAmount ?? 0)
+      : Number(serviceApplicationDraft.manualCountyCharges ?? 0);
+    const serviceFee = Number(
+      selectedApplicationService?.serviceCharge ?? selectedApplicationService?.price ?? 0,
+    );
+    const processingFee = Number(selectedApplicationService?.processingFee ?? 0);
+    const registrationFee = Number(selectedApplicationService?.registrationFee ?? 0);
+    const penaltyAmount = Math.max(
+      Number(selectedApplicationService?.penaltyAmount ?? 0),
+      Number(serviceApplicationDraft.penaltyAmount ?? 0),
+    );
+    const waiverAmount = Math.max(
+      Number(selectedApplicationService?.waiverAmount ?? 0),
+      Number(serviceApplicationDraft.waiverAmount ?? 0),
+    );
+    const discountAmount = Number(selectedApplicationService?.negotiatedDiscountAmount ?? 0);
+    const expectedAmount =
+      countyCharges + serviceFee + processingFee + registrationFee + customCharges;
+    const finalAmount = Math.max(0, expectedAmount + penaltyAmount - waiverAmount - discountAmount);
+    return {
+      countyCharges,
+      serviceFee,
+      processingFee,
+      registrationFee,
+      customCharges,
+      penaltyAmount,
+      waiverAmount,
+      discountAmount,
+      finalAmount,
+      overchargeAmount: Math.max(
+        0,
+        Number(serviceApplicationDraft.invoiceAmountCharged ?? 0) - finalAmount,
+      ),
+    };
+  }, [
+    selectedApplicationSchedule,
+    selectedApplicationService,
+    serviceApplicationDraft.invoiceAmountCharged,
+    serviceApplicationDraft.manualCountyCharges,
+    serviceApplicationDraft.penaltyAmount,
+    serviceApplicationDraft.waiverAmount,
+  ]);
 
   const enrichedTargets = useMemo(
     () =>
@@ -925,6 +989,99 @@ function PolicyCenterPage() {
       toast.success(`Application ${result.applicationNumber} saved.`);
     } catch (error: any) {
       toast.error(error?.message ?? "Could not save service application.");
+    } finally {
+      setServiceApplicationBusy(false);
+    }
+  }
+
+  function loadServiceApplicationDraft(row: any) {
+    setServiceApplicationDraft({
+      id: row.id,
+      applicationNumber: row.applicationNumber,
+      memberId: row.memberId ?? "",
+      serviceId: row.serviceId ?? "",
+      applicationKind: row.applicationKind === "repeat" ? "repeat" : "new",
+      serviceType: row.serviceType ?? "",
+      caseType: row.caseType ?? "normal",
+      priority: row.priority ?? "normal",
+      problemReason: row.problemReason ?? "",
+      notes: row.notes ?? "",
+      county: row.county ?? "Kiambu",
+      subcounty: row.subcounty ?? "",
+      ward: row.ward ?? "",
+      town: row.town ?? "",
+      scheduleId: row.scheduleId ?? "",
+      invoiceReference: row.invoiceReference ?? "",
+      invoiceNumber: row.invoiceNumber ?? "",
+      invoiceDate: row.invoiceDate ?? "",
+      invoiceAmountCharged: Number(row.invoiceAmountCharged ?? 0),
+      issueDate: row.issueDate ?? "",
+      expiryDate: row.expiryDate ?? "",
+      renewalWindowDays: Number(row.renewalWindowDays ?? 0),
+      gracePeriodDays: Number(row.gracePeriodDays ?? 0),
+      confiscationReference: row.confiscationReference ?? "",
+      inventorySheetNumber: row.inventorySheetNumber ?? "",
+      confiscationDate: row.confiscationDate ?? "",
+      status: row.status ?? "submitted",
+      paymentStatus: row.paymentStatus ?? "pending",
+      workflowStage: row.workflowStage ?? "application_submitted",
+      manualCountyCharges: Number(row.calculatedCharges?.countyCharges ?? 0),
+      waiverAmount: Number(row.calculatedCharges?.waiverAmount ?? 0),
+      penaltyAmount: Number(row.calculatedCharges?.penaltyAmount ?? 0),
+    });
+  }
+
+  async function transitionServiceApplication(row: any, status: string, workflowStage: string) {
+    setServiceApplicationBusy(true);
+    try {
+      await saveServiceApplication({
+        data: {
+          ...blankServiceApplicationDraft(row.memberId ?? ""),
+          id: row.id,
+          applicationNumber: row.applicationNumber,
+          memberId: row.memberId ?? "",
+          serviceId: row.serviceId ?? "",
+          applicationKind: row.applicationKind === "repeat" ? "repeat" : "new",
+          serviceType: row.serviceType ?? "",
+          caseType: row.caseType ?? "normal",
+          priority: row.priority ?? "normal",
+          problemReason: row.problemReason ?? "",
+          notes: row.notes ?? "",
+          county: row.county ?? "Kiambu",
+          subcounty: row.subcounty ?? "",
+          ward: row.ward ?? "",
+          town: row.town ?? "",
+          scheduleId: row.scheduleId ?? "",
+          invoiceReference: row.invoiceReference ?? "",
+          invoiceNumber: row.invoiceNumber ?? "",
+          invoiceDate: row.invoiceDate ?? "",
+          invoiceAmountCharged: Number(row.invoiceAmountCharged ?? 0),
+          issueDate: row.issueDate ?? "",
+          expiryDate: row.expiryDate ?? "",
+          renewalWindowDays: Number(row.renewalWindowDays ?? 0),
+          gracePeriodDays: Number(row.gracePeriodDays ?? 0),
+          confiscationReference: row.confiscationReference ?? "",
+          inventorySheetNumber: row.inventorySheetNumber ?? "",
+          confiscationDate: row.confiscationDate ?? "",
+          status,
+          paymentStatus:
+            status === "approved" && row.paymentStatus === "pending"
+              ? "pending"
+              : (row.paymentStatus ?? "pending"),
+          workflowStage,
+          manualCountyCharges: Number(row.calculatedCharges?.countyCharges ?? 0),
+          waiverAmount: Number(row.calculatedCharges?.waiverAmount ?? 0),
+          penaltyAmount: Number(row.calculatedCharges?.penaltyAmount ?? 0),
+        },
+      });
+      await refreshServiceApplications();
+      toast.success(
+        status === "approved"
+          ? "Application approved and wallet prepared."
+          : "Application sent to review.",
+      );
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to update application.");
     } finally {
       setServiceApplicationBusy(false);
     }
@@ -2349,6 +2506,366 @@ function PolicyCenterPage() {
                     Reset
                   </button>
                 </div>
+              </div>
+            </Section>
+
+            <Section
+              title="New / repeat service application"
+              action={
+                <button
+                  type="button"
+                  disabled={serviceApplicationBusy}
+                  onClick={() => void saveServiceApplicationDraft()}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                >
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  {serviceApplicationBusy ? "Saving..." : "Save application"}
+                </button>
+              }
+            >
+              <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Member">
+                    <MemberSearchSelect
+                      members={memberAccounts}
+                      value={serviceApplicationDraft.memberId}
+                      onChange={(memberId) =>
+                        setServiceApplicationDraft((current) => ({ ...current, memberId }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Application flow">
+                    <select
+                      value={serviceApplicationDraft.applicationKind}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          applicationKind: event.target.value as "new" | "repeat",
+                        }))
+                      }
+                      className="input"
+                    >
+                      <option value="new">New application</option>
+                      <option value="repeat">Repeat application</option>
+                    </select>
+                  </Field>
+                  <Field label="Requested service">
+                    <select
+                      value={serviceApplicationDraft.serviceId}
+                      onChange={(event) => {
+                        const service = serviceRows.find((item) => item.id === event.target.value);
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          serviceId: event.target.value,
+                          serviceType:
+                            service?.serviceCategory ??
+                            service?.service_category ??
+                            current.serviceType,
+                        }));
+                      }}
+                      className="input"
+                    >
+                      <option value="">Select service</option>
+                      {serviceRows
+                        .filter(
+                          (service) => (service.active ?? service.is_active ?? true) !== false,
+                        )
+                        .map((service) => (
+                          <option key={service.id} value={service.id}>
+                            {service.name}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                  <Field label="Service type">
+                    <input
+                      value={serviceApplicationDraft.serviceType}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          serviceType: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    />
+                  </Field>
+                  <Field label="Case type">
+                    <select
+                      value={serviceApplicationDraft.caseType}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          caseType: event.target.value as ServiceApplicationDraft["caseType"],
+                        }))
+                      }
+                      className="input"
+                    >
+                      <option value="normal">Normal / regular</option>
+                      <option value="overcharged_invoice">Overcharged invoice</option>
+                      <option value="invoice_with_penalty">Invoice with penalty</option>
+                      <option value="confiscated_items">Confiscated items</option>
+                    </select>
+                  </Field>
+                  <Field label="Revenue schedule">
+                    <select
+                      value={serviceApplicationDraft.scheduleId}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          scheduleId: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    >
+                      <option value="">Manual county charge</option>
+                      {countyScheduleRows.map((schedule) => (
+                        <option key={schedule.id} value={schedule.id}>
+                          {schedule.code} - {schedule.description}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <NumberField
+                    label="Manual county charges"
+                    value={serviceApplicationDraft.manualCountyCharges}
+                    onChange={(value) =>
+                      setServiceApplicationDraft((current) => ({
+                        ...current,
+                        manualCountyCharges: Math.max(0, value),
+                      }))
+                    }
+                  />
+                  <NumberField
+                    label="Invoice amount charged"
+                    value={serviceApplicationDraft.invoiceAmountCharged}
+                    onChange={(value) =>
+                      setServiceApplicationDraft((current) => ({
+                        ...current,
+                        invoiceAmountCharged: Math.max(0, value),
+                      }))
+                    }
+                  />
+                  <Field label="Invoice number">
+                    <input
+                      value={serviceApplicationDraft.invoiceNumber}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          invoiceNumber: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    />
+                  </Field>
+                  <Field label="Invoice date">
+                    <input
+                      type="date"
+                      value={serviceApplicationDraft.invoiceDate}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          invoiceDate: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    />
+                  </Field>
+                  <Field label="Workflow stage">
+                    <select
+                      value={serviceApplicationDraft.workflowStage}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          workflowStage: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    >
+                      <option value="application_submitted">Application submitted</option>
+                      <option value="verification">Verification</option>
+                      <option value="financial_review">Financial review</option>
+                      <option value="waiver_approval">Waiver approval</option>
+                      <option value="final_approval">Final approval</option>
+                      <option value="billing">Billing</option>
+                      <option value="service_processing">Service processing</option>
+                      <option value="completed">Completed</option>
+                    </select>
+                  </Field>
+                  <Field label="Status">
+                    <select
+                      value={serviceApplicationDraft.status}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          status: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    >
+                      <option value="submitted">Submitted</option>
+                      <option value="under_review">Under review</option>
+                      <option value="approved">Approved</option>
+                      <option value="billing">Billing</option>
+                      <option value="processing">Processing</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </Field>
+                  <Field label="Problem / reason" className="md:col-span-2">
+                    <textarea
+                      rows={2}
+                      value={serviceApplicationDraft.problemReason}
+                      onChange={(event) =>
+                        setServiceApplicationDraft((current) => ({
+                          ...current,
+                          problemReason: event.target.value,
+                        }))
+                      }
+                      className="input"
+                    />
+                  </Field>
+                </div>
+                <div className="rounded-md border border-border bg-muted/20 p-4">
+                  <div className="text-sm font-medium">Payable preview</div>
+                  <div className="mt-4 space-y-2 text-sm">
+                    <MetricRow
+                      label="County charges"
+                      value={fmtKES(serviceApplicationChargePreview.countyCharges)}
+                    />
+                    <MetricRow
+                      label="Service fee"
+                      value={fmtKES(serviceApplicationChargePreview.serviceFee)}
+                    />
+                    <MetricRow
+                      label="Processing"
+                      value={fmtKES(serviceApplicationChargePreview.processingFee)}
+                    />
+                    <MetricRow
+                      label="Registration"
+                      value={fmtKES(serviceApplicationChargePreview.registrationFee)}
+                    />
+                    <MetricRow
+                      label="Other charges"
+                      value={fmtKES(serviceApplicationChargePreview.customCharges)}
+                    />
+                    <MetricRow
+                      label="Penalties"
+                      value={fmtKES(serviceApplicationChargePreview.penaltyAmount)}
+                    />
+                    <MetricRow
+                      label="Waivers / discounts"
+                      value={fmtKES(
+                        serviceApplicationChargePreview.waiverAmount +
+                          serviceApplicationChargePreview.discountAmount,
+                      )}
+                    />
+                    <div className="border-t border-border pt-3">
+                      <MetricRow
+                        label="Final bill"
+                        value={fmtKES(serviceApplicationChargePreview.finalAmount)}
+                      />
+                      <MetricRow
+                        label="Overcharge detected"
+                        value={fmtKES(serviceApplicationChargePreview.overchargeAmount)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Section>
+
+            <Section title="Application review and approval queue">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-5 py-3 text-left">Application</th>
+                      <th className="px-5 py-3 text-left">Member</th>
+                      <th className="px-5 py-3 text-left">Service</th>
+                      <th className="px-5 py-3 text-right">Final bill</th>
+                      <th className="px-5 py-3 text-left">Stage</th>
+                      <th className="px-5 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {serviceApplicationRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-8 text-center text-muted-foreground">
+                          No service applications yet.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {serviceApplicationRows.map((row) => {
+                      const member = members.find((item) => item.id === row.memberId);
+                      const service = serviceRows.find((item) => item.id === row.serviceId);
+                      const finalAmount = Number(row.calculatedCharges?.finalAmount ?? 0);
+                      const approved =
+                        row.status === "approved" || row.workflowStage === "final_approval";
+                      return (
+                        <tr key={row.id}>
+                          <td className="px-5 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{row.applicationNumber}</span>
+                              <Badge tone={approved ? "success" : "muted"}>
+                                {String(row.applicationKind ?? "new")}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {String(row.caseType ?? "normal").replace(/_/g, " ")}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3">
+                            <div className="font-medium">{member?.name ?? row.memberId}</div>
+                            <div className="text-xs text-muted-foreground">{row.memberId}</div>
+                          </td>
+                          <td className="px-5 py-3">{service?.name ?? row.serviceType ?? "-"}</td>
+                          <td className="px-5 py-3 text-right font-semibold">
+                            {fmtKES(finalAmount)}
+                          </td>
+                          <td className="px-5 py-3 capitalize">
+                            {String(row.workflowStage ?? row.status).replace(/_/g, " ")}
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => loadServiceApplicationDraft(row)}
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                            >
+                              <Pencil className="h-3 w-3" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={serviceApplicationBusy}
+                              onClick={() =>
+                                void transitionServiceApplication(
+                                  row,
+                                  "under_review",
+                                  "financial_review",
+                                )
+                              }
+                              className="ml-2 inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                            >
+                              <ClipboardList className="h-3 w-3" />
+                              Review
+                            </button>
+                            <button
+                              type="button"
+                              disabled={serviceApplicationBusy || approved}
+                              onClick={() =>
+                                void transitionServiceApplication(row, "approved", "final_approval")
+                              }
+                              className="ml-2 inline-flex items-center gap-1 rounded-md border border-emerald-500/40 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="h-3 w-3" />
+                              Approve
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Section>
           </div>
@@ -4363,6 +4880,7 @@ function blankServiceApplicationDraft(memberId: string): ServiceApplicationDraft
   return {
     memberId,
     serviceId: "",
+    applicationKind: "new",
     serviceType: "",
     caseType: "normal",
     priority: "normal",
@@ -4384,6 +4902,7 @@ function blankServiceApplicationDraft(memberId: string): ServiceApplicationDraft
     confiscationReference: "",
     inventorySheetNumber: "",
     confiscationDate: "",
+    status: "submitted",
     paymentStatus: "pending",
     workflowStage: "application_submitted",
     manualCountyCharges: 0,
