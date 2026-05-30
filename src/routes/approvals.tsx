@@ -21,7 +21,7 @@ function ApprovalsPage() {
   const { items, decide } = useApprovals();
   const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
   const [supplierWorkspace, setSupplierWorkspace] = useState<any>(null);
-  const [repaymentDays, setRepaymentDays] = useState<Record<string, number>>({});
+  const [repaymentDays, setRepaymentDays] = useState<Record<string, number | "">>({});
 
   const canDecide = currentUser.role === "director";
   const pendingLoans = loans.filter((l) => l.status === "pending");
@@ -40,6 +40,8 @@ function ApprovalsPage() {
   );
 
   const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? id;
+  const memberHasPriorAppraisal = (memberId: string, loanId: string) =>
+    appraisals.some((row) => row.memberId === memberId && row.loanId !== loanId);
 
   useEffect(() => {
     loadSupplierWorkspace()
@@ -86,11 +88,15 @@ function ApprovalsPage() {
                 )}
                 {pendingLoans.map((l) => {
                   const appraisal = appraisals.find((row) => row.loanId === l.id);
+                  const appraisalExempt = !appraisal && memberHasPriorAppraisal(l.memberId, l.id);
                   const canApproveLoan =
-                    !!appraisal &&
-                    !!l.reviewedBy &&
-                    String(appraisal.decision ?? "").toLowerCase() !== "reject";
+                    (!!appraisal || appraisalExempt) &&
+                    String(appraisal?.decision ?? "").toLowerCase() !== "reject";
                   const reviewedAmount = l.approvedAmount ?? l.principal;
+                  const repaymentDayValue =
+                    l.id in repaymentDays ? repaymentDays[l.id] : (l.termDays ?? 30);
+                  const approvalRepaymentDays =
+                    repaymentDayValue === "" ? (l.termDays ?? 30) : repaymentDayValue;
                   return (
                     <tr key={l.id} className="hover:bg-muted/30">
                       <td className="px-5 py-3">
@@ -98,13 +104,13 @@ function ApprovalsPage() {
                           <Banknote className="h-4 w-4 text-primary" />
                           <span className="font-mono text-xs">{l.id}</span>
                         </div>
-                        {!appraisal ? (
+                        {appraisalExempt ? (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            Repeat loan - appraisal exempt
+                          </div>
+                        ) : !appraisal ? (
                           <div className="mt-1 text-[11px] text-warning-foreground">
                             Appraisal required before approval
-                          </div>
-                        ) : !l.reviewedBy ? (
-                          <div className="mt-1 text-[11px] text-warning-foreground">
-                            Director review required before approval
                           </div>
                         ) : (
                           <div className="mt-1 text-[11px] text-muted-foreground">
@@ -125,11 +131,14 @@ function ApprovalsPage() {
                         <input
                           type="number"
                           min={1}
-                          value={repaymentDays[l.id] ?? l.termDays ?? 30}
+                          value={repaymentDayValue}
                           onChange={(event) =>
                             setRepaymentDays((current) => ({
                               ...current,
-                              [l.id]: Math.max(1, Number(event.target.value) || 1),
+                              [l.id]:
+                                event.target.value === ""
+                                  ? ""
+                                  : Math.max(1, Number(event.target.value) || 1),
                             }))
                           }
                           className="w-24 rounded-md border border-border bg-card px-2 py-1 text-xs"
@@ -148,23 +157,31 @@ function ApprovalsPage() {
                               title={
                                 canApproveLoan
                                   ? "Approve loan"
-                                  : "Complete appraisal and director review before approval"
+                                  : "Complete appraisal before approval"
                               }
                               onClick={async () => {
                                 if (!canApproveLoan) {
                                   toast.error(
-                                    "Complete the loan appraisal and save the director review before approval.",
+                                    "Complete appraisal before approval. Repeat loans are exempt when this member already has an appraisal record.",
                                   );
                                   return;
                                 }
-                                await approveLoan(
-                                  l.id,
-                                  reviewedAmount,
-                                  currentUser.id,
-                                  "Approved from queue",
-                                  repaymentDays[l.id] ?? l.termDays ?? 30,
-                                );
-                                toast.success("Loan approved and payout requested");
+                                try {
+                                  await approveLoan(
+                                    l.id,
+                                    reviewedAmount,
+                                    currentUser.id,
+                                    "Approved from queue",
+                                    approvalRepaymentDays,
+                                  );
+                                  toast.success("Loan approved and payout requested");
+                                } catch (error) {
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Failed to approve loan.",
+                                  );
+                                }
                               }}
                               className="rounded-md bg-success/15 px-2 py-1 text-xs text-success hover:bg-success/25 disabled:cursor-not-allowed disabled:opacity-50"
                             >

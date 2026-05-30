@@ -260,7 +260,7 @@ export function FuelJobCardFields({
                   <input
                     type="number"
                     min={0}
-                    value={row.liters}
+                    value={row.liters || ""}
                     onChange={(event) => updateRow(index, "liters", Number(event.target.value))}
                     className="loan-input text-right"
                   />
@@ -269,7 +269,7 @@ export function FuelJobCardFields({
                   <input
                     type="number"
                     min={0}
-                    value={row.pricePerLitre}
+                    value={row.pricePerLitre || ""}
                     onChange={(event) =>
                       updateRow(index, "pricePerLitre", Number(event.target.value))
                     }
@@ -280,7 +280,7 @@ export function FuelJobCardFields({
                   <input
                     type="number"
                     min={0}
-                    value={row.total}
+                    value={row.total || ""}
                     onChange={(event) => updateRow(index, "total", Number(event.target.value))}
                     className="loan-input text-right"
                   />
@@ -289,7 +289,7 @@ export function FuelJobCardFields({
                   <input
                     type="number"
                     min={0}
-                    value={row.fuelCharge}
+                    value={row.fuelCharge || ""}
                     onChange={(event) => updateRow(index, "fuelCharge", Number(event.target.value))}
                     className="loan-input text-right"
                   />
@@ -305,7 +305,7 @@ export function FuelJobCardFields({
                   <input
                     type="number"
                     min={0}
-                    value={row.odometerReading}
+                    value={row.odometerReading || ""}
                     onChange={(event) =>
                       updateRow(index, "odometerReading", Number(event.target.value))
                     }

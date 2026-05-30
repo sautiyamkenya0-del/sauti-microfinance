@@ -1,5 +1,6 @@
 // Shared small form atoms used across loan sub-views.
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 export function Input({
   label,
@@ -12,13 +13,29 @@ export function Input({
   onChange: (v: string) => void;
   type?: string;
 }) {
+  const isNumber = type === "number";
+  const [editing, setEditing] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+
+  useEffect(() => {
+    if (!isNumber || !editing || draftValue !== "") setDraftValue(value);
+  }, [draftValue, editing, isNumber, value]);
+
   return (
     <label className="block">
       <span className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</span>
       <input
         type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={isNumber ? draftValue : value}
+        onFocus={() => setEditing(true)}
+        onBlur={() => {
+          setEditing(false);
+          setDraftValue(value);
+        }}
+        onChange={(e) => {
+          if (isNumber) setDraftValue(e.target.value);
+          onChange(e.target.value);
+        }}
         className="loan-input mt-1"
       />
     </label>

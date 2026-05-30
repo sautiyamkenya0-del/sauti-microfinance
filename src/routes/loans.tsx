@@ -895,8 +895,12 @@ function CarryoverEntry({
                 <input
                   type="number"
                   min={1}
-                  value={termDays}
-                  onChange={(event) => setTermDays(Math.max(1, Number(event.target.value) || 1))}
+                  value={termDays || ""}
+                  onChange={(event) =>
+                    setTermDays(
+                      event.target.value === "" ? 0 : Math.max(1, Number(event.target.value) || 1),
+                    )
+                  }
                   className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
                 />
               </label>
@@ -972,7 +976,7 @@ function NumberInput({
       <input
         type="number"
         min={0}
-        value={value}
+        value={value || ""}
         onChange={(event) => onChange(Number(event.target.value))}
         className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
       />

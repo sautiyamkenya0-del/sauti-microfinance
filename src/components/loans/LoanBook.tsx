@@ -1483,7 +1483,7 @@ function EditNumber({
       <input
         type="number"
         min={0}
-        value={value}
+        value={value || ""}
         onChange={(event) => onChange(Number(event.target.value))}
         className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
       />

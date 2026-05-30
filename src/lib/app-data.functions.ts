@@ -6888,8 +6888,14 @@ export const saveLoanReviewRecord = createServerFn({ method: "POST" })
       .limit(1)
       .maybeSingle();
     if (appraisalError) throw new Error(appraisalError.message);
-    if (!appraisal) throw new Error("This loan must be appraised before it can be reviewed.");
-    if (String(appraisal.decision ?? "").toLowerCase() === "reject") {
+    const hasPriorMemberAppraisal = await memberHasAppraisalHistory(supabaseAdmin, {
+      memberId: String(loan.member_id ?? ""),
+      excludeLoanId: data.loanId,
+    });
+    if (!appraisal && !hasPriorMemberAppraisal) {
+      throw new Error("This member has no appraisal history. Complete appraisal before review.");
+    }
+    if (String(appraisal?.decision ?? "").toLowerCase() === "reject") {
       throw new Error("This appraisal recommends rejection. Reject the loan or update appraisal.");
     }
 
@@ -7120,6 +7126,19 @@ async function refreshLatestLoanCarriedPenalty(
     .update({ paid: summary.totalPaid, status: nextStatus })
     .eq("id", latestId);
   if (statusError) throw new Error(statusError.message);
+}
+
+async function memberHasAppraisalHistory(
+  runtimeDb: any,
+  args: { memberId: string; excludeLoanId?: string },
+) {
+  const memberId = String(args.memberId ?? "").trim();
+  if (!memberId) return false;
+  let query = runtimeDb.from("appraisals").select("id").eq("member_id", memberId).limit(1);
+  if (args.excludeLoanId) query = query.neq("loan_id", args.excludeLoanId);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return (data ?? []).length > 0;
 }
 
 async function refreshLatestCarryoverCarriedPenalty(
@@ -7368,9 +7387,6 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
     }
 
     if (data.decision === "approved") {
-      if (!loan.reviewed_by) {
-        throw new Error("This loan must be reviewed before it can be approved.");
-      }
       const { data: appraisal, error: appraisalError } = await supabaseAdmin
         .from("appraisals")
         .select("id, decision, total_score")
@@ -7379,10 +7395,14 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         .limit(1)
         .maybeSingle();
       if (appraisalError) throw new Error(appraisalError.message);
-      if (!appraisal) {
-        throw new Error("This loan must be appraised before it can be approved.");
+      const hasPriorMemberAppraisal = await memberHasAppraisalHistory(supabaseAdmin, {
+        memberId: String(loan.member_id ?? ""),
+        excludeLoanId: data.loanId,
+      });
+      if (!appraisal && !hasPriorMemberAppraisal) {
+        throw new Error("This member has no appraisal history. Complete appraisal before approval.");
       }
-      if (String(appraisal.decision ?? "").toLowerCase() === "reject") {
+      if (String(appraisal?.decision ?? "").toLowerCase() === "reject") {
         throw new Error(
           "This loan appraisal recommends rejection. Review the appraisal before approving.",
         );
@@ -13694,6 +13714,75 @@ export const appendSupportMessageRecord = createServerFn({ method: "POST" })
       });
     }
     return { id };
+  });
+
+export const polishSupportReplyRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { threadId: string; draft: string } | undefined) => ({
+    threadId: String(data?.threadId ?? "").trim(),
+    draft: String(data?.draft ?? "").trim(),
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.threadId) throw new Error("Choose a support conversation first.");
+    if (!data.draft) throw new Error("Write a draft reply first.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const [threadResult, messagesResult] = await Promise.all([
+      runtimeDb.from("support_threads").select("*").eq("id", data.threadId).maybeSingle(),
+      runtimeDb
+        .from("support_messages")
+        .select("*")
+        .eq("thread_id", data.threadId)
+        .order("created_at", { ascending: true }),
+    ]);
+    if (threadResult.error) throw new Error(threadResult.error.message);
+    if (messagesResult.error) throw new Error(messagesResult.error.message);
+    if (!threadResult.data) throw new Error("Support conversation not found.");
+
+    const thread = threadResult.data as Record<string, unknown>;
+    const transcript = ((messagesResult.data ?? []) as Record<string, unknown>[])
+      .slice(-12)
+      .map((message) => ({
+        from: message.sender_kind,
+        name: message.sender_name,
+        text: message.text,
+        at: message.created_at,
+      }));
+
+    const { completeGroqChat } = await import("@/lib/groq.server");
+    const answer = await completeGroqChat([
+      {
+        role: "system",
+        content:
+          "You polish Sauti Microfinance member support replies. Return only the final message body, plain text, no markdown. Keep it professional, warm, concise, and easy for a Kenyan SACCO member to understand. Do not invent facts, promises, approvals, loan statuses, payment confirmations, deadlines, or account balances. If the draft is unclear, preserve the staff member's intent and make it respectful.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          member: {
+            id: thread.member_id,
+            name: thread.member_name,
+          },
+          subject: thread.subject,
+          recentTranscript: transcript,
+          staffDraft: data.draft,
+        }),
+      },
+    ]);
+
+    await auditAction({
+      actor,
+      action: "support_reply.polished",
+      targetType: "support_thread",
+      targetId: data.threadId,
+      summary: `${actor.name} polished a member support reply`,
+      details: {
+        memberId: thread.member_id,
+        draftPreview: clipAuditText(data.draft, 200),
+      },
+    });
+
+    return { body: String(answer ?? "").trim() };
   });
 
 export const updateSupportMessageRecord = createServerFn({ method: "POST" })

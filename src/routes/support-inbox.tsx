@@ -5,10 +5,12 @@ import { useStore } from "@/lib/store";
 import { useEffect, useState } from "react";
 import { CommsTabs } from "./staff";
 import { useSupportInboxActions } from "@/lib/support-inbox";
-import { Inbox, Send, CheckCircle2, Copy, Pencil, Trash2 } from "lucide-react";
+import { Inbox, Send, CheckCircle2, Copy, Pencil, Trash2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useReadIds } from "@/lib/read-state";
 import { formatKenyaDateTime, formatKenyaTime } from "@/lib/time";
+import { useServerFn } from "@tanstack/react-start";
+import { polishSupportReplyRecord } from "@/lib/app-data.functions";
 
 export const Route = createFileRoute("/support-inbox")({
   head: () => ({ meta: [{ title: "Member Support — Sauti Microfinance" }] }),
@@ -17,6 +19,7 @@ export const Route = createFileRoute("/support-inbox")({
 
 function SupportInboxPage() {
   const { currentUser, staff } = useStore();
+  const polishSupportReply = useServerFn(polishSupportReplyRecord);
   const {
     rows: threads,
     appendMessage,
@@ -36,6 +39,7 @@ function SupportInboxPage() {
   );
   const [activeId, setActiveId] = useState<string>(visible[0]?.id ?? "");
   const [reply, setReply] = useState("");
+  const [polishing, setPolishing] = useState(false);
   const active = threads.find((t) => t.id === activeId);
 
   useEffect(() => {
@@ -69,6 +73,26 @@ function SupportInboxPage() {
     if (!active) return;
     await setThreadStatus(active.id, "closed");
     toast.success("Conversation closed");
+  }
+
+  async function polishReply() {
+    const draft = reply.trim();
+    if (!draft || !active) {
+      toast.error("Write a draft reply first.");
+      return;
+    }
+    setPolishing(true);
+    try {
+      const result = await polishSupportReply({ data: { threadId: active.id, draft } });
+      const body = String(result.body ?? "").trim();
+      if (!body) throw new Error("SautiAI did not return a polished reply.");
+      setReply(body);
+      toast.success("Reply polished");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not polish the reply.");
+    } finally {
+      setPolishing(false);
+    }
   }
 
   async function copyMessage(text: string) {
@@ -245,30 +269,44 @@ function SupportInboxPage() {
                   ))}
                 </div>
                 <form
-                  className="p-3 border-t border-border flex gap-2"
+                  className="border-t border-border p-3"
                   onSubmit={(e) => {
                     e.preventDefault();
                     void send();
                   }}
                 >
-                  <input
-                    value={reply}
-                    onChange={(e) => setReply(e.target.value)}
-                    placeholder="Reply to member…"
-                    className="flex-1 bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                  />
-                  <button className="px-3 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-1">
-                    <Send className="h-3.5 w-3.5" />
-                    Reply
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void close()}
-                    className="px-3 rounded-md border border-border text-sm inline-flex items-center gap-1 hover:bg-muted"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Close
-                  </button>
+                  <div className="flex gap-2">
+                    <textarea
+                      value={reply}
+                      onChange={(e) => setReply(e.target.value)}
+                      placeholder="Reply to member…"
+                      rows={3}
+                      className="min-h-[76px] flex-1 resize-none rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                    />
+                    <div className="flex w-36 flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void polishReply()}
+                        disabled={polishing || !reply.trim()}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        {polishing ? "Polishing" : "Polish"}
+                      </button>
+                      <button className="inline-flex items-center justify-center gap-1 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground">
+                        <Send className="h-3.5 w-3.5" />
+                        Reply
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void close()}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Close
+                      </button>
+                    </div>
+                  </div>
                 </form>
               </div>
             ) : (
