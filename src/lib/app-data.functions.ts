@@ -818,13 +818,6 @@ function openLoanDateValue(loan: {
   return String(loan.start_date ?? loan.created_at ?? loan.id ?? "");
 }
 
-function loanKindPriority(value?: string | null) {
-  const kind = normalizeLoanKindValue(value);
-  if (kind === "fuel" || kind === "stock") return 0;
-  if (kind === "service") return 1;
-  return 2;
-}
-
 function sortOpenLoansByDispatchDate<
   T extends {
     start_date?: string | null;
@@ -836,14 +829,10 @@ function sortOpenLoansByDispatchDate<
   },
 >(loans: T[]) {
   return [...loans].sort((left, right) => {
-    const byKind =
-      loanKindPriority(left.loan_kind ?? left.loanKind) -
-      loanKindPriority(right.loan_kind ?? right.loanKind);
-    if (byKind !== 0) return byKind;
-    const byStatus = (left.status === "defaulted" ? 0 : 1) - (right.status === "defaulted" ? 0 : 1);
-    if (byStatus !== 0) return byStatus;
     const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
     if (byDate !== 0) return byDate;
+    const byStatus = (left.status === "defaulted" ? 0 : 1) - (right.status === "defaulted" ? 0 : 1);
+    if (byStatus !== 0) return byStatus;
     return String(left.id ?? "").localeCompare(String(right.id ?? ""));
   });
 }
@@ -13015,13 +13004,18 @@ export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })
 export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).handler(async () => {
   const actor = await requireDirectorActor();
   const runtimeDb = (await requireSupabaseAdmin()) as any;
-  const policySettings = await loadRuntimePolicySettings(runtimeDb);
+  const [policySettings, feePolicies] = await Promise.all([
+    loadRuntimePolicySettings(runtimeDb),
+    loadRuntimeFeePolicies(runtimeDb),
+  ]);
 
-  const [members, transactions, liveLoans, carryoverLoans] = await Promise.all([
+  const [members, transactions, liveLoans, carryoverLoans, carryoverProfiles] = await Promise.all([
     fetchAllRows<Record<string, unknown>>(() =>
       runtimeDb
         .from("members")
-        .select("id, old_system_id, savings_balance, shares, share_reserve_balance"),
+        .select(
+          "id, old_system_id, savings_balance, shares, share_reserve_balance, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid",
+        ),
     ),
     fetchAllRows<Record<string, unknown>>(() =>
       runtimeDb
@@ -13033,12 +13027,22 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     fetchAllRows<Record<string, unknown>>(() =>
       runtimeDb.from("member_carryover_loans").select("*").order("start_date", { ascending: true }),
     ),
+    fetchAllRows<Record<string, unknown>>(() =>
+      runtimeDb.from("member_carryover_profiles").select("*"),
+    ),
   ]);
 
   const memberIdByAlias = new Map<string, string>();
+  const membersById = new Map<string, Record<string, unknown>>();
+  const carryoverProfileByMember = new Map<string, Record<string, unknown>>();
+  for (const profile of carryoverProfiles) {
+    const memberId = String(profile.member_id ?? "").trim();
+    if (memberId) carryoverProfileByMember.set(memberId, profile);
+  }
   for (const member of members) {
     const memberId = String(member.id ?? "").trim();
     if (!memberId) continue;
+    membersById.set(memberId, member);
     for (const alias of membershipAccountAliases(memberId)) {
       memberIdByAlias.set(alias, memberId);
     }
@@ -13099,6 +13103,68 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     transactionsLinked += 1;
   }
 
+  const lifetimeNetForTransactions = (memberTransactions: Record<string, unknown>[]) => {
+    const inflow = memberTransactions
+      .filter((transaction) =>
+        [
+          "deposit",
+          "loan_repayment",
+          "share_purchase",
+          "fee_payment",
+          "investor_contribution",
+        ].includes(String(transaction.type ?? "")),
+      )
+      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
+    const outflow = memberTransactions
+      .filter((transaction) =>
+        ["withdrawal", "loan_disbursement"].includes(String(transaction.type ?? "")),
+      )
+      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
+    return Math.max(0, roundMoney(inflow - outflow));
+  };
+
+  const reservedSnapshotBalanceForMember = (member: Record<string, unknown>) => {
+    const savings = Math.min(
+      Math.max(0, toNumber(member.savings_balance)),
+      mandatorySavingsThresholdForSettings(policySettings),
+    );
+    const shares = shareBasketValue(member.shares, member.share_reserve_balance);
+    const fees =
+      (member.fee_membership ? feePolicyAmount(feePolicies, "membership", 0) : 0) +
+      (member.fee_card ? feePolicyAmount(feePolicies, "card", 0) : 0) +
+      (member.fee_sticker ? feePolicyAmount(feePolicies, "sticker", 0) : 0) +
+      (member.fee_first_upfront_paid
+        ? policySettings.percentages.firstUpfrontAmount || FIRST_UPFRONT_AMOUNT
+        : 0);
+    return roundMoney(savings + shares + fees);
+  };
+
+  const snapshotLoanRemainingByMember = new Map<string, number>();
+  const snapshotLoanPaidByMember = new Map<string, number>();
+  const snapshotLifetimeNetByMember = new Map<string, number>();
+  const getSnapshotLoanRemaining = (memberId: string) => {
+    if (snapshotLoanRemainingByMember.has(memberId)) {
+      return snapshotLoanRemainingByMember.get(memberId) ?? 0;
+    }
+    const lifetimeNet = lifetimeNetForTransactions(transactionsByMember.get(memberId) ?? []);
+    const member = membersById.get(memberId);
+    const reserved = member ? reservedSnapshotBalanceForMember(member) : 0;
+    const remaining = Math.max(0, roundMoney(lifetimeNet - reserved));
+    snapshotLifetimeNetByMember.set(memberId, lifetimeNet);
+    snapshotLoanRemainingByMember.set(memberId, remaining);
+    snapshotLoanPaidByMember.set(memberId, 0);
+    return remaining;
+  };
+  const setSnapshotLoanRemaining = (memberId: string, remaining: number) => {
+    snapshotLoanRemainingByMember.set(memberId, Math.max(0, roundMoney(remaining)));
+  };
+  const addSnapshotLoanPayment = (memberId: string, amount: number) => {
+    snapshotLoanPaidByMember.set(
+      memberId,
+      roundMoney((snapshotLoanPaidByMember.get(memberId) ?? 0) + Math.max(0, amount)),
+    );
+  };
+
   let membersUpdated = 0;
   for (const member of members) {
     const memberId = String(member.id ?? "").trim();
@@ -13144,6 +13210,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     if (Object.keys(patch).length > 0) {
       const { error } = await runtimeDb.from("members").update(patch).eq("id", memberId);
       if (error) throw new Error(error.message);
+      Object.assign(member, patch);
       membersUpdated += 1;
     }
 
@@ -13196,99 +13263,6 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
   }
 
   let liveLoansUpdated = 0;
-  for (const [memberId, memberLoans] of liveLoansByMember) {
-    const memberTransactions = transactionsByMember.get(memberId) ?? [];
-    const inflow = memberTransactions
-      .filter((transaction) =>
-        [
-          "deposit",
-          "loan_repayment",
-          "share_purchase",
-          "fee_payment",
-          "investor_contribution",
-        ].includes(String(transaction.type ?? "")),
-      )
-      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
-    const outflow = memberTransactions
-      .filter((transaction) =>
-        ["withdrawal", "loan_disbursement"].includes(String(transaction.type ?? "")),
-      )
-      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
-    let lifetimeRemaining = Math.max(0, roundMoney(inflow - outflow));
-    const activeByKind = new Map<string, Record<string, unknown>[]>();
-    for (const loan of memberLoans) {
-      const kind = normalizeLoanKindValue(String(loan.loan_kind ?? "financial"));
-      const group = activeByKind.get(kind) ?? [];
-      group.push(loan);
-      activeByKind.set(kind, group);
-    }
-
-    const allocationLoans: Record<string, unknown>[] = [];
-    for (const kindLoans of activeByKind.values()) {
-      const newestFirst = [...kindLoans].sort((left, right) => {
-        const byDate = openLoanDateValue(right).localeCompare(openLoanDateValue(left));
-        if (byDate !== 0) return byDate;
-        return String(right.id ?? "").localeCompare(String(left.id ?? ""));
-      });
-      const [latest, ...olderLoans] = newestFirst;
-      if (latest) allocationLoans.push(latest);
-      for (const olderLoan of olderLoans) {
-        const summary = await liveLoanAccountingSummary(
-          runtimeDb,
-          olderLoan as any,
-          policySettings,
-        );
-        const { error } = await runtimeDb
-          .from("loans")
-          .update({
-            paid: Math.max(toNumber(olderLoan.paid as any), summary.totalExpectedCollected),
-            status: "closed",
-            supplier_payload: {
-              ...asJsonObject(olderLoan.supplier_payload),
-              closedAsEarlierCycleBeforeLoanId: String(latest?.id ?? ""),
-              closedFromLifetimeNetAt: new Date().toISOString(),
-            },
-          })
-          .eq("id", String(olderLoan.id));
-        if (error) throw new Error(error.message);
-        liveLoansUpdated += 1;
-      }
-    }
-
-    const sortedLoans = [...(allocationLoans as any[])].sort((left, right) => {
-      const byDate = openLoanDateValue(left).localeCompare(openLoanDateValue(right));
-      if (byDate !== 0) return byDate;
-      return String(left.id ?? "").localeCompare(String(right.id ?? ""));
-    });
-
-    for (const loan of sortedLoans) {
-      const loanId = String(loan.id ?? "").trim();
-      if (!loanId) continue;
-      const zeroPaidSummary = await liveLoanAccountingSummary(
-        runtimeDb,
-        loan as any,
-        policySettings,
-        {
-          payments: [],
-          overridePaid: 0,
-        },
-      );
-      const applied = Math.min(lifetimeRemaining, zeroPaidSummary.totalExpectedCollected);
-      lifetimeRemaining = roundMoney(lifetimeRemaining - applied);
-      const summary = await liveLoanAccountingSummary(runtimeDb, loan as any, policySettings, {
-        payments: mapLoanRepaymentPayments(repaymentRowsByLiveLoan.get(loanId) ?? []),
-        overridePaid: applied,
-      });
-      const nextStatus = nextLiveLoanStatus(String(loan.status ?? "active"), summary);
-      const { error } = await runtimeDb
-        .from("loans")
-        .update({ paid: summary.totalPaid, status: nextStatus })
-        .eq("id", loanId);
-      if (error) throw new Error(error.message);
-      liveLoansUpdated += 1;
-    }
-  }
-
   const carryoverByMember = new Map<string, Record<string, unknown>[]>();
   for (const loan of carryoverLoans) {
     const memberId = String(loan.member_id ?? "").trim();
@@ -13301,106 +13275,124 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
 
   let carryoverLoansUpdated = 0;
   const carryoverMembersUpdated = new Set<string>();
-  for (const [memberId, loans] of carryoverByMember) {
-    const memberTransactions = transactionsByMember.get(memberId) ?? [];
-    const inflow = memberTransactions
-      .filter((transaction) =>
-        [
-          "deposit",
-          "loan_repayment",
-          "share_purchase",
-          "fee_payment",
-          "investor_contribution",
-        ].includes(String(transaction.type ?? "")),
-      )
-      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
-    const outflow = memberTransactions
-      .filter((transaction) =>
-        ["withdrawal", "loan_disbursement"].includes(String(transaction.type ?? "")),
-      )
-      .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
-    let remaining = Math.max(0, roundMoney(inflow - outflow));
-    const activeByKind = new Map<string, Record<string, unknown>[]>();
-    for (const loan of loans) {
-      const kind = normalizeLoanKindValue(String(loan.loan_kind ?? "financial"));
-      const group = activeByKind.get(kind) ?? [];
-      group.push(loan);
-      activeByKind.set(kind, group);
-    }
+  const memberIdsWithOpenLoans = new Set<string>([
+    ...Array.from(liveLoansByMember.keys()),
+    ...Array.from(carryoverByMember.keys()),
+  ]);
+  const today = new Date().toISOString().slice(0, 10);
 
-    const allocationLoans: Record<string, unknown>[] = [];
-    for (const kindLoans of activeByKind.values()) {
-      const newestFirst = [...kindLoans].sort((left, right) => {
-        const byDate = openLoanDateValue(right).localeCompare(openLoanDateValue(left));
-        if (byDate !== 0) return byDate;
-        return String(right.id ?? "").localeCompare(String(left.id ?? ""));
-      });
-      const [latest, ...olderLoans] = newestFirst;
-      if (latest) allocationLoans.push(latest);
-      for (const olderLoan of olderLoans) {
-        const summary = summarizeLegacyCarryoverLoan(
-          mapCarryoverLoanForSummary(olderLoan),
+  for (const memberId of memberIdsWithOpenLoans) {
+    let remaining = getSnapshotLoanRemaining(memberId);
+    const loanTargets = [
+      ...(liveLoansByMember.get(memberId) ?? []).map((loan) => ({
+        source: "live" as const,
+        loan,
+        start_date: loan.start_date as string | null | undefined,
+        created_at: loan.created_at as string | null | undefined,
+        id: loan.id as string | null | undefined,
+        loan_kind: loan.loan_kind as string | null | undefined,
+        status: loan.status as string | null | undefined,
+      })),
+      ...(carryoverByMember.get(memberId) ?? []).map((loan) => ({
+        source: "carryover" as const,
+        loan,
+        start_date: loan.start_date as string | null | undefined,
+        created_at: loan.created_at as string | null | undefined,
+        id: loan.id as string | null | undefined,
+        loan_kind: loan.loan_kind as string | null | undefined,
+        status: loan.status as string | null | undefined,
+      })),
+    ];
+
+    for (const target of sortOpenLoansByDispatchDate(loanTargets)) {
+      const loanId = String(target.loan.id ?? "").trim();
+      if (!loanId) continue;
+
+      if (target.source === "live") {
+        const zeroPaidSummary = await liveLoanAccountingSummary(
+          runtimeDb,
+          target.loan as any,
           policySettings,
+          {
+            payments: [],
+            overridePaid: 0,
+          },
         );
+        const applied = Math.min(remaining, zeroPaidSummary.totalOwedNow);
+        remaining = roundMoney(remaining - applied);
+        addSnapshotLoanPayment(memberId, applied);
+        const summary = await liveLoanAccountingSummary(runtimeDb, target.loan as any, policySettings, {
+          payments: [],
+          overridePaid: applied,
+        });
+        const nextStatus = nextLiveLoanStatus(String(target.loan.status ?? "active"), summary, today);
         const { error } = await runtimeDb
-          .from("member_carryover_loans")
-          .update({
-            paid_to_date: Math.max(
-              toNumber(olderLoan.paid_to_date as any),
-              summary.totalExpectedCollected,
-            ),
-            status: "closed",
-            finished: true,
-            closed_on: String(olderLoan.due_date ?? summary.dueDate),
-            penalty_waived_amount: roundMoney(
-              toNumber(olderLoan.penalty_waived_amount as any) + summary.estimatedPenaltyNow,
-            ),
-            fee_breakdown: {
-              ...asJsonObject(olderLoan.fee_breakdown),
-              closedAsEarlierCycleBeforeCarryoverId: String(latest?.id ?? ""),
-              closedFromLifetimeNetAt: new Date().toISOString(),
-            },
-          })
-          .eq("id", String(olderLoan.id));
+          .from("loans")
+          .update({ paid: summary.totalPaid, status: nextStatus })
+          .eq("id", loanId);
         if (error) throw new Error(error.message);
-        carryoverLoansUpdated += 1;
-        carryoverMembersUpdated.add(memberId);
+        liveLoansUpdated += 1;
+        continue;
       }
-    }
 
-    const sortedLoans = sortOpenLoansByDispatchDate(allocationLoans as any[]);
-
-    for (const loan of sortedLoans) {
       const summary = summarizeLegacyCarryoverLoan(
-        { ...mapCarryoverLoanForSummary(loan), paidToDate: 0 },
+        { ...mapCarryoverLoanForSummary(target.loan), paidToDate: 0 },
         policySettings,
       );
-      const fullExpected = summary.totalOwedNow;
-      const applied = Math.min(remaining, fullExpected);
+      const applied = Math.min(remaining, summary.totalOwedNow);
       remaining = roundMoney(remaining - applied);
+      addSnapshotLoanPayment(memberId, applied);
       const appliedSummary = summarizeLegacyCarryoverLoan(
-        { ...mapCarryoverLoanForSummary(loan), paidToDate: applied },
+        { ...mapCarryoverLoanForSummary(target.loan), paidToDate: applied },
         policySettings,
       );
       const finished = appliedSummary.totalOwedNow <= 0;
-      const status = finished
+      const nextStatus = finished
         ? "closed"
-        : appliedSummary.dueDate < new Date().toISOString().slice(0, 10)
+        : appliedSummary.dueDate < today || target.loan.status === "defaulted"
           ? "defaulted"
-          : String(loan.status ?? "active");
+          : "active";
       const { error } = await runtimeDb
         .from("member_carryover_loans")
         .update({
           paid_to_date: applied,
-          status: finished ? "closed" : status,
+          status: nextStatus,
           finished,
-          closed_on: finished ? String(loan.due_date ?? summary.dueDate) : null,
+          closed_on: finished ? String(target.loan.due_date ?? summary.dueDate) : null,
         })
-        .eq("id", String(loan.id));
+        .eq("id", loanId);
       if (error) throw new Error(error.message);
       carryoverLoansUpdated += 1;
       carryoverMembersUpdated.add(memberId);
     }
+
+    setSnapshotLoanRemaining(memberId, remaining);
+  }
+
+  for (const [memberId, profile] of carryoverProfileByMember) {
+    const lifetimeNet =
+      snapshotLifetimeNetByMember.get(memberId) ??
+      lifetimeNetForTransactions(transactionsByMember.get(memberId) ?? []);
+    const member = membersById.get(memberId);
+    const reserved = member ? reservedSnapshotBalanceForMember(member) : 0;
+    const loanPaid = snapshotLoanPaidByMember.get(memberId) ?? 0;
+    const purposePoolBalance = Math.max(0, roundMoney(lifetimeNet - reserved - loanPaid));
+    const collectionBreakdown = {
+      ...asJsonObject(profile.collection_breakdown),
+      totalDepositsRecorded: lifetimeNet,
+      purposePoolBalance,
+      snapshotRepairAppliedAt: new Date().toISOString(),
+    };
+    const { error } = await runtimeDb
+      .from("member_carryover_profiles")
+      .update({
+        total_collected: lifetimeNet,
+        loan_repayments_total: loanPaid,
+        collection_breakdown: collectionBreakdown,
+      })
+      .eq("member_id", memberId);
+    if (error) throw new Error(error.message);
+    carryoverMembersUpdated.add(memberId);
   }
 
   for (const memberId of carryoverMembersUpdated) {

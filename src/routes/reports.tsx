@@ -22,10 +22,12 @@ import {
 import { createReportSnapshotRecord } from "@/lib/app-data.functions";
 import {
   summarizeLegacyCarryoverLoan,
+  type LegacyCarryoverProfile,
   type LegacyCarryoverLoan,
   type ReportSnapshot,
 } from "@/lib/legacy-finance";
 import {
+  listAllCarryoverProfiles,
   listAllCarryoverLoans,
   listReportSnapshots,
   listServiceAdministrationReports,
@@ -103,6 +105,7 @@ function ReportsPage() {
   const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
   const loadSnapshots = useServerFn(listReportSnapshots);
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
+  const loadCarryoverProfiles = useServerFn(listAllCarryoverProfiles);
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const loadServiceReports = useServerFn(listServiceAdministrationReports);
   const {
@@ -119,6 +122,7 @@ function ReportsPage() {
   } = useStore();
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
+  const [carryoverProfiles, setCarryoverProfiles] = useState<LegacyCarryoverProfile[]>([]);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [purposePoolMemberId, setPurposePoolMemberId] = useState("");
   const [contributionMemberId, setContributionMemberId] = useState("");
@@ -156,6 +160,18 @@ function ReportsPage() {
   useEffect(() => {
     refreshCarryoverLoans().catch(() => {});
   }, [refreshCarryoverLoans]);
+
+  const refreshCarryoverProfiles = useCallback(async () => {
+    try {
+      setCarryoverProfiles((await loadCarryoverProfiles()) as LegacyCarryoverProfile[]);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load carryover profiles.");
+    }
+  }, [loadCarryoverProfiles]);
+
+  useEffect(() => {
+    refreshCarryoverProfiles().catch(() => {});
+  }, [refreshCarryoverProfiles]);
 
   useEffect(() => {
     loadSupplierWorkspace()
@@ -464,39 +480,87 @@ function ReportsPage() {
   const contributionTransactions = contributionMemberId
     ? transactions.filter((transaction) => transaction.memberId === contributionMemberId)
     : [];
+  const contributionLiveLoans = contributionMemberId
+    ? loans.filter(
+        (loan) =>
+          loan.memberId === contributionMemberId &&
+          loan.status !== "pending" &&
+          loan.status !== "rejected",
+      )
+    : [];
+  const contributionCarryoverLoans = contributionMemberId
+    ? carryoverLoans.filter((loan) => loan.memberId === contributionMemberId)
+    : [];
+  const contributionCarryoverProfile = contributionMemberId
+    ? carryoverProfiles.find((profile) => profile.memberId === contributionMemberId)
+    : undefined;
+  const contributionPurposePoolTransactions = contributionTransactions.filter((transaction) =>
+    isPurposePoolTransaction(transaction),
+  );
+  const contributionFeeTransactions = contributionTransactions.filter(
+    (transaction) =>
+      transaction.type === "fee_payment" &&
+      transaction.amount > 0 &&
+      !isPurposePoolTransaction(transaction) &&
+      !isOperationalRoutingTransaction(transaction),
+  );
+  const contributionPenaltyRows = penalties.filter(
+    (penalty) => penalty.memberId === contributionMemberId,
+  );
+  const contributionPurposePoolBalance = Math.max(
+    0,
+    numberValue(
+      objectValue(contributionCarryoverProfile?.collectionBreakdown).purposePoolBalance ??
+        contributionPurposePoolTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+    ),
+  );
   const contributionRows: BookRow[] = [
-    movementRow("loan_repayment", "Loans", contributionTransactions, "loan_repayment", ""),
-    movementRow("savings", "Savings", contributionTransactions, "deposit", ""),
-    movementRow("shares", "Shares", contributionTransactions, "share_purchase", ""),
+    movementRow(
+      "loan_repayment",
+      "Loans",
+      contributionLiveLoans.length + contributionCarryoverLoans.length,
+      contributionLiveLoans.reduce((sum, loan) => sum + loan.paid, 0) +
+        contributionCarryoverLoans.reduce((sum, loan) => sum + loan.paidToDate, 0),
+      "Paid amounts from live and carryover loan records.",
+    ),
+    movementRow(
+      "savings",
+      "Savings",
+      contributionTransactions.filter((transaction) => transaction.type === "deposit").length,
+      contributionMember?.savingsBalance ?? 0,
+      "Current savings balance.",
+    ),
+    movementRow(
+      "shares",
+      "Shares",
+      contributionTransactions.filter((transaction) => transaction.type === "share_purchase")
+        .length,
+      (contributionMember?.shares ?? 0) * sharePrice,
+      "Current share value.",
+    ),
     movementRow(
       "purpose_pool",
       "Purpose pool",
-      contributionTransactions.filter((transaction) =>
-        String(transaction.note ?? "")
-          .toLowerCase()
-          .includes("purpose pool"),
-      ).length,
-      contributionTransactions
-        .filter((transaction) =>
-          String(transaction.note ?? "")
-            .toLowerCase()
-            .includes("purpose pool"),
-        )
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      contributionPurposePoolTransactions.length,
+      contributionPurposePoolBalance,
       "",
     ),
-    movementRow("fees", "Fees", contributionTransactions, "fee_payment", ""),
+    movementRow(
+      "fees",
+      "Fees",
+      contributionFeeTransactions.length,
+      contributionFeeTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      "Actual member fees only; purpose-pool and operational routing rows are excluded.",
+    ),
     movementRow(
       "penalties",
       "Penalties",
-      penalties.filter((penalty) => penalty.memberId === contributionMemberId).length,
-      penalties
-        .filter((penalty) => penalty.memberId === contributionMemberId)
-        .reduce((sum, penalty) => sum + penalty.amount, 0),
+      contributionPenaltyRows.length,
+      contributionPenaltyRows.reduce((sum, penalty) => sum + penalty.amount, 0),
       "",
     ),
   ];
-  const loanCategoryReportRows = (["financial", "fuel", "stock"] as const).map((kind) => {
+  const loanCategoryReportRows = (["financial", "fuel", "stock", "service"] as const).map((kind) => {
     const rows = allLoanHealth.filter((row) => row.kind === kind);
     return {
       key: kind,
@@ -1660,6 +1724,26 @@ function BookTable({
 function transactionNoteIncludes(note: unknown, ...needles: string[]) {
   const normalized = String(note ?? "").toLowerCase();
   return needles.some((needle) => normalized.includes(needle.toLowerCase()));
+}
+
+function isPurposePoolTransaction(transaction: { note?: unknown; type?: string }) {
+  return (
+    transaction.type === "fee_payment" &&
+    transactionNoteIncludes(transaction.note, "purpose pool")
+  );
+}
+
+function isOperationalRoutingTransaction(transaction: { note?: unknown }) {
+  return transactionNoteIncludes(
+    transaction.note,
+    "locomotive fuel buffer",
+    "fuel buffer",
+    "stock buffer",
+    "service wallet",
+    "member service account",
+    "service payment",
+    "reallocation ->",
+  );
 }
 
 function classifyPenalty(reason: string) {

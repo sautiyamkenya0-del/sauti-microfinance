@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { AppHeader } from "@/components/AppHeader";
+import { OperationProgress } from "@/components/OperationProgress";
 import { fmtKES, useStore } from "@/lib/store";
 import { listMpesaReceiptAudit, updateCurrentSnapshotRecord } from "@/lib/app-data.functions";
 import {
@@ -804,6 +805,11 @@ function ClientRecordsTab({
             </button>
           </div>
         </div>
+        <OperationProgress
+          active={updating}
+          label="Updating current snapshot across members, loans, carryovers, and dockets"
+          estimateSeconds={120}
+        />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">

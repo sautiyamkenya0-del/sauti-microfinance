@@ -28,6 +28,7 @@ import { toast } from "sonner";
 
 import { AppHeader } from "@/components/AppHeader";
 import { MemberSearchSelect } from "@/components/MemberSearchSelect";
+import { OperationProgress } from "@/components/OperationProgress";
 import {
   FuelJobCardFields,
   normalizeFuelJobCardRows,
@@ -1465,6 +1466,13 @@ function PolicyCenterPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${isRedistributing ? "animate-spin" : ""}`} />
             {isRedistributing ? "Redistributing..." : "Redistribute now"}
           </button>
+          <div className="basis-full">
+            <OperationProgress
+              active={isRedistributing}
+              label="Redistributing purpose-pool balances through current policy waterfall"
+              estimateSeconds={90}
+            />
+          </div>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-4">
