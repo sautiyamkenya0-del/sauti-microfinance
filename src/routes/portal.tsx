@@ -31,6 +31,10 @@ import {
   Bell,
   Wallet,
   Send,
+  Fuel,
+  PackageCheck,
+  LifeBuoy,
+  PlusCircle,
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
@@ -455,6 +459,16 @@ function Portal() {
     setPayMember(member);
   }
 
+  function scrollToPortalRequests() {
+    setTab("overview");
+    window.setTimeout(() => {
+      document.getElementById("portal-request-actions")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 50);
+  }
+
   async function submitLoanApplication() {
     if (!member) return;
     const amount = Math.max(0, Number(loanRequestAmount) || 0);
@@ -678,6 +692,48 @@ function Portal() {
 
             {tab === "overview" && (
               <>
+                {!isStaffView && (
+                  <Section title="Quick actions">
+                    <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5">
+                      <PortalAction
+                        icon={Smartphone}
+                        title="Prompt payment"
+                        detail="Send an M-Pesa prompt to my phone."
+                        onClick={() => openPayment({ purpose: "savings" })}
+                      />
+                      {canRequestLoans ? (
+                        <PortalAction
+                          icon={PlusCircle}
+                          title="Request loan"
+                          detail="Apply for a financial, fuel, stock, or service loan."
+                          onClick={scrollToPortalRequests}
+                        />
+                      ) : null}
+                      {member.category === "locomotive" ? (
+                        <PortalAction
+                          icon={Fuel}
+                          title="Fuel request"
+                          detail="Ask for fuel support for a vehicle."
+                          onClick={scrollToPortalRequests}
+                        />
+                      ) : null}
+                      {canRequestStock ? (
+                        <PortalAction
+                          icon={PackageCheck}
+                          title="Stock request"
+                          detail="Request stock from available inventory."
+                          onClick={scrollToPortalRequests}
+                        />
+                      ) : null}
+                      <PortalAction
+                        icon={LifeBuoy}
+                        title="Support"
+                        detail="Chat with staff or ask for help."
+                        onClick={() => setTab("support")}
+                      />
+                    </div>
+                  </Section>
+                )}
                 {!isStaffView && (
                   <Section title="Make a payment">
                     <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -964,188 +1020,193 @@ function Portal() {
                     ))}
                   </div>
                 </Section>
-                {!isStaffView && canRequestLoans && (
-                  <Section title="Apply for a loan">
-                    <div className="grid gap-3 p-5 sm:grid-cols-3">
-                      <select
-                        value={loanRequestKind}
-                        onChange={(event) =>
-                          setLoanRequestKind(event.target.value as typeof loanRequestKind)
-                        }
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                      >
-                        <option value="financial">Financial loan</option>
-                        <option value="fuel">Fuel loan</option>
-                        <option value="stock">Stock loan</option>
-                        <option value="service">Service loan</option>
-                      </select>
-                      <input
-                        value={loanRequestAmount}
-                        onChange={(event) => setLoanRequestAmount(event.target.value)}
-                        placeholder="Amount"
-                        type="number"
-                        min={1}
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={loanRequestDays}
-                        onChange={(event) => setLoanRequestDays(event.target.value)}
-                        placeholder="Repayment days"
-                        type="number"
-                        min={1}
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={loanRequestPurpose}
-                        onChange={(event) => setLoanRequestPurpose(event.target.value)}
-                        placeholder="Purpose"
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-3"
-                      />
-                      <div className="sm:col-span-3">
-                        <button
-                          onClick={() => void submitLoanApplication()}
-                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Submit loan application
-                        </button>
-                      </div>
-                    </div>
-                  </Section>
-                )}
-                {!isStaffView && !canRequestLoans && (
-                  <Section title="Loan requests">
-                    <div className="p-5 text-sm text-muted-foreground">
-                      Service-only accounts can view records and support, but cannot request loans.
-                    </div>
-                  </Section>
-                )}
-                {!isStaffView && member.category === "locomotive" && (
-                  <Section title="Request fuel loan">
-                    <div className="p-5 grid gap-3 sm:grid-cols-2">
-                      <input
-                        value={fuelLoanVehicle}
-                        onChange={(event) => setFuelLoanVehicle(event.target.value)}
-                        placeholder="Vehicle / plate"
-                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={fuelLoanType}
-                        onChange={(event) => setFuelLoanType(event.target.value)}
-                        placeholder="Fuel type"
-                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={fuelLoanLitres}
-                        onChange={(event) => setFuelLoanLitres(event.target.value)}
-                        placeholder="Litres requested"
-                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={fuelLoanAmount}
-                        onChange={(event) => setFuelLoanAmount(event.target.value)}
-                        placeholder="Estimated amount"
-                        className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
-                      />
-                      <div className="sm:col-span-2">
-                        <button
-                          onClick={async () => {
-                            await submit({
-                              kind: "other",
-                              title: "Fuel loan request",
-                              detail: `${member.name} requests a fuel loan for ${fuelLoanVehicle || "vehicle"} / ${fuelLoanType || "fuel"} / ${fuelLoanLitres || "0"} litres / ${fuelLoanAmount || "0"} KES.`,
-                              requestedBy: member.id,
-                              requestedByName: member.name,
-                              payload: {
-                                requestType: "fuel_loan",
-                                vehiclePlate: fuelLoanVehicle,
-                                fuelType: fuelLoanType,
-                                litres: fuelLoanLitres,
-                                amount: fuelLoanAmount,
-                              },
-                            });
-                            toast.success("Fuel loan request submitted for director approval");
-                            setFuelLoanVehicle("");
-                            setFuelLoanType("");
-                            setFuelLoanLitres("");
-                            setFuelLoanAmount("");
-                          }}
-                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Submit fuel request
-                        </button>
-                      </div>
-                    </div>
-                  </Section>
-                )}
-                {!isStaffView && canRequestStock && (
-                  <Section title="Request stock">
-                    <div className="grid gap-3 p-5 sm:grid-cols-2">
-                      <select
-                        value={stockRequestItemId}
-                        onChange={(event) => setStockRequestItemId(event.target.value)}
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                      >
-                        <option value="">Choose stock item</option>
-                        {serviceWorkspace.stockItems.map((item: any) => (
-                          <option key={item.id} value={item.id}>
-                            {item.item_name ?? item.itemName ?? item.name} -{" "}
-                            {fmtKES(Number(item.unit_price ?? item.unitPrice ?? 0))}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        value={stockRequestQuantity}
-                        onChange={(event) => setStockRequestQuantity(event.target.value)}
-                        type="number"
-                        min={1}
-                        placeholder="Quantity"
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={stockRequestPurpose}
-                        onChange={(event) => setStockRequestPurpose(event.target.value)}
-                        placeholder="Purpose / note"
-                        className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-2"
-                      />
-                      <div className="sm:col-span-2">
-                        <button
-                          onClick={async () => {
-                            if (!selectedStockItem) return toast.error("Choose a stock item.");
-                            const quantity = Math.max(1, Number(stockRequestQuantity) || 1);
-                            const unitPrice = Number(
-                              selectedStockItem.unit_price ?? selectedStockItem.unitPrice ?? 0,
-                            );
-                            const itemName =
-                              selectedStockItem.item_name ??
-                              selectedStockItem.itemName ??
-                              selectedStockItem.name ??
-                              "Stock item";
-                            await submit({
-                              kind: "other",
-                              title: "Stock request",
-                              detail: `${member.name} requests ${quantity} x ${itemName}. Purpose: ${stockRequestPurpose || "not stated"}.`,
-                              requestedBy: member.id,
-                              requestedByName: member.name,
-                              payload: {
-                                requestType: "stock_request",
-                                itemId: selectedStockItem.id,
-                                itemName,
-                                quantity,
-                                estimatedAmount: unitPrice * quantity,
-                                purpose: stockRequestPurpose,
-                              },
-                            });
-                            toast.success("Stock request submitted for approval");
-                            setStockRequestQuantity("");
-                            setStockRequestPurpose("");
-                          }}
-                          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Submit stock request
-                        </button>
-                      </div>
-                    </div>
-                  </Section>
+                {!isStaffView && (
+                  <div id="portal-request-actions" className="scroll-mt-24 space-y-6">
+                    {canRequestLoans && (
+                      <Section title="Apply for a loan">
+                        <div className="grid gap-3 p-5 sm:grid-cols-3">
+                          <select
+                            value={loanRequestKind}
+                            onChange={(event) =>
+                              setLoanRequestKind(event.target.value as typeof loanRequestKind)
+                            }
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          >
+                            <option value="financial">Financial loan</option>
+                            <option value="fuel">Fuel loan</option>
+                            <option value="stock">Stock loan</option>
+                            <option value="service">Service loan</option>
+                          </select>
+                          <input
+                            value={loanRequestAmount}
+                            onChange={(event) => setLoanRequestAmount(event.target.value)}
+                            placeholder="Amount"
+                            type="number"
+                            min={1}
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={loanRequestDays}
+                            onChange={(event) => setLoanRequestDays(event.target.value)}
+                            placeholder="Repayment days"
+                            type="number"
+                            min={1}
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={loanRequestPurpose}
+                            onChange={(event) => setLoanRequestPurpose(event.target.value)}
+                            placeholder="Purpose"
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-3"
+                          />
+                          <div className="sm:col-span-3">
+                            <button
+                              onClick={() => void submitLoanApplication()}
+                              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                            >
+                              Submit loan application
+                            </button>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+                    {!canRequestLoans && (
+                      <Section title="Loan requests">
+                        <div className="p-5 text-sm text-muted-foreground">
+                          Service-only accounts can view records and support, but cannot request
+                          loans.
+                        </div>
+                      </Section>
+                    )}
+                    {member.category === "locomotive" && (
+                      <Section title="Request fuel loan">
+                        <div className="p-5 grid gap-3 sm:grid-cols-2">
+                          <input
+                            value={fuelLoanVehicle}
+                            onChange={(event) => setFuelLoanVehicle(event.target.value)}
+                            placeholder="Vehicle / plate"
+                            className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={fuelLoanType}
+                            onChange={(event) => setFuelLoanType(event.target.value)}
+                            placeholder="Fuel type"
+                            className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={fuelLoanLitres}
+                            onChange={(event) => setFuelLoanLitres(event.target.value)}
+                            placeholder="Litres requested"
+                            className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={fuelLoanAmount}
+                            onChange={(event) => setFuelLoanAmount(event.target.value)}
+                            placeholder="Estimated amount"
+                            className="bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                          />
+                          <div className="sm:col-span-2">
+                            <button
+                              onClick={async () => {
+                                await submit({
+                                  kind: "other",
+                                  title: "Fuel loan request",
+                                  detail: `${member.name} requests a fuel loan for ${fuelLoanVehicle || "vehicle"} / ${fuelLoanType || "fuel"} / ${fuelLoanLitres || "0"} litres / ${fuelLoanAmount || "0"} KES.`,
+                                  requestedBy: member.id,
+                                  requestedByName: member.name,
+                                  payload: {
+                                    requestType: "fuel_loan",
+                                    vehiclePlate: fuelLoanVehicle,
+                                    fuelType: fuelLoanType,
+                                    litres: fuelLoanLitres,
+                                    amount: fuelLoanAmount,
+                                  },
+                                });
+                                toast.success("Fuel loan request submitted for director approval");
+                                setFuelLoanVehicle("");
+                                setFuelLoanType("");
+                                setFuelLoanLitres("");
+                                setFuelLoanAmount("");
+                              }}
+                              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                            >
+                              Submit fuel request
+                            </button>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+                    {canRequestStock && (
+                      <Section title="Request stock">
+                        <div className="grid gap-3 p-5 sm:grid-cols-2">
+                          <select
+                            value={stockRequestItemId}
+                            onChange={(event) => setStockRequestItemId(event.target.value)}
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          >
+                            <option value="">Choose stock item</option>
+                            {serviceWorkspace.stockItems.map((item: any) => (
+                              <option key={item.id} value={item.id}>
+                                {item.item_name ?? item.itemName ?? item.name} -{" "}
+                                {fmtKES(Number(item.unit_price ?? item.unitPrice ?? 0))}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={stockRequestQuantity}
+                            onChange={(event) => setStockRequestQuantity(event.target.value)}
+                            type="number"
+                            min={1}
+                            placeholder="Quantity"
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                          />
+                          <input
+                            value={stockRequestPurpose}
+                            onChange={(event) => setStockRequestPurpose(event.target.value)}
+                            placeholder="Purpose / note"
+                            className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-2"
+                          />
+                          <div className="sm:col-span-2">
+                            <button
+                              onClick={async () => {
+                                if (!selectedStockItem) return toast.error("Choose a stock item.");
+                                const quantity = Math.max(1, Number(stockRequestQuantity) || 1);
+                                const unitPrice = Number(
+                                  selectedStockItem.unit_price ?? selectedStockItem.unitPrice ?? 0,
+                                );
+                                const itemName =
+                                  selectedStockItem.item_name ??
+                                  selectedStockItem.itemName ??
+                                  selectedStockItem.name ??
+                                  "Stock item";
+                                await submit({
+                                  kind: "other",
+                                  title: "Stock request",
+                                  detail: `${member.name} requests ${quantity} x ${itemName}. Purpose: ${stockRequestPurpose || "not stated"}.`,
+                                  requestedBy: member.id,
+                                  requestedByName: member.name,
+                                  payload: {
+                                    requestType: "stock_request",
+                                    itemId: selectedStockItem.id,
+                                    itemName,
+                                    quantity,
+                                    estimatedAmount: unitPrice * quantity,
+                                    purpose: stockRequestPurpose,
+                                  },
+                                });
+                                toast.success("Stock request submitted for approval");
+                                setStockRequestQuantity("");
+                                setStockRequestPurpose("");
+                              }}
+                              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                            >
+                              Submit stock request
+                            </button>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+                  </div>
                 )}
               </>
             )}
@@ -1659,6 +1720,34 @@ function PaymentAction({
       </span>
       <span className="mt-3 block text-sm font-semibold">{title}</span>
       <span className="mt-1 block text-xs text-muted-foreground">{detail}</span>
+    </button>
+  );
+}
+
+function PortalAction({
+  icon: Icon,
+  title,
+  detail,
+  onClick,
+}: {
+  icon: LucideIcon;
+  title: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-24 items-start gap-3 rounded-md border border-border bg-background p-4 text-left transition hover:border-primary/40 hover:bg-primary/5"
+    >
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-muted text-primary">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold">{title}</span>
+        <span className="mt-1 block text-xs leading-5 text-muted-foreground">{detail}</span>
+      </span>
     </button>
   );
 }

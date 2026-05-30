@@ -1,5 +1,5 @@
 import { useStore, roleLabel, navForUser } from "@/lib/store";
-import { Bell, Search, Menu, X as IconX } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Search, Menu, X as IconX } from "lucide-react";
 import logoUrl from "@/assets/sauti-logo.png?url";
 import { useNotifications, useUnreadCommunicationCount } from "@/lib/notifications";
 import { useReadIds } from "@/lib/read-state";
@@ -95,12 +95,15 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+const LITE_ENTRY_IDS = new Set(["dashboard", "portal", "lending", "members", "capital", "comms"]);
+
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
-  const { currentUser, loans } = useStore();
+  const { currentUser, loans, appMode, setAppMode, logout, authMode } = useStore();
   const navigate = useNavigate();
   const notes = useNotifications();
   const { markRead } = useReadIds();
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [pulse, setPulse] = useState<"idle" | "alert" | "info">("idle");
   const initializedRef = useRef(false);
   const seenNoteIdsRef = useRef(new Set<string>());
@@ -112,8 +115,11 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
   const entries = useMemo(
-    () => ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))),
-    [allowed],
+    () =>
+      ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
+        (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
+      ),
+    [allowed, appMode],
   );
   const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
 
@@ -295,26 +301,97 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               </>
             )}
           </div>
-          <div className="flex items-center gap-2.5 pl-3 border-l border-border">
-            {currentUser.photo ? (
-              <img
-                src={currentUser.photo}
-                alt={currentUser.name}
-                className="h-9 w-9 rounded-full object-cover border border-border"
-              />
-            ) : (
-              <div className="h-9 w-9 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs font-semibold">
-                {currentUser.name
-                  .split(" ")
-                  .map((name) => name[0])
-                  .slice(0, 2)
-                  .join("")}
+          <div className="relative border-l border-border pl-3">
+            <button
+              type="button"
+              onClick={() => setProfileOpen((value) => !value)}
+              className="flex items-center gap-2.5 rounded-md px-1.5 py-1 hover:bg-muted"
+            >
+              {currentUser.photo ? (
+                <img
+                  src={currentUser.photo}
+                  alt={currentUser.name}
+                  className="h-9 w-9 rounded-full object-cover border border-border"
+                />
+              ) : (
+                <div className="h-9 w-9 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs font-semibold">
+                  {currentUser.name
+                    .split(" ")
+                    .map((name) => name[0])
+                    .slice(0, 2)
+                    .join("")}
+                </div>
+              )}
+              <div className="hidden sm:block text-left">
+                <div className="text-sm font-medium leading-tight">{currentUser.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  {roleLabel(currentUser.role)} / {appMode === "lite" ? "Lite" : "Complex"}
+                </div>
               </div>
+              <ChevronDown className="hidden h-4 w-4 text-muted-foreground sm:block" />
+            </button>
+            {profileOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
+                <div className="absolute right-0 top-12 z-50 w-64 rounded-md border border-border bg-card p-2 shadow-lg">
+                  <div className="px-2 py-2">
+                    <div className="text-sm font-medium">{currentUser.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {roleLabel(currentUser.role)}
+                    </div>
+                  </div>
+                  {authMode === "staff" ? (
+                    <div className="rounded-md border border-border bg-muted/30 p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAppMode("lite");
+                          setProfileOpen(false);
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left text-sm ${
+                          appMode === "lite"
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-background"
+                        }`}
+                      >
+                        Lite mode
+                        <span className="mt-0.5 block text-xs opacity-80">
+                          Daily essentials and capital transactions.
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAppMode("complex");
+                          setProfileOpen(false);
+                        }}
+                        className={`mt-1 w-full rounded px-3 py-2 text-left text-sm ${
+                          appMode === "complex"
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-background"
+                        }`}
+                      >
+                        Complex mode
+                        <span className="mt-0.5 block text-xs opacity-80">
+                          Full staff operations and admin tools.
+                        </span>
+                      </button>
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setProfileOpen(false);
+                      await logout();
+                      await navigate({ to: "/login" });
+                    }}
+                    className="mt-2 flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <LogOut className="h-4 w-4" /> Sign out
+                  </button>
+                </div>
+              </>
             )}
-            <div className="hidden sm:block">
-              <div className="text-sm font-medium leading-tight">{currentUser.name}</div>
-              <div className="text-xs text-muted-foreground">{roleLabel(currentUser.role)}</div>
-            </div>
           </div>
         </div>
       </div>

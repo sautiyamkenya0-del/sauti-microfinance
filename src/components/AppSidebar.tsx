@@ -90,8 +90,10 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+const LITE_ENTRY_IDS = new Set(["dashboard", "portal", "lending", "members", "capital", "comms"]);
+
 export function AppSidebar() {
-  const { currentUser, loans, logout } = useStore();
+  const { currentUser, loans, logout, appMode } = useStore();
   const router = useRouter();
   const navigate = useNavigate();
   const path = useRouterState({ select: (r) => r.location.pathname });
@@ -100,8 +102,11 @@ export function AppSidebar() {
   const activeSection = sectionForPath(path);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
   const entries = useMemo(
-    () => ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))),
-    [allowed],
+    () =>
+      ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
+        (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
+      ),
+    [allowed, appMode],
   );
   const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
 

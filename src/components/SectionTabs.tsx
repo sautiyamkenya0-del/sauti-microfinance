@@ -65,6 +65,14 @@ const TAB_REQUIREMENTS: Record<string, string> = {
   "/investors": "investors",
 };
 
+const LITE_SECTION_TABS: Partial<Record<keyof typeof SECTION_TABS, string[]>> = {
+  lending: ["/loans", "/approvals"],
+  members: ["/members"],
+  capital: ["/savings", "/transactions"],
+  comms: ["/staff", "/support-inbox"],
+  admin: [],
+};
+
 export function sectionForPath(path: string): string | null {
   for (const [id, tabs] of Object.entries(SECTION_TABS)) {
     if (tabs.some((t) => path === t.to || path.startsWith(t.to + "/"))) return id;
@@ -73,12 +81,13 @@ export function sectionForPath(path: string): string | null {
 }
 
 export function SectionTabs({ section }: { section: keyof typeof SECTION_TABS }) {
-  const { currentUser } = useStore();
+  const { currentUser, appMode } = useStore();
   const path = useRouterState({ select: (r) => r.location.pathname });
   const allowed = new Set(navForUser(currentUser));
   const tabs = SECTION_TABS[section]?.filter((tab) => {
     const required = TAB_REQUIREMENTS[tab.to];
-    return !required || allowed.has(required);
+    const visibleInMode = appMode !== "lite" || (LITE_SECTION_TABS[section] ?? []).includes(tab.to);
+    return visibleInMode && (!required || allowed.has(required));
   });
   if (!tabs) return null;
   return (

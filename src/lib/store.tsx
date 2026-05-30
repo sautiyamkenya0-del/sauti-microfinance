@@ -65,6 +65,7 @@ import {
 import { listStaffMessages } from "@/lib/runtime-data.functions";
 
 export type Role = "director" | "manager" | "loan_officer";
+export type AppMode = "lite" | "complex";
 
 export type MandatoryFees = {
   membership: boolean; // registration fee settled
@@ -515,6 +516,8 @@ type Store = {
   isAuthenticated: boolean;
   isHydrated: boolean;
   authMode: "staff" | "member";
+  appMode: AppMode;
+  setAppMode: (next: AppMode) => void;
   portalMemberId: string;
   setPortalMemberId: (next: string) => void;
   setAuthenticated: (next: boolean) => void;
@@ -669,6 +672,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<Staff>(seedStaff[0]);
   const [members, setMembers] = useState<Member[]>(seedMembers);
   const [authMode, setAuthMode] = useState<"staff" | "member">("staff");
+  const [appMode, setAppModeState] = useState<AppMode>(() => {
+    if (typeof window === "undefined") return "complex";
+    return window.localStorage.getItem("sauti-app-mode") === "lite" ? "lite" : "complex";
+  });
   const [portalMemberId, setPortalMemberIdState] = useState<string>("");
   const [loans, setLoans] = useState<Loan[]>(seedLoans);
   const [transactions, setTransactions] = useState<Transaction[]>(seedTx);
@@ -840,11 +847,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPortalMemberIdState(next);
   };
 
+  const setAppMode = (next: AppMode) => {
+    setAppModeState(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("sauti-app-mode", next);
+    }
+  };
+
   const value = useMemo<Store>(
     () => ({
       isAuthenticated,
       isHydrated,
       authMode,
+      appMode,
+      setAppMode,
       portalMemberId,
       setPortalMemberId,
       setAuthenticated,
@@ -1268,25 +1284,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       resolveMpesaAccount: (account: string) => {
         const candidates = membershipIdCandidates(account);
-        const normalizedAccount = String(account ?? "").trim().toUpperCase();
-        return candidates
-          .map(
-            (candidate) =>
-              members.find((mb) => mb.id === candidate) ??
-              members.find(
-                (mb) =>
-                  String(mb.serviceMemberNumber ?? "")
-                    .trim()
-                    .toUpperCase() === candidate,
-              ),
-          )
-          .find(Boolean) ??
+        const normalizedAccount = String(account ?? "")
+          .trim()
+          .toUpperCase();
+        return (
+          candidates
+            .map(
+              (candidate) =>
+                members.find((mb) => mb.id === candidate) ??
+                members.find(
+                  (mb) =>
+                    String(mb.serviceMemberNumber ?? "")
+                      .trim()
+                      .toUpperCase() === candidate,
+                ),
+            )
+            .find(Boolean) ??
           members.find(
             (mb) =>
               String(mb.serviceMemberNumber ?? "")
                 .trim()
                 .toUpperCase() === normalizedAccount,
-          );
+          )
+        );
       },
       applyMpesaPayment: async (account, amount, payerName, mpesaRef, eventId) => {
         const result = await applyMpesaPaymentServer({
@@ -1309,6 +1329,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       isAuthenticated,
       isHydrated,
       authMode,
+      appMode,
       portalMemberId,
       currentUser,
       staff,
