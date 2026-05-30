@@ -66,11 +66,11 @@ const TAB_REQUIREMENTS: Record<string, string> = {
 };
 
 const LITE_SECTION_TABS: Partial<Record<keyof typeof SECTION_TABS, string[]>> = {
-  lending: ["/loans", "/approvals"],
+  lending: ["/loans"],
   members: ["/members"],
-  capital: ["/savings", "/transactions"],
-  comms: ["/staff", "/support-inbox"],
-  admin: [],
+  capital: ["/transactions"],
+  comms: ["/staff"],
+  admin: ["/reports"],
 };
 
 export function sectionForPath(path: string): string | null {

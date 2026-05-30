@@ -95,7 +95,15 @@ const ENTRIES: Entry[] = [
   },
 ];
 
-const LITE_ENTRY_IDS = new Set(["dashboard", "portal", "lending", "members", "capital", "comms"]);
+const LITE_ENTRY_IDS = new Set([
+  "dashboard",
+  "portal",
+  "lending",
+  "members",
+  "capital",
+  "comms",
+  "admin",
+]);
 
 export function AppHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   const { currentUser, loans, appMode, setAppMode, logout, authMode } = useStore();
@@ -440,7 +448,13 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
                 {entries.map((entry) => {
                   const Icon = entry.icon;
                   const entryTo =
-                    entry.id === "admin" && !allowed.has("staffmgmt") ? "/attendance" : entry.to;
+                    appMode === "lite" && entry.id === "capital"
+                      ? "/transactions"
+                      : appMode === "lite" && entry.id === "admin"
+                        ? "/reports"
+                        : entry.id === "admin" && !allowed.has("staffmgmt")
+                          ? "/attendance"
+                          : entry.to;
                   const active = entry.section
                     ? activeSection === entry.section
                     : path === entryTo || (entryTo !== "/" && path.startsWith(entryTo + "/"));

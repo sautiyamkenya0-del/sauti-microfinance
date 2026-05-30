@@ -60,7 +60,7 @@ function isInternalSyntheticTransaction(transaction: { by?: string; note?: strin
 }
 
 function TxPage() {
-  const { transactions, members, staff, reloadAppData, resolveMpesaAccount } = useStore();
+  const { appMode, transactions, members, staff, reloadAppData, resolveMpesaAccount } = useStore();
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState("");
@@ -150,19 +150,18 @@ function TxPage() {
     [mpesaAuditRows],
   );
 
-  const rows = useMemo(
-    () => {
-      if (mpesaAuditLoading) return [];
-      return [...ledgerRows, ...mpesaRows].sort((a, b) =>
-        String(b.createdAt ?? b.date).localeCompare(String(a.createdAt ?? a.date)),
-      );
-    },
-    [ledgerRows, mpesaAuditLoading, mpesaRows],
-  );
+  const rows = useMemo(() => {
+    if (mpesaAuditLoading) return [];
+    return [...ledgerRows, ...mpesaRows].sort((a, b) =>
+      String(b.createdAt ?? b.date).localeCompare(String(a.createdAt ?? a.date)),
+    );
+  }, [ledgerRows, mpesaAuditLoading, mpesaRows]);
 
+  const liteMode = appMode === "lite";
   const list = useMemo(
     () =>
       rows.filter((transaction) => {
+        if (liteMode) return true;
         if (filter === "mpesa") {
           if (!transaction.isMpesaAudit && transaction.by !== "MPESA") return false;
         } else if (filter !== "all" && transaction.type !== filter) {
@@ -195,7 +194,7 @@ function TxPage() {
         }
         return true;
       }),
-    [rows, filter, from, to, memberFilter, query],
+    [rows, filter, from, liteMode, to, memberFilter, query],
   );
 
   const totals = useMemo(() => {
@@ -256,112 +255,136 @@ function TxPage() {
     <>
       <AppHeader
         title="Transactions"
-        subtitle="Original receipts stay intact while allocations live in a separate audit trail."
+        subtitle={
+          liteMode
+            ? "All capital operation transactions in one table."
+            : "Original receipts stay intact while allocations live in a separate audit trail."
+        }
       />
-      <main className="flex-1 space-y-6 p-6 lg:p-8">
+      <main className={`flex-1 space-y-6 ${liteMode ? "p-4 lg:p-6" : "p-6 lg:p-8"}`}>
         <SectionTabs section="capital" />
-        <DirectorOnly>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <StatCard
-              label="Filtered Records"
-              value={list.length}
-              hint={mpesaAuditLoading ? "Loading original M-Pesa receipts" : `Of ${rows.length} visible total`}
-              icon={<ListOrdered className="h-5 w-5" />}
-            />
-            <StatCard
-              label="Inflow"
-              value={fmtKES(totals.inflow)}
-              hint={`Gross moved ${fmtKES(totals.gross)}`}
-              icon={<ArrowDownCircle className="h-5 w-5" />}
-              tone="success"
-            />
-            <StatCard
-              label="Outflow"
-              value={fmtKES(totals.outflow)}
-              hint="Filtered period"
-              icon={<ArrowUpCircle className="h-5 w-5" />}
-              tone="warning"
-            />
-            <StatCard
-              label="Net"
-              value={fmtKES(totals.net)}
-              hint="Inflow minus outflow"
-              icon={<Scale className="h-5 w-5" />}
-              tone={totals.net >= 0 ? "success" : "destructive"}
-            />
-          </div>
-        </DirectorOnly>
-
-        <div className="grid items-end gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-5">
-          <label className="block md:col-span-2">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Search
-            </span>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Name, member no, M-Pesa ref..."
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">From</span>
-            <input
-              type="date"
-              value={from}
-              onChange={(event) => setFrom(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">To</span>
-            <input
-              type="date"
-              value={to}
-              onChange={(event) => setTo(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Member
-            </span>
-            <div className="mt-1">
-              <MemberSearchSelect
-                members={members}
-                value={memberFilter}
-                onChange={setMemberFilter}
-                emptyLabel="All members"
-                describeMember={(member) => `${member.id} - ${member.name} - ${member.phone ?? ""}`}
+        {!liteMode ? (
+          <DirectorOnly>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Filtered Records"
+                value={list.length}
+                hint={
+                  mpesaAuditLoading
+                    ? "Loading original M-Pesa receipts"
+                    : `Of ${rows.length} visible total`
+                }
+                icon={<ListOrdered className="h-5 w-5" />}
+              />
+              <StatCard
+                label="Inflow"
+                value={fmtKES(totals.inflow)}
+                hint={`Gross moved ${fmtKES(totals.gross)}`}
+                icon={<ArrowDownCircle className="h-5 w-5" />}
+                tone="success"
+              />
+              <StatCard
+                label="Outflow"
+                value={fmtKES(totals.outflow)}
+                hint="Filtered period"
+                icon={<ArrowUpCircle className="h-5 w-5" />}
+                tone="warning"
+              />
+              <StatCard
+                label="Net"
+                value={fmtKES(totals.net)}
+                hint="Inflow minus outflow"
+                icon={<Scale className="h-5 w-5" />}
+                tone={totals.net >= 0 ? "success" : "destructive"}
               />
             </div>
-          </label>
-        </div>
+          </DirectorOnly>
+        ) : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          {TYPES.map((type) => (
+        {!liteMode ? (
+          <div className="grid items-end gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-5">
+            <label className="block md:col-span-2">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Search
+              </span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Name, member no, M-Pesa ref..."
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                From
+              </span>
+              <input
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">To</span>
+              <input
+                type="date"
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Member
+              </span>
+              <div className="mt-1">
+                <MemberSearchSelect
+                  members={members}
+                  value={memberFilter}
+                  onChange={setMemberFilter}
+                  emptyLabel="All members"
+                  describeMember={(member) =>
+                    `${member.id} - ${member.name} - ${member.phone ?? ""}`
+                  }
+                />
+              </div>
+            </label>
+          </div>
+        ) : null}
+
+        {!liteMode ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {TYPES.map((type) => (
+              <button
+                key={type}
+                onClick={() => setFilter(type)}
+                className={`rounded-full px-3 py-1.5 text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "border border-border bg-card hover:bg-muted"}`}
+              >
+                {type === "mpesa" ? "M-Pesa" : type.replace(/_/g, " ")}
+              </button>
+            ))}
             <button
-              key={type}
-              onClick={() => setFilter(type)}
-              className={`rounded-full px-3 py-1.5 text-xs capitalize ${filter === type ? "bg-primary text-primary-foreground" : "border border-border bg-card hover:bg-muted"}`}
+              type="button"
+              onClick={handleRefreshTransactions}
+              disabled={isSyncing}
+              className="ml-auto rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {type === "mpesa" ? "M-Pesa" : type.replace(/_/g, " ")}
+              {isSyncing ? "Refreshing..." : "Refresh transactions"}
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={handleRefreshTransactions}
-            disabled={isSyncing}
-            className="ml-auto rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSyncing ? "Refreshing..." : "Refresh transactions"}
-          </button>
-        </div>
-        {lastRefreshedAt ? (
+          </div>
+        ) : null}
+        {!liteMode && lastRefreshedAt ? (
           <p className="text-xs text-muted-foreground">Last refreshed: {lastRefreshedAt}</p>
         ) : null}
 
-        <Section title={`Filtered Ledger (${list.length} of ${rows.length})`}>
+        <Section
+          title={
+            liteMode
+              ? `All Transactions (${list.length})`
+              : `Filtered Ledger (${list.length} of ${rows.length})`
+          }
+        >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">

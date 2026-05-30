@@ -127,7 +127,7 @@ export const Route = createFileRoute("/loans")({
 });
 
 function LoansHub() {
-  const { currentUser, memberLoanCount, members, loans, policySettings } = useStore();
+  const { appMode, currentUser, memberLoanCount, members, loans, policySettings } = useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const [tab, setTab] = useState<Tab>("book");
@@ -223,8 +223,14 @@ function LoansHub() {
     if (!directorOnly && tab === "carryover") setTab("book");
   }, [directorOnly, tab]);
 
+  const liteMode = appMode === "lite";
+  const liteTabs = new Set<Tab>(["book", "new", "followups", "simulator"]);
+  useEffect(() => {
+    if (liteMode && !liteTabs.has(tab)) setTab("book");
+  }, [liteMode, tab]);
+
   const tabs: { key: Tab; label: string; hidden?: boolean }[] = [
-    { key: "book", label: "Loan Book" },
+    { key: "book", label: liteMode ? "All Loans" : "Loan Book" },
     { key: "new", label: "New / Repeat Application" },
     { key: "carryover", label: "Carryover Entry", hidden: !directorOnly },
     { key: "appraisal", label: "Appraisal & Risk" },
@@ -237,37 +243,43 @@ function LoansHub() {
   return (
     <>
       <AppHeader
-        title="Loans"
-        subtitle="One workspace for the full loan lifecycle: application, appraisal, review, disbursement, follow-up."
+        title={liteMode ? "Lending" : "Loans"}
+        subtitle={
+          liteMode
+            ? "All loans, new and repeat applications, follow-ups, and simulator."
+            : "One workspace for the full loan lifecycle: application, appraisal, review, disbursement, follow-up."
+        }
       />
-      <main className="flex-1 space-y-6 p-6 lg:p-8">
+      <main className={`flex-1 space-y-6 ${liteMode ? "p-4 lg:p-6" : "p-6 lg:p-8"}`}>
         <SectionTabs section="lending" />
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {LOAN_KIND_OPTIONS.map((option) => {
-            const active = selectedLoanKind === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  setSelectedLoanKind(option.value);
-                  setSelectedMemberId("");
-                  setTab("new");
-                }}
-                className={`rounded-lg border p-4 text-left transition ${active ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-muted/50"}`}
-              >
-                <div className="text-sm font-semibold">{option.label}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{option.memberHint}</div>
-                <div className="mt-3 text-xs font-medium">
-                  {loanKindCounts[option.value]} record(s)
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        {(!liteMode || tab === "new") && (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {LOAN_KIND_OPTIONS.map((option) => {
+              const active = selectedLoanKind === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setSelectedLoanKind(option.value);
+                    setSelectedMemberId("");
+                    setTab("new");
+                  }}
+                  className={`rounded-lg border p-4 text-left transition ${active ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-muted/50"}`}
+                >
+                  <div className="text-sm font-semibold">{option.label}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{option.memberHint}</div>
+                  <div className="mt-3 text-xs font-medium">
+                    {loanKindCounts[option.value]} record(s)
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-1 border-b border-border">
           {tabs
-            .filter((item) => !item.hidden)
+            .filter((item) => !item.hidden && (!liteMode || liteTabs.has(item.key)))
             .map((item) => (
               <button
                 key={item.key}
@@ -283,6 +295,7 @@ function LoansHub() {
           <LoanBook
             carryoverLoans={carryoverLoans}
             onSelectMember={(id) => setHistoryMemberId(id)}
+            tableOnly={liteMode}
           />
         )}
 
@@ -363,7 +376,7 @@ function LoansHub() {
                 onSubmitted={(loanId, nextMemberId) => {
                   setAppraisalLoanId(loanId);
                   setSelectedMemberId(nextMemberId);
-                  setTab("appraisal");
+                  setTab(liteMode ? "book" : "appraisal");
                 }}
               />
             ) : (
@@ -373,7 +386,7 @@ function LoansHub() {
                 onSubmitted={(loanId, nextMemberId) => {
                   setAppraisalLoanId(loanId);
                   setSelectedMemberId(nextMemberId);
-                  setTab("appraisal");
+                  setTab(liteMode ? "book" : "appraisal");
                 }}
               />
             )}

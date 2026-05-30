@@ -236,9 +236,11 @@ function fuelRecordsForCarryoverLoan(
 export function LoanBook({
   carryoverLoans = [],
   onSelectMember,
+  tableOnly = false,
 }: {
   carryoverLoans?: LegacyCarryoverLoan[];
   onSelectMember: (memberId: string) => void;
+  tableOnly?: boolean;
 }) {
   const { loans, members, staff, transactions, currentUser, recordTransaction, policySettings } =
     useStore();
@@ -267,7 +269,7 @@ export function LoanBook({
 
     list = list.filter((row) => {
       const rowLoanKind = row.loan.loanKind ?? "financial";
-      if (productFilter !== "all" && rowLoanKind !== productFilter) return false;
+      if (!tableOnly && productFilter !== "all" && rowLoanKind !== productFilter) return false;
 
       const status = row.loan.status;
       const rowSummary =
@@ -280,7 +282,7 @@ export function LoanBook({
           : (rowSummary as ReturnType<typeof loanPenaltySummary>).totalOwedNow;
       const dueDate = rowSummary.dueDate;
       const logicalStatus = logicalLoanStatus(status, balance, dueDate, today);
-      switch (filter) {
+      switch (tableOnly ? "all" : filter) {
         case "all":
           return true;
         case "active":
@@ -302,7 +304,7 @@ export function LoanBook({
       }
     });
 
-    if (activeQuery.trim()) {
+    if (!tableOnly && activeQuery.trim()) {
       const q = activeQuery.trim().toLowerCase();
       list = list.filter((row) => {
         const m = members.find((x) => x.id === row.loan.memberId);
@@ -330,6 +332,7 @@ export function LoanBook({
     carryoverLoans,
     policySettings,
     transactions,
+    tableOnly,
   ]);
 
   const fuelRecords = useMemo(
@@ -361,64 +364,68 @@ export function LoanBook({
         </span>
       }
     >
-      {/* Filter chips */}
-      <div className="px-5 pt-4 flex flex-wrap gap-2">
-        {FILTERS.map((f) => {
-          const active = filter === f.key;
-          return (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`px-3.5 py-1.5 rounded-md text-xs font-medium border transition ${active ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border text-foreground hover:bg-muted"}`}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
+      {!tableOnly ? (
+        <>
+          {/* Filter chips */}
+          <div className="px-5 pt-4 flex flex-wrap gap-2">
+            {FILTERS.map((f) => {
+              const active = filter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`px-3.5 py-1.5 rounded-md text-xs font-medium border transition ${active ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border text-foreground hover:bg-muted"}`}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
 
-      <div className="px-5 pt-3 flex flex-wrap gap-2">
-        {PRODUCT_FILTERS.map((product) => {
-          const active = productFilter === product.key;
-          return (
-            <button
-              key={product.key}
-              onClick={() => setProductFilter(product.key)}
-              className={`px-3.5 py-1.5 rounded-md text-xs font-medium border transition ${active ? "bg-accent text-accent-foreground border-accent" : "bg-card border-border text-foreground hover:bg-muted"}`}
-            >
-              {product.label}
-            </button>
-          );
-        })}
-      </div>
+          <div className="px-5 pt-3 flex flex-wrap gap-2">
+            {PRODUCT_FILTERS.map((product) => {
+              const active = productFilter === product.key;
+              return (
+                <button
+                  key={product.key}
+                  onClick={() => setProductFilter(product.key)}
+                  className={`px-3.5 py-1.5 rounded-md text-xs font-medium border transition ${active ? "bg-accent text-accent-foreground border-accent" : "bg-card border-border text-foreground hover:bg-muted"}`}
+                >
+                  {product.label}
+                </button>
+              );
+            })}
+          </div>
 
-      {/* Search */}
-      <div className="px-5 pt-3 pb-4 flex gap-2">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && setActiveQuery(query)}
-          placeholder="Search by member no, client name, business, or phone"
-          className="flex-1 bg-muted border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-        <button
-          onClick={() => setActiveQuery(query)}
-          className="px-5 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
-        >
-          Search
-        </button>
-        <button
-          onClick={() => {
-            setQuery("");
-            setActiveQuery("");
-            setFilter("all");
-            setProductFilter("all");
-          }}
-          className="px-4 py-2 rounded-md bg-card border border-border text-sm font-medium hover:bg-muted"
-        >
-          Reset
-        </button>
-      </div>
+          {/* Search */}
+          <div className="px-5 pt-3 pb-4 flex gap-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && setActiveQuery(query)}
+              placeholder="Search by member no, client name, business, or phone"
+              className="flex-1 bg-muted border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <button
+              onClick={() => setActiveQuery(query)}
+              className="px-5 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+            >
+              Search
+            </button>
+            <button
+              onClick={() => {
+                setQuery("");
+                setActiveQuery("");
+                setFilter("all");
+                setProductFilter("all");
+              }}
+              className="px-4 py-2 rounded-md bg-card border border-border text-sm font-medium hover:bg-muted"
+            >
+              Reset
+            </button>
+          </div>
+        </>
+      ) : null}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -587,7 +594,9 @@ export function LoanBook({
         </table>
       </div>
 
-      {currentUser.role !== "loan_officer" && <FuelRecordsPanel records={fuelRecords} />}
+      {!tableOnly && currentUser.role !== "loan_officer" && (
+        <FuelRecordsPanel records={fuelRecords} />
+      )}
 
       {repayFor && (
         <div

@@ -138,7 +138,7 @@ function RootComponent() {
 }
 
 function AppLayout() {
-  const { isAuthenticated, isHydrated, authMode, currentUser } = useStore();
+  const { isAuthenticated, isHydrated, authMode, currentUser, appMode } = useStore();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLoginRoute = pathname === "/login";
   const isMpesaPublicApi = pathname.startsWith("/api/public/mpesa");
@@ -187,6 +187,35 @@ function AppLayout() {
         <Outlet />
       </div>
     );
+  }
+
+  if (appMode === "lite" && !pathname.startsWith("/api")) {
+    const liteRedirect =
+      pathname === "/" ||
+      pathname === "/portal" ||
+      pathname === "/loans" ||
+      pathname === "/members" ||
+      pathname === "/transactions" ||
+      pathname === "/staff" ||
+      pathname === "/reports"
+        ? null
+        : pathname === "/approvals"
+          ? "/loans"
+          : pathname === "/investors"
+            ? "/members"
+            : ["/savings", "/withdrawals", "/shares", "/pettycash"].includes(pathname)
+              ? "/transactions"
+              : ["/memos", "/support-inbox"].includes(pathname)
+                ? "/staff"
+                : ["/staff-mgmt", "/payroll", "/fees-policy", "/attendance", "/policies"].includes(
+                      pathname,
+                    )
+                  ? "/reports"
+                  : "/";
+
+    if (liteRedirect) {
+      return <Navigate to={liteRedirect} replace />;
+    }
   }
 
   return (

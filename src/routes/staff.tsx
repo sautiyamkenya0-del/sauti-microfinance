@@ -443,12 +443,13 @@ function Attachment({ att }: { att: Att }) {
 /** Sub-page tab strip rendered at the top of /staff, /memos and /support-inbox.
  *  Sub-menus expand inside the page (here) — not inside the sidebar. */
 export function CommsTabs() {
+  const { appMode } = useStore();
   const path = useRouterState({ select: (r) => r.location.pathname });
   const tabs = [
     { to: "/staff", label: "Chat", icon: MessageSquare },
     { to: "/memos", label: "Memos", icon: StickyNote },
     { to: "/support-inbox", label: "Member Support", icon: Inbox },
-  ] as const;
+  ].filter((tab) => appMode !== "lite" || tab.to === "/staff");
   return (
     <div className="mb-4 flex flex-wrap gap-1 border-b border-border">
       {tabs.map((t) => {
