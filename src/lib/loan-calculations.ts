@@ -131,6 +131,7 @@ export function buildLoanDailyLedger(args: {
   dailyInstallment: number;
   totalExpected: number;
   asOfDate?: string;
+  dueDate?: string;
   payments?: LoanDailyPaymentInput[];
   fallbackPaid?: number;
   penaltyPct?: number;
@@ -144,7 +145,7 @@ export function buildLoanDailyLedger(args: {
   const termDays = Math.max(1, Math.floor(Number(args.termDays) || 1));
   const dailyInstallment = Math.max(0, Number(args.dailyInstallment) || 0);
   const totalExpected = Math.max(0, Number(args.totalExpected ?? 0) || dailyInstallment * termDays);
-  const dueDate = addIsoDays(startDate, termDays);
+  const dueDate = dateOnly(args.dueDate) || addIsoDays(startDate, termDays);
   const defaultFromDate = dateOnly(args.defaultFromDate) || addIsoDays(dueDate, 1);
   const penaltyPct = Math.max(0, Number(args.penaltyPct ?? 0) || 0);
   const defaultPenaltyPct = Math.max(
@@ -186,6 +187,7 @@ export function buildLoanDailyLedger(args: {
     cumulativePaid = roundMoney(cumulativePaid + paidToday);
     const dailyBalance = roundMoney(expectedToday - paidToday);
     const unpaidToday = Math.max(0, dailyBalance);
+    const scheduledUnpaidToday = Math.max(0, roundMoney(scheduledInstallment - paidToday));
     const totalBalanceBeforePenalty = Math.max(0, roundMoney(totalExpected - cumulativePaid));
     const penaltyRatePct = isDefaultPhase ? defaultPenaltyPct : penaltyPct;
     const totalDueBeforePenalty = roundMoney(
@@ -195,9 +197,10 @@ export function buildLoanDailyLedger(args: {
       isDefaultPhase && defaultedAmountCap > 0
         ? Math.max(0, roundMoney(defaultedAmountCap - totalDueBeforePenalty))
         : Number.POSITIVE_INFINITY;
+    const penaltyBase = isDefaultPhase ? unpaidToday : scheduledUnpaidToday;
     let penalty =
-      unpaidToday > 0 && penaltyRatePct > 0 && capRemaining > 0
-        ? penaltyCeil(unpaidToday * (penaltyRatePct / 100))
+      penaltyBase > 0 && penaltyRatePct > 0 && capRemaining > 0
+        ? penaltyCeil(penaltyBase * (penaltyRatePct / 100))
         : 0;
     if (Number.isFinite(capRemaining)) {
       penalty = Math.min(penalty, capRemaining);

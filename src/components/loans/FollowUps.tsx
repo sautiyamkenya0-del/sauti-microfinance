@@ -47,9 +47,11 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const arrears = summary.dailyUnpaidBalance;
         const defaulted = summary.defaultedAmount || arrears;
         const outstanding = Math.max(0, summary.totalOwedNow - summary.totalPenalty);
-        const daysMissed = Math.max(
-          summary.skippedPaymentDays,
-          dailyInstallment > 0 ? Math.floor(arrears / dailyInstallment) : 0,
+        const elapsedScheduledDays = Math.max(0, daysBetweenDates(l.startDate, today));
+        const moneyMissedDays = dailyInstallment > 0 ? Math.ceil(arrears / dailyInstallment) : 0;
+        const daysMissed = Math.min(
+          elapsedScheduledDays,
+          Math.max(summary.skippedPaymentDays, moneyMissedDays),
         );
         const daysPastDue = summary.daysPastDue;
         const penalties = summary.totalPenalty;
@@ -82,7 +84,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const dailyInstallment = summary.dailyInclusive;
         const arrears = summary.arrears;
         const defaulted = summary.defaultedAmount || arrears;
-        const daysMissed = dailyInstallment > 0 ? Math.floor(arrears / dailyInstallment) : 0;
+        const elapsedScheduledDays = summary.elapsedDays;
+        const moneyMissedDays = dailyInstallment > 0 ? Math.ceil(arrears / dailyInstallment) : 0;
+        const daysMissed = Math.min(elapsedScheduledDays, moneyMissedDays);
         const daysPastDue = summary.daysPastDue;
         return {
           loan: { ...loan, purpose: "carryover" },

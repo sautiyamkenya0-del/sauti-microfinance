@@ -282,17 +282,29 @@ function ReportsPage() {
     (sum, transaction) => sum + transaction.amount,
     0,
   );
-  const filteredPurposePoolTransactions = purposePoolMemberId
-    ? purposePoolTransactions.filter((transaction) => transaction.memberId === purposePoolMemberId)
-    : purposePoolTransactions;
-  const filteredPurposePoolRevenue = filteredPurposePoolTransactions.reduce(
-    (sum, transaction) => sum + transaction.amount,
+  const profilePurposePoolBalance = carryoverProfiles.reduce(
+    (sum, profile) =>
+      sum + numberValue(objectValue(profile.collectionBreakdown).purposePoolBalance),
     0,
   );
+  const purposePoolCurrentBalance =
+    carryoverProfiles.length > 0 ? profilePurposePoolBalance : purposePoolRevenue;
+  const filteredPurposePoolProfile = purposePoolMemberId
+    ? carryoverProfiles.find((profile) => profile.memberId === purposePoolMemberId)
+    : undefined;
+  const filteredPurposePoolRevenue = purposePoolMemberId
+    ? numberValue(objectValue(filteredPurposePoolProfile?.collectionBreakdown).purposePoolBalance)
+    : purposePoolCurrentBalance;
+  const filteredPurposePoolBalance =
+    purposePoolMemberId && !filteredPurposePoolProfile
+      ? purposePoolTransactions
+          .filter((transaction) => transaction.memberId === purposePoolMemberId)
+          .reduce((sum, transaction) => sum + transaction.amount, 0)
+      : filteredPurposePoolRevenue;
   const purposePoolRows = PURPOSE_POOL_DISTRIBUTION.map((row) => ({
     ...row,
-    totalAmount: (purposePoolRevenue * row.pct) / 100,
-    filteredAmount: (filteredPurposePoolRevenue * row.pct) / 100,
+    totalAmount: (purposePoolCurrentBalance * row.pct) / 100,
+    filteredAmount: (filteredPurposePoolBalance * row.pct) / 100,
   }));
   const roundOffRevenue = roundOff.reduce((sum, entry) => sum + entry.amount, 0);
   const dailyPenaltyRevenue = paidPenalties
@@ -1419,8 +1431,8 @@ function ReportsPage() {
                 <tr>
                   <td className="px-5 py-3">Total purpose pool</td>
                   <td className="px-5 py-3 text-right">100%</td>
-                  <td className="px-5 py-3 text-right">{fmtKES(purposePoolRevenue)}</td>
-                  <td className="px-5 py-3 text-right">{fmtKES(filteredPurposePoolRevenue)}</td>
+                  <td className="px-5 py-3 text-right">{fmtKES(purposePoolCurrentBalance)}</td>
+                  <td className="px-5 py-3 text-right">{fmtKES(filteredPurposePoolBalance)}</td>
                   <td className="px-5 py-3 text-xs text-muted-foreground">
                     Filter a client to view their current purpose-pool allocation slices.
                   </td>

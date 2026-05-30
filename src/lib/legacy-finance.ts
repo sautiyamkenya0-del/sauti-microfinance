@@ -309,6 +309,7 @@ export function summarizeLegacyCarryoverLoan(
     dailyInstallment: dailyInclusive,
     totalExpected: totalExpectedCollected,
     asOfDate: effectiveAsOfDate,
+    dueDate,
     fallbackPaid: paidToDate,
     penaltyPct: settings.percentages.penaltyDailyPct,
     defaultPenaltyPct: settings.percentages.defaultPenaltyPct,

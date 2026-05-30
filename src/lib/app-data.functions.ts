@@ -13252,8 +13252,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     if (
       !memberId ||
       currentStatus === "pending" ||
-      currentStatus === "rejected" ||
-      currentStatus === "closed"
+      currentStatus === "rejected"
     ) {
       continue;
     }
@@ -13267,7 +13266,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
   for (const loan of carryoverLoans) {
     const memberId = String(loan.member_id ?? "").trim();
     const status = String(loan.status ?? "active");
-    if (!memberId || status === "closed" || loan.finished === true) continue;
+    if (!memberId || status === "pending" || status === "rejected") continue;
     const group = carryoverByMember.get(memberId) ?? [];
     group.push(loan);
     carryoverByMember.set(memberId, group);

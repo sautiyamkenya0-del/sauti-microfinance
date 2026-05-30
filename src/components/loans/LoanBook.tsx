@@ -853,6 +853,11 @@ function ownManualPenaltyAmount(payload: Record<string, unknown> | undefined) {
   return payloadPenaltyPart(payload, "priorPenaltyAmount");
 }
 
+function safeMoney(value: unknown) {
+  const next = Number(value ?? 0);
+  return Number.isFinite(next) ? Math.max(0, next) : 0;
+}
+
 function liveLoanEditDraft(loan: Loan, transactions: ReturnType<typeof useStore>["transactions"]) {
   const summary = loanPenaltySummary(loan, transactions);
   return {
@@ -1096,7 +1101,15 @@ export function MemberLoanHistory({
           <div className="space-y-2">
             {memberCarryoverLoans.map((l) => {
               const summary = summarizeLegacyCarryoverLoan(l, policySettings);
-              const pct = Math.min(100, Math.round(summary.paidPct));
+              const carryoverExpected = Math.max(
+                summary.totalExpectedCollected,
+                summary.totalRepayment,
+              );
+              const carryoverPaid = Math.min(Math.max(0, l.paidToDate), carryoverExpected);
+              const pct =
+                carryoverExpected > 0
+                  ? Math.min(100, Math.round((carryoverPaid / carryoverExpected) * 100))
+                  : 0;
               const isEditing = editing?.source === "carryover" && editing.id === l.id;
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
@@ -1121,13 +1134,13 @@ export function MemberLoanHistory({
                     {l.startDate} · {summary.termDays} days · {l.label}
                   </div>
                   <div className="text-xs mt-1">
-                    Paid {fmtKES(l.paidToDate)} / {fmtKES(summary.totalRepayment)}
+                    Paid {fmtKES(carryoverPaid)} / {fmtKES(carryoverExpected)}
                   </div>
                   <LoanDetails
                     rows={[
                       ["Day given", l.startDate],
                       ["Amount", fmtKES(l.principal)],
-                      ["Interest / charge", fmtKES(summary.interestAmount)],
+                      ["Interest / charge", fmtKES(safeMoney(summary.interest + summary.feeChargesTotal))],
                       [
                         "Manual penalties",
                         fmtKES(
@@ -1137,7 +1150,7 @@ export function MemberLoanHistory({
                       ],
                       ["Penalty waived", fmtKES(l.penaltyWaivedAmount)],
                       ["Daily compliance", fmtKES(l.dailySavingsAmount)],
-                      ["Amount collected", fmtKES(l.paidToDate)],
+                      ["Amount collected", fmtKES(carryoverPaid)],
                       ["Defaulted balance", fmtKES(summary.defaultedAmount)],
                     ]}
                   />
@@ -1163,9 +1176,11 @@ export function MemberLoanHistory({
             })}
             {memberLoans.map((l) => {
               const summary = loanPenaltySummary(l, transactions);
+              const liveExpected = Math.max(summary.totalExpectedCollected, summary.totalPaid);
+              const livePaid = Math.min(Math.max(0, summary.totalPaid), liveExpected);
               const pct = Math.min(
                 100,
-                Math.round((summary.totalPaid / summary.totalExpectedCollected) * 100),
+                liveExpected > 0 ? Math.round((livePaid / liveExpected) * 100) : 0,
               );
               const isEditing = editing?.source === "live" && editing.id === l.id;
               return (
@@ -1201,7 +1216,7 @@ export function MemberLoanHistory({
                     {l.startDate} · {summary.termDays} days · purpose: {l.purpose ?? "—"}
                   </div>
                   <div className="text-xs mt-1">
-                    Paid {fmtKES(summary.totalPaid)} / {fmtKES(summary.totalExpectedCollected)}
+                    Paid {fmtKES(livePaid)} / {fmtKES(liveExpected)}
                   </div>
                   <LoanDetails
                     rows={[
@@ -1209,12 +1224,12 @@ export function MemberLoanHistory({
                       ["Amount", fmtKES(summary.approved)],
                       [
                         "Interest / charges",
-                        fmtKES(summary.interestAmount + loanProductChargeAmount(l)),
+                        fmtKES(safeMoney(summary.interestAmount + loanProductChargeAmount(l))),
                       ],
                       ["Manual penalties", fmtKES(loanManualPenaltyAmount(l))],
                       ["Penalty waived", fmtKES(l.penaltyWaivedAmount ?? 0)],
                       ["Daily compliance", fmtKES(loanDailySavingsAmount(summary.approved))],
-                      ["Amount collected", fmtKES(summary.totalPaid)],
+                      ["Amount collected", fmtKES(livePaid)],
                       ["Defaulted balance", fmtKES(summary.defaultedAmount)],
                     ]}
                   />
