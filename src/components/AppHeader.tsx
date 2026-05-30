@@ -103,6 +103,37 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+const LOCOMOTIVE_ENTRIES: Entry[] = [
+  {
+    id: "locomotive-dashboard",
+    to: "/locomotive",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    requires: [],
+  },
+  {
+    id: "locomotive-members",
+    to: "/locomotive-members",
+    label: "Members",
+    icon: Users,
+    requires: [],
+  },
+  {
+    id: "locomotive-balances",
+    to: "/locomotive-balances",
+    label: "Balances",
+    icon: Wallet,
+    requires: [],
+  },
+  {
+    id: "locomotive-support",
+    to: "/locomotive-support",
+    label: "Support",
+    icon: MessageSquare,
+    requires: [],
+  },
+];
+
 const LITE_ENTRY_IDS = new Set([
   "dashboard",
   "portal",
@@ -130,13 +161,12 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
-  const entries = useMemo(
-    () =>
-      ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
-        (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
-      ),
-    [allowed, appMode],
-  );
+  const entries = useMemo(() => {
+    if (currentUser.role === "locomotive_admin") return LOCOMOTIVE_ENTRIES;
+    return ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
+      (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
+    );
+  }, [allowed, appMode, currentUser.role]);
   const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
 
   function onLogoTap() {
@@ -253,7 +283,11 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
           <div className="hidden lg:flex items-center gap-2 bg-muted rounded-md px-3 py-1.5 w-72">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
-              placeholder="Search members, loans, refs..."
+              placeholder={
+                currentUser.role === "locomotive_admin"
+                  ? "Search your members..."
+                  : "Search members, loans, refs..."
+              }
               className="bg-transparent text-sm outline-none flex-1"
             />
           </div>
@@ -341,7 +375,10 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
               <div className="hidden sm:block text-left">
                 <div className="text-sm font-medium leading-tight">{currentUser.name}</div>
                 <div className="text-xs text-muted-foreground">
-                  {roleLabel(currentUser.role)} / {appMode === "lite" ? "Lite" : "Complex"}
+                  {roleLabel(currentUser.role)}
+                  {currentUser.role === "locomotive_admin"
+                    ? ""
+                    : ` / ${appMode === "lite" ? "Lite" : "Complex"}`}
                 </div>
               </div>
               <ChevronDown className="hidden h-4 w-4 text-muted-foreground sm:block" />
@@ -356,7 +393,7 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
                       {roleLabel(currentUser.role)}
                     </div>
                   </div>
-                  {authMode === "staff" ? (
+                  {authMode === "staff" && currentUser.role !== "locomotive_admin" ? (
                     <div className="rounded-md border border-border bg-muted/30 p-1">
                       <button
                         type="button"

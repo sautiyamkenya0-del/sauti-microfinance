@@ -678,7 +678,17 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       .limit(200);
     if (actor.memberId) depositQuery.eq("member_id", actor.memberId);
 
-    const [membersResult, allocationsResult, servicesResult, depositsResult] = await Promise.all([
+    const actorMemberQuery = actor.memberId
+      ? supabaseAdmin.from("members").select("*").eq("id", actor.memberId).maybeSingle()
+      : Promise.resolve({ data: null, error: null });
+
+    const [
+      membersResult,
+      allocationsResult,
+      servicesResult,
+      depositsResult,
+      actorMemberResult,
+    ] = await Promise.all([
       memberQuery,
       allocationQuery,
       supabaseAdmin
@@ -688,11 +698,16 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
         .eq("service_category", "locomotive_business_wallet")
         .order("name", { ascending: true }),
       depositQuery,
+      actorMemberQuery,
     ]);
 
-    const failed = [membersResult, allocationsResult, servicesResult, depositsResult].find(
-      (result) => result.error && !isMissingRelationError(result.error),
-    );
+    const failed = [
+      membersResult,
+      allocationsResult,
+      servicesResult,
+      depositsResult,
+      actorMemberResult,
+    ].find((result) => result.error && !isMissingRelationError(result.error));
     if (failed?.error) throw new Error(failed.error.message);
 
     const deposits = depositsResult.error ? [] : ((depositsResult.data ?? []) as DbRow[]);
@@ -706,6 +721,7 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
 
     return {
       actorMemberId: actor.memberId ?? "",
+      actorMember: actorMemberResult.error ? null : ((actorMemberResult.data ?? null) as DbRow | null),
       members: membersResult.error ? [] : ((membersResult.data ?? []) as DbRow[]),
       allocations: allocationsResult.error ? [] : ((allocationsResult.data ?? []) as DbRow[]),
       services: servicesResult.error ? [] : ((servicesResult.data ?? []) as DbRow[]),

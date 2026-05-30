@@ -28,6 +28,9 @@ import { Route as PayrollRouteImport } from './routes/payroll'
 import { Route as MemosRouteImport } from './routes/memos'
 import { Route as MembersRouteImport } from './routes/members'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as LocomotiveSupportRouteImport } from './routes/locomotive-support'
+import { Route as LocomotiveMembersRouteImport } from './routes/locomotive-members'
+import { Route as LocomotiveBalancesRouteImport } from './routes/locomotive-balances'
 import { Route as LocomotiveRouteImport } from './routes/locomotive'
 import { Route as LoansRouteImport } from './routes/loans'
 import { Route as InvestorsRouteImport } from './routes/investors'
@@ -145,6 +148,21 @@ const MembersRoute = MembersRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LocomotiveSupportRoute = LocomotiveSupportRouteImport.update({
+  id: '/locomotive-support',
+  path: '/locomotive-support',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LocomotiveMembersRoute = LocomotiveMembersRouteImport.update({
+  id: '/locomotive-members',
+  path: '/locomotive-members',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LocomotiveBalancesRoute = LocomotiveBalancesRouteImport.update({
+  id: '/locomotive-balances',
+  path: '/locomotive-balances',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LocomotiveRoute = LocomotiveRouteImport.update({
@@ -278,6 +296,9 @@ export interface FileRoutesByFullPath {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-balances': typeof LocomotiveBalancesRoute
+  '/locomotive-members': typeof LocomotiveMembersRoute
+  '/locomotive-support': typeof LocomotiveSupportRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -322,6 +343,9 @@ export interface FileRoutesByTo {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-balances': typeof LocomotiveBalancesRoute
+  '/locomotive-members': typeof LocomotiveMembersRoute
+  '/locomotive-support': typeof LocomotiveSupportRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -367,6 +391,9 @@ export interface FileRoutesById {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-balances': typeof LocomotiveBalancesRoute
+  '/locomotive-members': typeof LocomotiveMembersRoute
+  '/locomotive-support': typeof LocomotiveSupportRoute
   '/login': typeof LoginRoute
   '/members': typeof MembersRoute
   '/memos': typeof MemosRoute
@@ -413,6 +440,9 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-balances'
+    | '/locomotive-members'
+    | '/locomotive-support'
     | '/login'
     | '/members'
     | '/memos'
@@ -457,6 +487,9 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-balances'
+    | '/locomotive-members'
+    | '/locomotive-support'
     | '/login'
     | '/members'
     | '/memos'
@@ -501,6 +534,9 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-balances'
+    | '/locomotive-members'
+    | '/locomotive-support'
     | '/login'
     | '/members'
     | '/memos'
@@ -546,6 +582,9 @@ export interface RootRouteChildren {
   InvestorsRoute: typeof InvestorsRoute
   LoansRoute: typeof LoansRoute
   LocomotiveRoute: typeof LocomotiveRoute
+  LocomotiveBalancesRoute: typeof LocomotiveBalancesRoute
+  LocomotiveMembersRoute: typeof LocomotiveMembersRoute
+  LocomotiveSupportRoute: typeof LocomotiveSupportRoute
   LoginRoute: typeof LoginRoute
   MembersRoute: typeof MembersRoute
   MemosRoute: typeof MemosRoute
@@ -715,6 +754,27 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/locomotive-support': {
+      id: '/locomotive-support'
+      path: '/locomotive-support'
+      fullPath: '/locomotive-support'
+      preLoaderRoute: typeof LocomotiveSupportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/locomotive-members': {
+      id: '/locomotive-members'
+      path: '/locomotive-members'
+      fullPath: '/locomotive-members'
+      preLoaderRoute: typeof LocomotiveMembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/locomotive-balances': {
+      id: '/locomotive-balances'
+      path: '/locomotive-balances'
+      fullPath: '/locomotive-balances'
+      preLoaderRoute: typeof LocomotiveBalancesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/locomotive': {
@@ -890,6 +950,9 @@ const rootRouteChildren: RootRouteChildren = {
   InvestorsRoute: InvestorsRoute,
   LoansRoute: LoansRoute,
   LocomotiveRoute: LocomotiveRoute,
+  LocomotiveBalancesRoute: LocomotiveBalancesRoute,
+  LocomotiveMembersRoute: LocomotiveMembersRoute,
+  LocomotiveSupportRoute: LocomotiveSupportRoute,
   LoginRoute: LoginRoute,
   MembersRoute: MembersRoute,
   MemosRoute: MemosRoute,

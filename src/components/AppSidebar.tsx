@@ -98,6 +98,37 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+const LOCOMOTIVE_ENTRIES: Entry[] = [
+  {
+    id: "locomotive-dashboard",
+    to: "/locomotive",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    requires: [],
+  },
+  {
+    id: "locomotive-members",
+    to: "/locomotive-members",
+    label: "Members",
+    icon: Users,
+    requires: [],
+  },
+  {
+    id: "locomotive-balances",
+    to: "/locomotive-balances",
+    label: "Balances",
+    icon: Wallet,
+    requires: [],
+  },
+  {
+    id: "locomotive-support",
+    to: "/locomotive-support",
+    label: "Support",
+    icon: MessageSquare,
+    requires: [],
+  },
+];
+
 const LITE_ENTRY_IDS = new Set([
   "dashboard",
   "portal",
@@ -117,13 +148,12 @@ export function AppSidebar() {
   const allowed = useMemo(() => new Set(navForUser(currentUser)), [currentUser]);
   const activeSection = sectionForPath(path);
   const pendingCount = loans.filter((loan) => loan.status === "pending").length;
-  const entries = useMemo(
-    () =>
-      ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
-        (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
-      ),
-    [allowed, appMode],
-  );
+  const entries = useMemo(() => {
+    if (currentUser.role === "locomotive_admin") return LOCOMOTIVE_ENTRIES;
+    return ENTRIES.filter((entry) => entry.requires.some((key) => allowed.has(key))).filter(
+      (entry) => appMode !== "lite" || LITE_ENTRY_IDS.has(entry.id),
+    );
+  }, [allowed, appMode, currentUser.role]);
   const tapsRef = useRef<{ count: number; first: number }>({ count: 0, first: 0 });
 
   function onLogoTap() {

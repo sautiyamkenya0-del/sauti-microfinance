@@ -387,9 +387,7 @@ function Portal() {
       .forEach((loan) => {
         const summary = loanSummary(loan);
         if (summary.balance <= 0) return;
-        const dueDate = new Date(summary.dueDate);
-        const daysLeft = Math.max(1, Math.ceil((dueDate.getTime() - Date.now()) / 86_400_000));
-        const dailyDue = Math.ceil(summary.balance / daysLeft);
+        const dailyDue = summary.dailyCollectionAmount;
         const paidToday = myTx
           .filter(
             (transaction) =>
@@ -1445,11 +1443,26 @@ function Portal() {
                     const summary = loanSummary(l);
                     const balance = summary.balance;
                     const end = new Date(summary.dueDate);
+                    const start = new Date(`${l.startDate}T00:00:00`);
+                    const today = new Date();
                     const daysLeft = Math.max(
                       1,
                       Math.ceil((end.getTime() - Date.now()) / 86_400_000),
                     );
-                    const dailyDue = Math.ceil(balance / daysLeft);
+                    const elapsedDays = Math.max(
+                      0,
+                      Math.min(
+                        summary.termDays,
+                        Math.floor(
+                          (new Date(today.toISOString().slice(0, 10)).getTime() -
+                            start.getTime()) /
+                            86_400_000,
+                        ) + 1,
+                      ),
+                    );
+                    const dailyDue = summary.dailyCollectionAmount;
+                    const complianceExpected = summary.dailySavingsAmount * elapsedDays;
+                    const compliancePaid = Math.min(l.paid, complianceExpected);
                     const loanPenalties = penalties.filter((p) => p.loanId === l.id);
                     const outstandingPen = loanPenalties
                       .filter((p) => p.status === "outstanding")
@@ -1500,6 +1513,23 @@ function Portal() {
                             value={l.status === "active" ? fmtKES(dailyDue) : "—"}
                           />
                         </div>
+                        {l.status === "active" ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                            <Stat
+                              label="Loan part / day"
+                              value={fmtKES(summary.dailyInstallment)}
+                            />
+                            <Stat
+                              label="Compliance / day"
+                              value={fmtKES(summary.dailySavingsAmount)}
+                            />
+                            <Stat
+                              label={`Compliance expected (${elapsedDays}d)`}
+                              value={fmtKES(complianceExpected)}
+                            />
+                            <Stat label="Compliance paid" value={fmtKES(compliancePaid)} />
+                          </div>
+                        ) : null}
                         <div className="text-[11px] text-muted-foreground">
                           Started {l.startDate} · ends {summary.dueDate}
                         </div>

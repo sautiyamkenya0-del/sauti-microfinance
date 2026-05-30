@@ -143,6 +143,12 @@ function AppLayout() {
   const isLoginRoute = pathname === "/login";
   const isMpesaPublicApi = pathname.startsWith("/api/public/mpesa");
   const isMpesaRegisterNow = pathname === "/api/mpesa/register-now";
+  const isLocomotiveAdmin = authMode === "staff" && currentUser?.role === "locomotive_admin";
+  const isLocomotivePath =
+    pathname === "/locomotive" ||
+    pathname === "/locomotive-members" ||
+    pathname === "/locomotive-balances" ||
+    pathname === "/locomotive-support";
   const canDrainMpesaQueue =
     authMode === "staff" && (currentUser?.role === "director" || currentUser?.role === "manager");
 
@@ -165,7 +171,12 @@ function AppLayout() {
 
   if (isLoginRoute) {
     if (isAuthenticated) {
-      return <Navigate to={authMode === "member" ? "/portal" : "/"} replace />;
+      return (
+        <Navigate
+          to={authMode === "member" ? "/portal" : isLocomotiveAdmin ? "/locomotive" : "/"}
+          replace
+        />
+      );
     }
 
     return (
@@ -174,6 +185,10 @@ function AppLayout() {
         <Outlet />
       </div>
     );
+  }
+
+  if (isLocomotiveAdmin && !isLocomotivePath && !pathname.startsWith("/api")) {
+    return <Navigate to="/locomotive" replace />;
   }
 
   if (authMode === "member") {
@@ -189,7 +204,7 @@ function AppLayout() {
     );
   }
 
-  if (appMode === "lite" && !pathname.startsWith("/api")) {
+  if (appMode === "lite" && !isLocomotiveAdmin && !pathname.startsWith("/api")) {
     const liteRedirect =
       pathname === "/" ||
       pathname === "/portal" ||

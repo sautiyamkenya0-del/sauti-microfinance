@@ -3821,6 +3821,8 @@ function mapLoanRow(row: any) {
     status: row.status,
     officerId: row.officer_id ?? "",
     paid: toNumber(row.paid),
+    dailySavingsAmount:
+      row.daily_savings_amount == null ? undefined : toNumber(row.daily_savings_amount),
     netDisbursedAmount:
       row.net_disbursed_amount == null ? undefined : toNumber(row.net_disbursed_amount),
     processingFeeAmount:

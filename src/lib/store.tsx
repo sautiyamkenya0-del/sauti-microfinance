@@ -144,6 +144,7 @@ export type Loan = {
   status: "pending" | "active" | "closed" | "defaulted" | "rejected";
   officerId: string;
   paid: number;
+  dailySavingsAmount?: number;
   netDisbursedAmount?: number;
   processingFeeAmount?: number;
   insuranceFeeAmount?: number;
@@ -1604,6 +1605,7 @@ export function loanSummary(
     | "termDays"
     | "termMonths"
     | "paid"
+    | "dailySavingsAmount"
     | "startDate"
     | "status"
     | "loanKind"
@@ -1628,7 +1630,12 @@ export function loanSummary(
     ? { interest: 0, total: financedPrincipal, monthly: financedPrincipal }
     : loanScheduleTotalFromNet(financedPrincipal, approved, loan.rate, periods);
   const balance = Math.max(0, schedule.total - loan.paid);
-  const dailySavingsAmount = supplierBacked ? 0 : loanDailySavingsAmount(approved);
+  const storedDailySavingsAmount = Number(loan.dailySavingsAmount ?? 0);
+  const dailySavingsAmount = supplierBacked
+    ? 0
+    : storedDailySavingsAmount > 0
+      ? storedDailySavingsAmount
+      : loanDailySavingsAmount(approved);
   const dueDate = new Date(loan.startDate);
   dueDate.setDate(dueDate.getDate() + termDays);
   return {
