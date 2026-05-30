@@ -19,7 +19,7 @@ import {
   summarizeFuelJobCardRows,
   type FuelJobCardRow,
 } from "@/components/loans/FuelJobCardFields";
-import { createReportSnapshotRecord } from "@/lib/app-data.functions";
+import { createReportSnapshotRecord, listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   summarizeLegacyCarryoverLoan,
   type LegacyCarryoverProfile,
@@ -44,7 +44,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Building2, Download, RefreshCw, Save, Scale, TrendingUp, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
@@ -62,6 +62,7 @@ type BookRow = {
 };
 
 type ReportScope = "daily" | "monthly" | "full";
+type StoreTransaction = ReturnType<typeof useStore>["transactions"][number];
 
 type FuelReportRow = {
   key: string;
@@ -103,6 +104,7 @@ const PURPOSE_POOL_DISTRIBUTION = [
 
 function ReportsPage() {
   const saveReportSnapshot = useServerFn(createReportSnapshotRecord);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const loadSnapshots = useServerFn(listReportSnapshots);
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const loadCarryoverProfiles = useServerFn(listAllCarryoverProfiles);
@@ -119,6 +121,7 @@ function ReportsPage() {
     roundOff,
     staff,
     policySettings,
+    resolveMpesaAccount,
   } = useStore();
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
@@ -136,6 +139,7 @@ function ReportsPage() {
     invoices: [],
     locomotiveAllocations: [],
   });
+  const [mpesaAuditRows, setMpesaAuditRows] = useState<any[]>([]);
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -192,6 +196,12 @@ function ReportsPage() {
       );
   }, [loadServiceReports]);
 
+  useEffect(() => {
+    fetchMpesaAudit({ data: {} })
+      .then((rows) => setMpesaAuditRows(rows as any[]))
+      .catch(() => setMpesaAuditRows([]));
+  }, [fetchMpesaAudit]);
+
   const memberAccounts = members.filter((member) => isMemberCategory(member.category));
   const supplierRows = supplierWorkspace?.suppliers ?? [];
   const supplierRequests = supplierWorkspace?.requests ?? [];
@@ -235,6 +245,10 @@ function ReportsPage() {
   );
   const paidPenalties = penalties.filter((penalty) => penalty.status === "paid");
   const outstandingPenalties = penalties.filter((penalty) => penalty.status === "outstanding");
+  const reportReceiptRows = useMemo(
+    () => buildReportReceiptRows({ transactions, mpesaAuditRows, resolveMpesaAccount }),
+    [mpesaAuditRows, resolveMpesaAccount, transactions],
+  );
 
   const portfolio =
     activeLoans.reduce((sum, loan) => sum + loanSummary(loan).balance, 0) +
@@ -280,7 +294,7 @@ function ReportsPage() {
   );
   const reconciledBooks = buildReconciledMemberBooks({
     members: memberAccounts,
-    transactions,
+    transactions: reportReceiptRows,
     loans,
     carryoverLoans,
     penalties,
@@ -1760,6 +1774,80 @@ function isOperationalRoutingTransaction(transaction: { note?: unknown }) {
     "service payment",
     "reallocation ->",
   );
+}
+
+const REPORT_TRANSACTION_TYPES = new Set<StoreTransaction["type"]>([
+  "deposit",
+  "withdrawal",
+  "loan_disbursement",
+  "loan_repayment",
+  "share_purchase",
+  "petty_cash",
+  "investor_contribution",
+  "fee_payment",
+  "mpesa_unallocated",
+  "staff_payroll",
+]);
+
+function reportTransactionType(value: unknown): StoreTransaction["type"] {
+  const type = String(value ?? "").trim() as StoreTransaction["type"];
+  return REPORT_TRANSACTION_TYPES.has(type) ? type : "mpesa_unallocated";
+}
+
+function isInternalSyntheticTransaction(transaction: { note?: unknown }) {
+  const note = String(transaction.note ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    note.startsWith("policy redistribution:") ||
+    note.startsWith("purpose pool reallocation ->") ||
+    note.startsWith("round-off captured from m-pesa receipt")
+  );
+}
+
+function buildReportReceiptRows(args: {
+  transactions: StoreTransaction[];
+  mpesaAuditRows: any[];
+  resolveMpesaAccount: ReturnType<typeof useStore>["resolveMpesaAccount"];
+}): StoreTransaction[] {
+  const hiddenTransactionIds = new Set(
+    args.mpesaAuditRows.flatMap((row) =>
+      Array.isArray(row?.transactionIds) ? row.transactionIds.map((id: unknown) => String(id)) : [],
+    ),
+  );
+
+  const ledgerRows = args.transactions.filter(
+    (transaction) =>
+      transaction.by !== "MPESA" &&
+      !hiddenTransactionIds.has(transaction.id) &&
+      !isInternalSyntheticTransaction(transaction),
+  );
+
+  const mpesaRows = args.mpesaAuditRows.map((row) => {
+    const resolvedMember =
+      args.resolveMpesaAccount(String(row?.memberId ?? "")) ??
+      args.resolveMpesaAccount(String(row?.account ?? ""));
+    const direction = String(row?.direction ?? "").trim();
+    const createdAt = String(row?.exactReceivedAt ?? row?.createdAt ?? "").trim() || undefined;
+    const date = createdAt ? createdAt.slice(0, 10) : String(row?.date ?? "").slice(0, 10);
+    const memberId = resolvedMember?.id ?? (String(row?.memberId ?? "").trim() || undefined);
+    return {
+      id: String(row?.id ?? ""),
+      date,
+      createdAt,
+      type: reportTransactionType(row?.type),
+      account: String(row?.account ?? resolvedMember?.id ?? "").trim() || undefined,
+      payerName: String(row?.payerName ?? row?.memberName ?? "").trim() || undefined,
+      amount: numberValue(row?.originalAmount ?? row?.amount),
+      memberId,
+      loanId: undefined,
+      ref: String(row?.mpesaRef ?? "").trim() || undefined,
+      by: direction === "out" ? "M-Pesa Payout" : "MPESA",
+      note: String(row?.note ?? "").trim() || undefined,
+    } satisfies StoreTransaction;
+  });
+
+  return [...ledgerRows, ...mpesaRows];
 }
 
 function classifyPenalty(reason: string) {
