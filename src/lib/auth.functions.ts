@@ -82,12 +82,22 @@ export const signInStaff = createServerFn({ method: "POST" })
     assertAuthAttemptAllowed(throttleKey);
 
     const supabaseAdmin = requireSupabaseAdmin();
-    const { data: staffRow, error } = await supabaseAdmin
+    let { data: staffRow, error } = await supabaseAdmin
       .from("staff")
       .select("id, name, role, temp_password, can_mark_attendance, member_id")
       .ilike("email", data.email)
       .limit(1)
       .maybeSingle();
+    if (error && isMissingColumnError(error, "member_id")) {
+      const retry = await supabaseAdmin
+        .from("staff")
+        .select("id, name, role, temp_password, can_mark_attendance")
+        .ilike("email", data.email)
+        .limit(1)
+        .maybeSingle();
+      staffRow = retry.data;
+      error = retry.error;
+    }
     if (error) throw new Error(error.message);
 
     const passwordCheck = verifyPassword(data.password, staffRow?.temp_password);

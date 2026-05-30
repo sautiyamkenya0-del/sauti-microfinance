@@ -66,6 +66,8 @@ on conflict (id) do update set
   description = excluded.description,
   updated_at = now();
 
+drop view if exists public.service_module_dashboard;
+
 create or replace view public.service_module_dashboard as
 select
   (select count(*) from public.members where coalesce(member_tags, '{}'::text[]) @> array['service']::text[]) as total_service_members,

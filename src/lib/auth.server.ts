@@ -72,6 +72,11 @@ async function requireSupabaseAdmin() {
   return supabaseAdmin;
 }
 
+function isMissingColumnError(error: any, column: string) {
+  const message = String(error?.message ?? "");
+  return error?.code === "42703" || message.includes(column);
+}
+
 export async function getAuthSessionData() {
   const session = await useAuthSession();
   return session.data;
@@ -113,11 +118,20 @@ export async function requireStaffActor() {
   }
 
   const supabaseAdmin = await requireSupabaseAdmin();
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from("staff")
     .select("id, name, role, can_mark_attendance, member_id")
     .eq("id", session.staffId)
     .maybeSingle();
+  if (error && isMissingColumnError(error, "member_id")) {
+    const retry = await supabaseAdmin
+      .from("staff")
+      .select("id, name, role, can_mark_attendance")
+      .eq("id", session.staffId)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
   if (error) throw new Error(error.message);
 
   if (!data) {
