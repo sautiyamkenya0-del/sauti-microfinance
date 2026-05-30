@@ -35,6 +35,8 @@ import {
   PackageCheck,
   LifeBuoy,
   PlusCircle,
+  Menu,
+  X,
 } from "lucide-react";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
 import { MemberAIChat } from "@/components/MemberAIChat";
@@ -49,17 +51,18 @@ import {
   listPortalCarryoverLoans,
   listSupplierWorkspaceRecord,
 } from "@/lib/runtime-data.functions";
+import { membershipIdCandidates } from "@/lib/membership";
+import { createPortal } from "react-dom";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
-  { id: "overview", label: "Overview", icon: PiggyBank },
+  { id: "overview", label: "Dashboard", icon: PiggyBank },
   { id: "profile", label: "My Profile", icon: User },
   { id: "loans", label: "My Loans", icon: Banknote },
   { id: "transactions", label: "Transactions", icon: ArrowLeftRight },
   { id: "fees", label: "Fees", icon: Receipt },
   { id: "support", label: "Help / Chat", icon: MessageSquare },
 ];
-const PORTAL_MENU_TABS = TABS.filter((tab) => tab.id !== "support");
 
 type ClientNotice = {
   id: string;
@@ -120,6 +123,7 @@ function Portal() {
     portalMemberId,
     setPortalMemberId,
     logout,
+    reloadAppData,
     feePolicies,
     policySettings,
   } = useStore();
@@ -127,7 +131,9 @@ function Portal() {
   // is staff (director / manager / loan_officer). Render it as a staff "view-as"
   // surface, not as if the staff member were the customer.
   const isStaffView = authMode !== "member";
-  const [memberId, setMemberId] = useState<string>(() => portalMemberId || members[0]?.id || "");
+  const [memberId, setMemberId] = useState<string>(() =>
+    authMode === "member" ? portalMemberId : portalMemberId || members[0]?.id || "",
+  );
   useEffect(() => {
     if (authMode === "member") {
       setMemberId(portalMemberId);
@@ -143,6 +149,7 @@ function Portal() {
     setPortalMemberId(memberId);
   }, [memberId, setPortalMemberId]);
   const [tab, setTab] = useState<Tab>("overview");
+  const [portalNavOpen, setPortalNavOpen] = useState(false);
   const [loanRequestAmount, setLoanRequestAmount] = useState("");
   const [loanRequestDays, setLoanRequestDays] = useState("30");
   const [loanRequestPurpose, setLoanRequestPurpose] = useState("");
@@ -310,6 +317,15 @@ function Portal() {
     staleTime: 30000,
     refetchOnWindowFocus: false,
   });
+  const scopedMpesaReceiptRows = useMemo(
+    () =>
+      (mpesaReceiptRows as any[]).filter((row) => {
+        if (!memberId) return false;
+        if (String(row.memberId ?? "") === memberId) return true;
+        return membershipIdCandidates(String(row.account ?? "")).includes(memberId);
+      }),
+    [memberId, mpesaReceiptRows],
+  );
   const clientLetters = useMemo(
     () => clientNotices.filter((notice) => notice.documentKind === "letter"),
     [clientNotices],
@@ -483,6 +499,7 @@ function Portal() {
         purpose: loanRequestPurpose,
       },
     });
+    await reloadAppData();
     toast.success(`Loan application ${result.id} submitted for staff review`);
     setLoanRequestAmount("");
     setLoanRequestDays("30");
@@ -536,6 +553,14 @@ function Portal() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPortalNavOpen(true)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-border bg-background hover:bg-muted"
+                aria-label="Open member menu"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
               {notificationPermission === "default" ? (
                 <button
                   onClick={() => void enablePhoneAlerts()}
@@ -569,6 +594,69 @@ function Portal() {
           </div>
         </header>
       )}
+      {!isStaffView &&
+        portalNavOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[100] bg-black/50"
+              onClick={() => setPortalNavOpen(false)}
+            />
+            <aside className="fixed left-0 top-0 bottom-0 z-[101] flex w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl">
+              <div className="safe-area-spacer" />
+              <div className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
+                <div>
+                  <div className="font-display text-base font-semibold leading-tight">
+                    Member Portal
+                  </div>
+                  <div className="text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/60">
+                    {member?.id ?? memberId}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPortalNavOpen(false)}
+                  className="grid h-8 w-8 place-items-center rounded-md hover:bg-sidebar-accent"
+                  aria-label="Close member menu"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-3">
+                {TABS.map((item) => {
+                  const Icon = item.icon;
+                  const active = tab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setTab(item.id);
+                        setPortalNavOpen(false);
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                      className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm ${
+                        active
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium"
+                          : "text-sidebar-foreground/85 hover:bg-sidebar-accent"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span className="flex-1">{item.label}</span>
+                      {item.id === "loans" && myLoans.some((loan) => loan.status === "pending") ? (
+                        <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-accent-foreground">
+                          pending
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </nav>
+            </aside>
+          </>,
+          document.body,
+        )}
       <main className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         {isStaffView && (
           <div className="bg-accent/15 border border-accent/30 rounded-xl p-4 flex items-start gap-3 text-sm">
@@ -648,46 +736,23 @@ function Portal() {
 
         {member && (
           <>
-            {/* Member-side tab bar */}
-            <div className="rounded-xl border border-border bg-card p-3 sm:hidden">
-              <label className="block">
-                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                  Menu
-                </span>
-                <select
-                  value={tab === "support" ? "overview" : tab}
-                  onChange={(event) => setTab(event.target.value as Tab)}
-                  className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-                >
-                  {PORTAL_MENU_TABS.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                  {tab === "overview" ? "Dashboard" : TABS.find((item) => item.id === tab)?.label}
+                </div>
+                <h2 className="mt-1 font-display text-xl font-semibold text-foreground">
+                  {tab === "overview" ? "Dashboard" : TABS.find((item) => item.id === tab)?.label}
+                </h2>
+              </div>
               <button
-                onClick={() => setTab("support")}
-                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+                type="button"
+                onClick={() => setPortalNavOpen(true)}
+                className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted"
               >
-                <MessageSquare className="h-4 w-4" /> Help / Chat
+                <Menu className="h-4 w-4" />
+                Menu
               </button>
-            </div>
-            <div className="hidden bg-card border border-border rounded-xl p-1 sm:flex flex-wrap gap-1">
-              {TABS.map((t) => {
-                const Icon = t.icon;
-                const active = tab === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setTab(t.id)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-sm transition-colors ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {t.label}
-                  </button>
-                );
-              })}
             </div>
 
             {tab === "overview" && (
@@ -1614,14 +1679,14 @@ function Portal() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {mpesaReceiptRows.length === 0 && (
+                      {scopedMpesaReceiptRows.length === 0 && (
                         <tr>
                           <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
                             No original M-Pesa receipts found for this member yet.
                           </td>
                         </tr>
                       )}
-                      {mpesaReceiptRows.map((t: any) => (
+                      {scopedMpesaReceiptRows.map((t: any) => (
                         <tr key={t.id}>
                           <td className="px-5 py-2">
                             {t.exactReceivedAt || t.createdAt
