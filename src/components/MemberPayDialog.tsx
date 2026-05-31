@@ -6,7 +6,7 @@ import {
   fuelBufferTargetAmount,
   formatMembershipNumber,
   isInvestorOnlyCategory,
-  loanSummary,
+  loanPenaltySummary,
   memberIsFuelMember,
   memberNeedsSticker,
   upfrontTotalsForAmount,
@@ -47,7 +47,9 @@ export function MemberPayDialog({
   );
   const [loanId, setLoanId] = useState(initialLoanId ?? activeLoans[0]?.id ?? "");
   const activeLoan = activeLoans.find((loan) => loan.id === loanId) ?? activeLoans[0];
-  const loanBalance = activeLoan ? loanSummary(activeLoan).balance : 0;
+  const loanBalance = activeLoan
+    ? loanPenaltySummary(activeLoan, transactions).totalOwedNow
+    : 0;
   const [busy, setBusy] = useState(false);
 
   const fuelMember = memberIsFuelMember(member);

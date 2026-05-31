@@ -503,6 +503,28 @@ function Portal() {
     [clientAlerts, clientReadIds],
   );
   const myCarryoverLoans = carryoverLoans.filter((loan) => loan.memberId === memberId);
+  const liveLoanPaymentNotices = useMemo(
+    () =>
+      myLoans
+        .filter((loan) => loan.status === "active" || loan.status === "defaulted")
+        .map((loan) => {
+          const displayLoan = { ...loan, paid: displayLoanPaid(loan) };
+          const summary = loanPenaltySummary(displayLoan, myUniqueTx);
+          return {
+            loan,
+            summary,
+            amount: Math.ceil(summary.defaultedAmount),
+          };
+        })
+        .filter((item) => item.amount > 0)
+        .sort((left, right) => {
+          const byAmount = right.amount - left.amount;
+          if (byAmount !== 0) return byAmount;
+          return left.loan.startDate.localeCompare(right.loan.startDate);
+        }),
+    [displayLoanPaid, myLoans, myUniqueTx],
+  );
+  const priorityLoanPaymentNotice = liveLoanPaymentNotices[0];
   const announcedClientIdsRef = useRef(new Set<string>());
   const markClientAlertsRead = useCallback(
     (ids: string | string[]) => {
@@ -855,6 +877,27 @@ function Portal() {
                       />
                     </div>
                   </Section>
+                )}
+                {!isStaffView && (
+                  priorityLoanPaymentNotice ? (
+                    <LoanPaymentCallout
+                      loanId={priorityLoanPaymentNotice.loan.id}
+                      amount={priorityLoanPaymentNotice.amount}
+                      penaltyAmount={priorityLoanPaymentNotice.summary.totalPenalty}
+                      dailyMissedAmount={Math.max(
+                        0,
+                        priorityLoanPaymentNotice.amount -
+                          priorityLoanPaymentNotice.summary.totalPenalty,
+                      )}
+                      onPay={() =>
+                        openPayment({
+                          purpose: "loan",
+                          loanId: priorityLoanPaymentNotice.loan.id,
+                          amount: priorityLoanPaymentNotice.amount,
+                        })
+                      }
+                    />
+                  ) : null
                 )}
                 {!isStaffView && (
                   <Section title="Make a payment">
@@ -1498,6 +1541,25 @@ function Portal() {
                   {myLoans.length === 0 && myCarryoverLoans.length === 0 && (
                     <div className="text-sm text-muted-foreground">No loans on file.</div>
                   )}
+                  {!isStaffView && priorityLoanPaymentNotice ? (
+                    <LoanPaymentCallout
+                      loanId={priorityLoanPaymentNotice.loan.id}
+                      amount={priorityLoanPaymentNotice.amount}
+                      penaltyAmount={priorityLoanPaymentNotice.summary.totalPenalty}
+                      dailyMissedAmount={Math.max(
+                        0,
+                        priorityLoanPaymentNotice.amount -
+                          priorityLoanPaymentNotice.summary.totalPenalty,
+                      )}
+                      onPay={() =>
+                        openPayment({
+                          purpose: "loan",
+                          loanId: priorityLoanPaymentNotice.loan.id,
+                          amount: priorityLoanPaymentNotice.amount,
+                        })
+                      }
+                    />
+                  ) : null}
                   {myLoans.map((l) => {
                     const displayedPaid = displayLoanPaid(l);
                     const displayLoan = { ...l, paid: displayedPaid };
@@ -1881,6 +1943,55 @@ function Portal() {
         />
       )}
     </>
+  );
+}
+
+function LoanPaymentCallout({
+  loanId,
+  amount,
+  penaltyAmount,
+  dailyMissedAmount,
+  onPay,
+}: {
+  loanId: string;
+  amount: number;
+  penaltyAmount: number;
+  dailyMissedAmount: number;
+  onPay: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-destructive/35 bg-destructive/10 p-5 text-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-destructive">
+            Please pay
+          </div>
+          <div className="mt-1 font-display text-3xl font-semibold text-foreground">
+            {fmtKES(amount)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Clears missed daily payments and penalties for loan{" "}
+            <span className="font-mono text-foreground">{loanId}</span>.
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-border bg-card px-2.5 py-1">
+              Missed daily: {fmtKES(dailyMissedAmount)}
+            </span>
+            <span className="rounded-md border border-border bg-card px-2.5 py-1">
+              Penalties: {fmtKES(penaltyAmount)}
+            </span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onPay}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+        >
+          <Smartphone className="h-4 w-4" />
+          Pay now
+        </button>
+      </div>
+    </div>
   );
 }
 
