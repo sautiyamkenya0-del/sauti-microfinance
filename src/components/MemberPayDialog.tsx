@@ -47,11 +47,9 @@ export function MemberPayDialog({
   );
   const [loanId, setLoanId] = useState(initialLoanId ?? activeLoans[0]?.id ?? "");
   const activeLoan = activeLoans.find((loan) => loan.id === loanId) ?? activeLoans[0];
+  const activeLoanSummary = activeLoan ? loanPenaltySummary(activeLoan, transactions) : null;
   const loanBalance = activeLoan
-    ? (() => {
-        const summary = loanPenaltySummary(activeLoan, transactions);
-        return Math.ceil(summary.defaultedAmount || summary.totalOwedNow);
-      })()
+    ? Math.ceil(activeLoanSummary?.defaultedAmount || activeLoanSummary?.totalOwedNow || 0)
     : 0;
   const [busy, setBusy] = useState(false);
 
@@ -305,7 +303,8 @@ export function MemberPayDialog({
                 >
                   {activeLoans.map((loan) => (
                     <option key={loan.id} value={loan.id}>
-                      {loan.id} - {fmtKES(loan.principal)} - {loan.status}
+                      {loan.id} - {fmtKES(loanPenaltySummary(loan, transactions).approved)} -{" "}
+                      {loan.status}
                     </option>
                   ))}
                 </select>

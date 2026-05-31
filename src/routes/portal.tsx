@@ -161,27 +161,22 @@ function Portal() {
   } = useStore();
   const locomotiveAdminMemberId =
     currentUser.role === "locomotive_admin" ? (currentUser.memberId ?? "") : "";
-  const isLocomotiveAdminSelfView = authMode === "staff" && !!locomotiveAdminMemberId;
-  const isStaffView = authMode !== "member" && !isLocomotiveAdminSelfView;
+  const isStaffView = authMode !== "member";
   const shouldPassMemberId = authMode !== "member";
   const [memberId, setMemberId] = useState<string>(() =>
     authMode === "member"
       ? portalMemberId
-      : locomotiveAdminMemberId || portalMemberId || members[0]?.id || "",
+      : portalMemberId || locomotiveAdminMemberId || members[0]?.id || "",
   );
   useEffect(() => {
     if (authMode === "member") {
       setMemberId(portalMemberId);
       return;
     }
-    if (locomotiveAdminMemberId) {
-      setMemberId(locomotiveAdminMemberId);
-      setPortalMemberId(locomotiveAdminMemberId);
-      return;
-    }
     if (!memberId && members[0]?.id) {
-      setMemberId(members[0].id);
-      setPortalMemberId(members[0].id);
+      const fallbackMemberId = portalMemberId || locomotiveAdminMemberId || members[0].id;
+      setMemberId(fallbackMemberId);
+      setPortalMemberId(fallbackMemberId);
     }
   }, [authMode, locomotiveAdminMemberId, memberId, members, portalMemberId, setPortalMemberId]);
   useEffect(() => {
@@ -752,8 +747,7 @@ function Portal() {
           </div>
         </header>
       )}
-      {!isStaffView &&
-        portalNavOpen &&
+      {portalNavOpen &&
         typeof document !== "undefined" &&
         createPortal(
           <>
@@ -1698,7 +1692,7 @@ function Portal() {
                             {l.status}
                           </Badge>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
                           <Stat label="Total payable" value={fmtKES(totalPayable)} />
                           <Stat label="Paid so far" value={fmtKES(displayedPaid)} />
                           <Stat
@@ -1716,7 +1710,7 @@ function Portal() {
                           />
                         </div>
                         {l.status === "active" ? (
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                          <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
                             <Stat
                               label="Loan part / day"
                               value={fmtKES(summary.dailyInstallment)}
@@ -1815,7 +1809,7 @@ function Portal() {
                             {loan.status}
                           </Badge>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
                           <Stat label="Total payable" value={fmtKES(summary.totalRepayment)} />
                           <Stat label="Paid so far" value={fmtKES(loan.paidToDate)} />
                           <Stat
@@ -1825,7 +1819,7 @@ function Portal() {
                           />
                           <Stat label="Due date" value={summary.dueDate} />
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
                           <Stat label="Daily inclusive" value={fmtKES(summary.dailyInclusive)} />
                           <Stat label="Arrears" value={fmtKES(summary.arrears)} />
                           <Stat
@@ -2164,9 +2158,15 @@ function Stat({
         ? "text-success"
         : "text-foreground";
   return (
-    <div className="bg-muted/50 rounded-md p-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`mt-0.5 font-medium ${cls}`}>{value}</div>
+    <div className="min-w-0 rounded-md bg-muted/50 p-2">
+      <div className="break-words text-[10px] uppercase tracking-wider text-muted-foreground [overflow-wrap:anywhere]">
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 max-w-full break-words text-[clamp(0.78rem,3.4vw,0.875rem)] font-medium leading-tight [overflow-wrap:anywhere] ${cls}`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
