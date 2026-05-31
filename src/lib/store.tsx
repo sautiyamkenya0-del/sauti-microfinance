@@ -980,6 +980,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             processingFeeAmount: l.processingFeeAmount,
             insuranceFeeAmount: l.insuranceFeeAmount,
             transactionFeeAmount: l.transactionFeeAmount,
+            dailySavingsAmount: l.dailySavingsAmount,
             processingFeeMode: l.processingFeeMode,
             insuranceFeeMode: l.insuranceFeeMode,
             disbursementStatus: l.disbursementStatus,

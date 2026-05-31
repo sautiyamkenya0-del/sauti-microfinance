@@ -148,23 +148,31 @@ function Portal() {
     feePolicies,
     policySettings,
   } = useStore();
-  // The Member Portal route lives inside the staff app; every signed-in user here
-  // is staff (director / manager / loan_officer). Render it as a staff "view-as"
-  // surface, not as if the staff member were the customer.
-  const isStaffView = authMode !== "member";
+  const locomotiveAdminMemberId =
+    currentUser.role === "locomotive_admin" ? (currentUser.memberId ?? "") : "";
+  const isLocomotiveAdminSelfView = authMode === "staff" && !!locomotiveAdminMemberId;
+  const isStaffView = authMode !== "member" && !isLocomotiveAdminSelfView;
+  const shouldPassMemberId = authMode !== "member";
   const [memberId, setMemberId] = useState<string>(() =>
-    authMode === "member" ? portalMemberId : portalMemberId || members[0]?.id || "",
+    authMode === "member"
+      ? portalMemberId
+      : locomotiveAdminMemberId || portalMemberId || members[0]?.id || "",
   );
   useEffect(() => {
     if (authMode === "member") {
       setMemberId(portalMemberId);
       return;
     }
+    if (locomotiveAdminMemberId) {
+      setMemberId(locomotiveAdminMemberId);
+      setPortalMemberId(locomotiveAdminMemberId);
+      return;
+    }
     if (!memberId && members[0]?.id) {
       setMemberId(members[0].id);
       setPortalMemberId(members[0].id);
     }
-  }, [authMode, memberId, members, portalMemberId, setPortalMemberId]);
+  }, [authMode, locomotiveAdminMemberId, memberId, members, portalMemberId, setPortalMemberId]);
   useEffect(() => {
     if (!memberId) return;
     setPortalMemberId(memberId);
@@ -273,7 +281,7 @@ function Portal() {
   }, [memberId]);
   useEffect(() => {
     const refreshNotices = () =>
-      loadClientNotices({ data: isStaffView ? { memberId } : undefined })
+      loadClientNotices({ data: shouldPassMemberId ? { memberId } : undefined })
         .then((rows) => setClientNotices(rows as ClientNotice[]))
         .catch(() => setClientNotices([]));
     refreshNotices();
@@ -283,7 +291,7 @@ function Portal() {
       window.clearInterval(timer);
       window.removeEventListener("focus", refreshNotices);
     };
-  }, [isStaffView, loadClientNotices, memberId]);
+  }, [loadClientNotices, memberId, shouldPassMemberId]);
   useEffect(() => {
     if (!memberId) {
       setCarryoverLoans([]);
@@ -296,10 +304,10 @@ function Portal() {
       });
       return;
     }
-    loadCarryoverLoans({ data: isStaffView ? { memberId } : {} })
+    loadCarryoverLoans({ data: shouldPassMemberId ? { memberId } : {} })
       .then((rows) => setCarryoverLoans(rows as LegacyCarryoverLoan[]))
       .catch(() => setCarryoverLoans([]));
-    loadServiceWorkspace({ data: isStaffView ? { memberId } : { memberId } })
+    loadServiceWorkspace({ data: shouldPassMemberId ? { memberId } : { memberId } })
       .then((workspace) =>
         setServiceWorkspace({
           services: (workspace as any).services ?? [],
@@ -318,7 +326,7 @@ function Portal() {
           serviceWalletBalance: 0,
         }),
       );
-  }, [isStaffView, loadCarryoverLoans, loadServiceWorkspace, memberId]);
+  }, [loadCarryoverLoans, loadServiceWorkspace, memberId, shouldPassMemberId]);
   useEffect(() => {
     setVehicleChangePlate(member?.vehiclePlate ?? "");
   }, [member?.vehiclePlate]);
@@ -333,8 +341,8 @@ function Portal() {
       .catch(() => {});
   }, [authMode, loadSupplierWorkspace, navigate]);
   const { data: mpesaReceiptRows = [] } = useQuery({
-    queryKey: ["portal-mpesa-receipts", memberId, isStaffView],
-    queryFn: () => fetchMpesaAudit({ data: isStaffView ? { memberId } : {} }),
+    queryKey: ["portal-mpesa-receipts", memberId, shouldPassMemberId],
+    queryFn: () => fetchMpesaAudit({ data: shouldPassMemberId ? { memberId } : {} }),
     enabled: !!memberId,
     staleTime: 30000,
     refetchOnWindowFocus: false,
@@ -428,6 +436,7 @@ function Portal() {
     myLoans
       .filter((loan) => loan.status === "active")
       .forEach((loan) => {
+        if (loan.startDate > today) return;
         const summary = loanSummary({ ...loan, paid: displayLoanPaid(loan) });
         if (summary.balance <= 0) return;
         const dailyDue = summary.dailyCollectionAmount;
@@ -1513,6 +1522,7 @@ function Portal() {
                     );
                     const dailyDue = summary.dailyCollectionAmount;
                     const complianceExpected = summary.dailySavingsAmount * elapsedDays;
+                    const totalCompliance = summary.dailySavingsAmount * summary.termDays;
                     const compliancePaid = Math.min(displayedPaid, complianceExpected);
                     const loanPenalties = penalties.filter((p) => p.loanId === l.id);
                     const outstandingPen = loanPenalties
@@ -1578,6 +1588,7 @@ function Portal() {
                               label={`Compliance expected (${elapsedDays}d)`}
                               value={fmtKES(complianceExpected)}
                             />
+                            <Stat label="Total compliance" value={fmtKES(totalCompliance)} />
                             <Stat label="Compliance paid" value={fmtKES(compliancePaid)} />
                           </div>
                         ) : null}

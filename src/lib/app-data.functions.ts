@@ -122,6 +122,16 @@ function addDaysIso(date: string, days: number) {
   return next.toISOString().slice(0, 10);
 }
 
+function collectionStartDateForDisbursement(date: string) {
+  return addDaysIso(date, 1);
+}
+
+function dailyComplianceAmountForLoan(amount: number, stored?: unknown) {
+  const explicit = toNumber(stored as number | string | null | undefined);
+  if (explicit > 0) return explicit;
+  return amount <= 5000 ? 50 : 100;
+}
+
 function asJsonObject(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -2240,6 +2250,21 @@ export async function applyMpesaPaymentToDatabase(args: {
     0,
     policySettings.percentages.fuelBufferAmount || SPECIAL_MEMBER_BUFFER_TARGET,
   );
+  const isLocomotiveAdminSelfMember =
+    memberCategory === "locomotive" &&
+    (await memberIsLinkedLocomotiveAdmin(supabaseAdmin, memberId));
+  const hasExpectedLocomotiveWalletPrompt =
+    isLocomotiveAdminSelfMember &&
+    (await hasExpectedLocomotiveWalletAllocation({
+      runtimeDb: supabaseAdmin,
+      adminMemberId: memberId,
+      amount,
+      checkoutRequestId,
+    }));
+  const useNormalWaterfallForLocomotiveAdminSelfPayment =
+    isLocomotiveAdminSelfMember &&
+    !targetedDocket &&
+    !hasExpectedLocomotiveWalletPrompt;
 
   const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
     .from("penalties")
@@ -2917,7 +2942,10 @@ export async function applyMpesaPaymentToDatabase(args: {
       return;
     }
 
-    if (memberCategory === "locomotive" || memberCategory === "stock") {
+    if (
+      (memberCategory === "locomotive" || memberCategory === "stock") &&
+      !useNormalWaterfallForLocomotiveAdminSelfPayment
+    ) {
       await allocateSpecialMemberPayment(memberCategory);
       return;
     }
@@ -3446,6 +3474,7 @@ async function finalizeSuccessfulSystemPayoutRequest(args: {
         .update({
           disbursement_status: "paid",
           disbursement_completed_at: args.createdAt ?? new Date().toISOString(),
+          start_date: collectionStartDateForDisbursement(payoutDate),
         })
         .eq("id", args.request.loan_id);
       if (loanError) throw new Error(loanError.message);
@@ -6414,6 +6443,52 @@ async function reconcileLocomotiveBusinessWalletPendingAllocations(args: {
   return pending.id as string;
 }
 
+async function memberIsLinkedLocomotiveAdmin(runtimeDb: any, memberId: string) {
+  const { data, error } = await runtimeDb
+    .from("staff")
+    .select("id")
+    .eq("role", "locomotive_admin")
+    .eq("member_id", memberId)
+    .limit(1);
+  if (error) {
+    if (isMissingColumnError(error, "member_id")) return false;
+    throw new Error(error.message);
+  }
+  return (data ?? []).length > 0;
+}
+
+async function hasExpectedLocomotiveWalletAllocation(args: {
+  runtimeDb: any;
+  adminMemberId: string;
+  amount: number;
+  checkoutRequestId?: string | null;
+}) {
+  const adminMemberId = args.adminMemberId.trim();
+  const amount = Number(args.amount ?? 0);
+  if (!adminMemberId || amount <= 0) return false;
+
+  let query = args.runtimeDb
+    .from("locomotive_business_wallet_allocations")
+    .select("id, prompt_checkout_request_id")
+    .eq("admin_member_id", adminMemberId)
+    .eq("status", "pending")
+    .is("source_transaction_id", null)
+    .eq("gross_amount", amount)
+    .limit(1);
+
+  const checkoutRequestId = String(args.checkoutRequestId ?? "").trim();
+  query = checkoutRequestId
+    ? query.eq("prompt_checkout_request_id", checkoutRequestId)
+    : query.not("prompt_checkout_request_id", "is", null);
+
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingColumnError(error, "status")) return false;
+    throw new Error(error.message);
+  }
+  return (data ?? []).length > 0;
+}
+
 export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
@@ -6820,6 +6895,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       processingFeeAmount?: number;
       insuranceFeeAmount?: number;
       transactionFeeAmount?: number;
+      dailySavingsAmount?: number;
       processingFeeMode?: "upfront" | "financed";
       insuranceFeeMode?: "upfront" | "financed";
       disbursementStatus?: "not_requested" | "requested" | "paid" | "failed" | "timeout";
@@ -6848,6 +6924,10 @@ export const createLoanRecord = createServerFn({ method: "POST" })
         data?.insuranceFeeAmount == null ? undefined : Number(data.insuranceFeeAmount ?? 0),
       transactionFeeAmount:
         data?.transactionFeeAmount == null ? undefined : Number(data.transactionFeeAmount ?? 0),
+      dailySavingsAmount:
+        data?.dailySavingsAmount == null
+          ? undefined
+          : Math.max(0, Number(data.dailySavingsAmount ?? 0)),
       processingFeeMode: data?.processingFeeMode === "upfront" ? "upfront" : "financed",
       insuranceFeeMode: data?.insuranceFeeMode === "upfront" ? "upfront" : "financed",
       disbursementStatus:
@@ -6887,6 +6967,11 @@ export const createLoanRecord = createServerFn({ method: "POST" })
     const supplierBacked = data.loanKind !== "financial";
     const termDays = normalizeLoanKindTermDays(data.loanKind, data.termDays, data.termMonths);
     const termMonths = termPeriodsForLoanKind(data.loanKind, termDays, data.termMonths);
+    const disbursementDate = data.startDate;
+    const collectionStartDate =
+      data.status === "active"
+        ? collectionStartDateForDisbursement(disbursementDate)
+        : data.startDate;
     const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
     const pricing = computeLoanPricing({
       netAmount: netAmount ?? data.netDisbursedAmount ?? data.principal,
@@ -6925,7 +7010,10 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_months: termMonths,
       term_days: termDays,
-      start_date: data.startDate,
+      daily_savings_amount: supplierBacked
+        ? 0
+        : dailyComplianceAmountForLoan(netAmount ?? data.principal, data.dailySavingsAmount),
+      start_date: collectionStartDate,
       status: data.status as never,
       officer_id: officerId,
       paid: 0,
@@ -6993,10 +7081,46 @@ export const createMemberLoanApplicationRecord = createServerFn({ method: "POST"
     }),
   )
   .handler(async ({ data }) => {
-    const member = await requireMemberActor();
     if (data.principal <= 0) throw new Error("Loan amount must be above zero.");
-
     const supabaseAdmin = await requireSupabaseAdmin();
+    const session = await requireSignedInSession();
+    let member: { id: string; name: string; phone: string; fieldOfficerId?: string };
+    if (session.authMode === "member" && session.memberId) {
+      const { data: memberRow, error: memberError } = await supabaseAdmin
+        .from("members")
+        .select("id, name, phone, field_officer_id")
+        .eq("id", session.memberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      if (!memberRow) throw new Error("Your member session is no longer valid.");
+      member = {
+        id: memberRow.id,
+        name: memberRow.name,
+        phone: memberRow.phone,
+        fieldOfficerId: memberRow.field_officer_id ?? undefined,
+      };
+    } else if (session.authMode === "staff" && session.staffId) {
+      const staffActor = await requireStaffActor();
+      if (staffActor.role !== "locomotive_admin" || !staffActor.memberId) {
+        throw new Error("Member sign-in is required for this action.");
+      }
+      const { data: memberRow, error: memberError } = await supabaseAdmin
+        .from("members")
+        .select("id, name, phone, field_officer_id")
+        .eq("id", staffActor.memberId)
+        .maybeSingle();
+      if (memberError) throw new Error(memberError.message);
+      if (!memberRow) throw new Error("Linked locomotive admin member account was not found.");
+      member = {
+        id: memberRow.id,
+        name: memberRow.name,
+        phone: memberRow.phone,
+        fieldOfficerId: memberRow.field_officer_id ?? undefined,
+      };
+    } else {
+      throw new Error("Member sign-in is required for this action.");
+    }
+
     await assertNoDuplicateOpenLoanKind(supabaseAdmin, {
       memberId: member.id,
       loanKind: data.loanKind,
@@ -7693,6 +7817,10 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       supplierPayload: asJsonObject(loan.supplier_payload),
       settings: policySettings,
     });
+    const dailySavingsAmount =
+      loanKind === "financial"
+        ? dailyComplianceAmountForLoan(approvedAmount, loan.daily_savings_amount)
+        : 0;
     if (loanKind !== "financial") {
       const { error } = await supabaseAdmin
         .from("loans")
@@ -7701,6 +7829,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
           financed_principal_amount: pricing.financedPrincipal,
           term_days: pricing.termDays,
           term_months: pricing.termMonths,
+          daily_savings_amount: 0,
           net_disbursed_amount: 0,
           processing_fee_amount: 0,
           insurance_fee_amount: 0,
@@ -7801,10 +7930,15 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         transaction_fee_amount: pricing.transactionFee,
         term_days: pricing.termDays,
         term_months: pricing.termMonths,
+        daily_savings_amount: dailySavingsAmount,
         processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
         rate: pricing.ratePct,
         status: "active",
+        start_date:
+          data.disbursementMode === "cash"
+            ? collectionStartDateForDisbursement(now.slice(0, 10))
+            : loan.start_date,
         disbursement_status:
           data.disbursementMode === "mpesa"
             ? "requested"
@@ -7854,6 +7988,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       productChargeAmount?: number;
       manualPenaltyAmount?: number;
       penaltyWaivedAmount?: number;
+      dailySavingsAmount?: number;
       supplierPayloadPatch?: Record<string, unknown>;
       applicationLoanPatch?: Record<string, unknown>;
       applicationApplicantPatch?: Record<string, unknown>;
@@ -7881,6 +8016,10 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
         data?.penaltyWaivedAmount == null
           ? undefined
           : Math.max(0, Number(data.penaltyWaivedAmount ?? 0)),
+      dailySavingsAmount:
+        data?.dailySavingsAmount == null
+          ? undefined
+          : Math.max(0, Number(data.dailySavingsAmount ?? 0)),
       supplierPayloadPatch: asJsonObject(data?.supplierPayloadPatch),
       applicationLoanPatch: asJsonObject(data?.applicationLoanPatch),
       applicationApplicantPatch: asJsonObject(data?.applicationApplicantPatch),
@@ -7970,6 +8109,9 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_days: termDays,
       term_months: termMonths,
+      daily_savings_amount: supplierBacked
+        ? 0
+        : dailyComplianceAmountForLoan(approvedAmount, data.dailySavingsAmount ?? existingLoan.daily_savings_amount),
       start_date: data.startDate ?? existingLoan.start_date,
       paid: data.paid ?? Number(existingLoan.paid ?? 0),
       purpose: data.purpose ?? existingLoan.purpose ?? null,
@@ -12076,7 +12218,7 @@ export const markSupplierFulfilledRecord = createServerFn({ method: "POST" })
           supplier_request_status: "fulfilled",
           disbursement_status: "paid",
           disbursement_completed_at: now,
-          start_date: now.slice(0, 10),
+          start_date: collectionStartDateForDisbursement(now.slice(0, 10)),
         })
         .eq("id", request.loan_id);
       if (loanError) throw new Error(loanError.message);
@@ -12551,7 +12693,7 @@ export const issueInternalStoreLoanRecord = createServerFn({ method: "POST" })
           supplier_request_status: "fulfilled",
           disbursement_status: "paid",
           disbursement_completed_at: now,
-          start_date: now.slice(0, 10),
+          start_date: collectionStartDateForDisbursement(now.slice(0, 10)),
           supplier_payload: {
             ...supplierPayload,
             source: "internal_store",

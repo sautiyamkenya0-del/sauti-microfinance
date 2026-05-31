@@ -126,6 +126,20 @@ const LOCOMOTIVE_ENTRIES: Entry[] = [
     requires: [],
   },
   {
+    id: "locomotive-portal",
+    to: "/portal",
+    label: "My Member Portal",
+    icon: IdCard,
+    requires: [],
+  },
+  {
+    id: "locomotive-loans",
+    to: "/portal",
+    label: "My Loans",
+    icon: Banknote,
+    requires: [],
+  },
+  {
     id: "locomotive-support",
     to: "/locomotive-support",
     label: "Support",

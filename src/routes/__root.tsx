@@ -148,7 +148,8 @@ function AppLayout() {
     pathname === "/locomotive" ||
     pathname === "/locomotive-members" ||
     pathname === "/locomotive-balances" ||
-    pathname === "/locomotive-support";
+    pathname === "/locomotive-support" ||
+    pathname === "/portal";
   const canDrainMpesaQueue =
     authMode === "staff" && (currentUser?.role === "director" || currentUser?.role === "manager");
 

@@ -10,6 +10,7 @@ import {
   isInvestorCategory,
   isInvestorOnlyCategory,
   isMemberCategory,
+  memberNeedsSticker,
   memberCategoryLabel,
   nextMembershipNumber,
   normalizeMembershipNumber,
@@ -23,7 +24,7 @@ import { listServiceCatalog } from "@/lib/runtime-data.functions";
 import { toast } from "sonner";
 import { MemberLoanHistory } from "@/components/loans/LoanBook";
 import { MemberPayDialog } from "@/components/MemberPayDialog";
-import { Smartphone, Send } from "lucide-react";
+import { AlertTriangle, Send, Smartphone } from "lucide-react";
 
 type MemberForm = {
   memberNo: string;
@@ -70,7 +71,16 @@ export const Route = createFileRoute("/members")({
 });
 
 function MembersPage() {
-  const { members, loans, addMember, updateMember, sharePrice, currentUser } = useStore();
+  const {
+    members,
+    loans,
+    transactions,
+    penalties,
+    addMember,
+    updateMember,
+    sharePrice,
+    currentUser,
+  } = useStore();
   const [open, setOpen] = useState(false);
   const nextMemberNo = useMemo(
     () =>
@@ -201,6 +211,51 @@ function MembersPage() {
   const activeServiceRows = serviceRows.filter(
     (service) => (service.active ?? service.is_active ?? true) !== false,
   );
+  const today = new Date().toISOString().slice(0, 10);
+
+  function memberAlertMessages(member: Member) {
+    const memberLoans = loans.filter((loan) => loan.memberId === member.id);
+    const memberTransactions = transactions.filter(
+      (transaction) => transaction.memberId === member.id,
+    );
+    const messages: string[] = [];
+    const paidToday = memberTransactions.some(
+      (transaction) =>
+        transaction.date.slice(0, 10) === today &&
+        (transaction.type === "deposit" || transaction.type === "loan_repayment"),
+    );
+    if (!paidToday) messages.push("No daily contribution today");
+    if (
+      penalties.some(
+        (penalty) => penalty.memberId === member.id && penalty.status === "outstanding",
+      )
+    ) {
+      messages.push("Outstanding penalty");
+    }
+    if (
+      memberLoans.some(
+        (loan) =>
+          loan.status === "active" &&
+          loan.startDate <= today &&
+          !memberTransactions.some(
+            (transaction) =>
+              transaction.type === "loan_repayment" &&
+              transaction.loanId === loan.id &&
+              transaction.date.slice(0, 10) === today,
+          ),
+      )
+    ) {
+      messages.push("Loan repayment due today");
+    }
+    if (
+      !member.fees.membership ||
+      !member.fees.card ||
+      (memberNeedsSticker(member) && !member.fees.sticker)
+    ) {
+      messages.push("Mandatory fees pending");
+    }
+    return messages;
+  }
 
   return (
     <>
@@ -266,6 +321,7 @@ function MembersPage() {
                   <th className="px-5 py-3 text-right">Savings</th>
                   <th className="px-5 py-3 text-right">Loans</th>
                   <th className="px-5 py-3 text-left">Category</th>
+                  <th className="px-5 py-3 text-left">Alerts</th>
                   <th className="px-5 py-3 text-left">Status</th>
                   <th className="px-5 py-3 text-right">Actions</th>
                 </tr>
@@ -274,6 +330,7 @@ function MembersPage() {
                 {filtered.map((m) => {
                   const memberLoans = loans.filter((l) => l.memberId === m.id);
                   const active = memberLoans.filter((l) => l.status === "active").length;
+                  const alertMessages = memberAlertMessages(m);
                   return (
                     <tr
                       key={m.id}
@@ -308,6 +365,19 @@ function MembersPage() {
                           <div className="mt-1 font-mono text-[10px] text-muted-foreground">
                             {m.vehiclePlate}
                           </div>
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        {alertMessages.length > 0 ? (
+                          <div
+                            className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent-foreground"
+                            title={alertMessages.join(" / ")}
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            {alertMessages.length}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
                         )}
                       </td>
                       <td className="px-5 py-3">

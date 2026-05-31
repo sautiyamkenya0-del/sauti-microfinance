@@ -873,7 +873,7 @@ function liveLoanEditDraft(loan: Loan, transactions: ReturnType<typeof useStore>
     productChargeAmount: loanProductChargeAmount(loan),
     manualPenaltyAmount: ownManualPenaltyAmount(loan.supplierPayload),
     penaltyWaivedAmount: loan.penaltyWaivedAmount ?? 0,
-    dailySavingsAmount: loanDailySavingsAmount(summary.approved),
+    dailySavingsAmount: summary.dailySavingsAmount,
   } satisfies LoanEditDraft;
 }
 
@@ -941,6 +941,23 @@ export function MemberLoanHistory({
   const totalLoanHistoryCount = memberLoans.length + memberCarryoverLoans.length;
   const isFirstTime = totalLoanHistoryCount === 0;
   const canEditLoans = currentUser.role === "director";
+  const complianceAlerts = [
+    ...memberCarryoverLoans
+      .map((loan) => {
+        const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
+        return { source: "carryover" as const, loan, summary, balance: summary.totalOwedNow };
+      })
+      .filter(({ loan, balance }) => !loan.finished && balance > 0),
+    ...memberLoans
+      .map((loan) => {
+        const summary = loanPenaltySummary(loan, transactions);
+        return { source: "live" as const, loan, summary, balance: summary.totalOwedNow };
+      })
+      .filter(
+        ({ loan, balance }) =>
+          balance > 0 && (loan.status === "active" || loan.status === "defaulted"),
+      ),
+  ];
 
   function startLiveLoanEdit(loan: Loan) {
     setEditing({ source: "live", id: loan.id });
@@ -971,6 +988,7 @@ export function MemberLoanHistory({
             productChargeAmount: editDraft.productChargeAmount,
             manualPenaltyAmount: editDraft.manualPenaltyAmount,
             penaltyWaivedAmount: editDraft.penaltyWaivedAmount,
+            dailySavingsAmount: editDraft.dailySavingsAmount,
           },
         });
         await reloadAppData();
@@ -1046,6 +1064,43 @@ export function MemberLoanHistory({
           <Stat label="Total Loans" v={String(totalLoanHistoryCount)} />
           <Stat label="Round-Off Pool" v={fmtKES(pool)} />
         </div>
+
+        {complianceAlerts.length > 0 && (
+          <div className="border border-amber-300/50 bg-amber-50 text-amber-950 rounded-md p-3 text-sm">
+            <div className="font-semibold mb-2">Active compliance alerts</div>
+            <div className="space-y-2">
+              {complianceAlerts.map(({ source, loan, summary, balance }) => {
+                const dailyCompliance = summary.dailySavingsAmount;
+                const totalCompliance = dailyCompliance * summary.termDays;
+                return (
+                  <div
+                    key={`${source}-${loan.id}`}
+                    className="grid gap-2 rounded-md border border-amber-200 bg-white/60 p-2 sm:grid-cols-4"
+                  >
+                    <div>
+                      <div className="text-[10px] uppercase text-amber-800">Loan</div>
+                      <div className="font-medium">{loan.id}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-amber-800">Collections start</div>
+                      <div className="font-medium">{loan.startDate}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-amber-800">Compliance</div>
+                      <div className="font-medium">
+                        {fmtKES(dailyCompliance)} / day · {fmtKES(totalCompliance)} total
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-amber-800">Balance</div>
+                      <div className="font-medium">{fmtKES(balance)}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {outstandingPen.length > 0 && (
           <div className="border border-destructive/30 bg-destructive/5 rounded-md p-3 text-sm">
@@ -1151,6 +1206,7 @@ export function MemberLoanHistory({
                       ],
                       ["Penalty waived", fmtKES(l.penaltyWaivedAmount)],
                       ["Daily compliance", fmtKES(l.dailySavingsAmount)],
+                      ["Total compliance", fmtKES(l.dailySavingsAmount * summary.termDays)],
                       ["Amount collected", fmtKES(carryoverPaid)],
                       ["Defaulted balance", fmtKES(summary.defaultedAmount)],
                     ]}
@@ -1229,7 +1285,8 @@ export function MemberLoanHistory({
                       ],
                       ["Manual penalties", fmtKES(loanManualPenaltyAmount(l))],
                       ["Penalty waived", fmtKES(l.penaltyWaivedAmount ?? 0)],
-                      ["Daily compliance", fmtKES(loanDailySavingsAmount(summary.approved))],
+                      ["Daily compliance", fmtKES(summary.dailySavingsAmount)],
+                      ["Total compliance", fmtKES(summary.dailySavingsAmount * summary.termDays)],
                       ["Amount collected", fmtKES(livePaid)],
                       ["Defaulted balance", fmtKES(summary.defaultedAmount)],
                     ]}
