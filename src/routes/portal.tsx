@@ -10,6 +10,7 @@ import {
   businessPermanenceLabel,
   fmtKES,
   joinName,
+  loanPenaltySummary,
   loanSummary,
   memberIsServiceOnly,
   memberNeedsSticker,
@@ -1500,8 +1501,9 @@ function Portal() {
                   {myLoans.map((l) => {
                     const displayedPaid = displayLoanPaid(l);
                     const displayLoan = { ...l, paid: displayedPaid };
-                    const summary = loanSummary(displayLoan);
-                    const balance = summary.balance;
+                    const summary = loanPenaltySummary(displayLoan, myUniqueTx);
+                    const balance = summary.totalOwedNow;
+                    const totalPayable = summary.totalExpectedCollected + summary.totalPenalty;
                     const end = new Date(summary.dueDate);
                     const start = new Date(`${l.startDate}T00:00:00`);
                     const today = new Date();
@@ -1558,7 +1560,7 @@ function Portal() {
                           </Badge>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
-                          <Stat label="Total payable" value={fmtKES(summary.total)} />
+                          <Stat label="Total payable" value={fmtKES(totalPayable)} />
                           <Stat label="Paid so far" value={fmtKES(displayedPaid)} />
                           <Stat
                             label="Outstanding"
@@ -1590,6 +1592,7 @@ function Portal() {
                             />
                             <Stat label="Total compliance" value={fmtKES(totalCompliance)} />
                             <Stat label="Compliance paid" value={fmtKES(compliancePaid)} />
+                            <Stat label="Penalty so far" value={fmtKES(summary.totalPenalty)} />
                           </div>
                         ) : null}
                         <div className="text-[11px] text-muted-foreground">

@@ -110,7 +110,7 @@ function normalizePayments(
   const safeTermDays = Math.max(1, Math.floor(Number(termDays) || 1));
   const safeDailyInstallment = Math.max(0, Number(dailyInstallment) || 0);
   for (let day = 1; day <= safeTermDays && remainingFallback > 0; day += 1) {
-    const date = addIsoDays(startDate, day);
+    const date = addIsoDays(startDate, day - 1);
     const scheduled = safeDailyInstallment > 0 ? safeDailyInstallment : remainingFallback;
     const amount = Math.min(remainingFallback, scheduled);
     byDate.set(date, roundMoney((byDate.get(date) ?? 0) + amount));
@@ -161,7 +161,7 @@ export function buildLoanDailyLedger(args: {
     dailyInstallment,
     money(args.fallbackPaid),
   );
-  const elapsedDays = Math.max(0, diffIsoDays(startDate, asOfDate));
+  const elapsedDays = asOfDate >= startDate ? Math.max(0, diffIsoDays(startDate, asOfDate) + 1) : 0;
   const rows: LoanDailyLedgerRow[] = [];
   let carryForward = 0;
   let cumulativePaid = 0;
@@ -177,7 +177,7 @@ export function buildLoanDailyLedger(args: {
   let currentDefaultedAmount = 0;
 
   for (let dayNumber = 1; dayNumber <= elapsedDays; dayNumber += 1) {
-    const date = addIsoDays(startDate, dayNumber);
+    const date = addIsoDays(startDate, dayNumber - 1);
     const isDefaultPhase = date >= defaultFromDate;
     const scheduledInstallment = dayNumber <= termDays ? dailyInstallment : 0;
     scheduledCollectedToDate = roundMoney(scheduledCollectedToDate + scheduledInstallment);
@@ -197,7 +197,7 @@ export function buildLoanDailyLedger(args: {
       isDefaultPhase && defaultedAmountCap > 0
         ? Math.max(0, roundMoney(defaultedAmountCap - totalDueBeforePenalty))
         : Number.POSITIVE_INFINITY;
-    const penaltyBase = isDefaultPhase ? unpaidToday : scheduledUnpaidToday;
+    const penaltyBase = unpaidToday;
     let penalty =
       penaltyBase > 0 && penaltyRatePct > 0 && capRemaining > 0
         ? penaltyCeil(penaltyBase * (penaltyRatePct / 100))

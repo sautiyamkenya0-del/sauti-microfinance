@@ -126,6 +126,14 @@ function collectionStartDateForDisbursement(date: string) {
   return addDaysIso(date, 1);
 }
 
+function laterIsoDate(...values: Array<string | null | undefined>) {
+  return values
+    .map((value) => String(value ?? "").slice(0, 10))
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort()
+    .at(-1);
+}
+
 function dailyComplianceAmountForLoan(amount: number, stored?: unknown) {
   const explicit = toNumber(stored as number | string | null | undefined);
   if (explicit > 0) return explicit;
@@ -3910,6 +3918,47 @@ function mapLoanRow(row: any) {
   };
 }
 
+async function repairLoanStartDatesFromAppraisals(
+  runtimeDb: any,
+  loanRows: any[],
+  appraisalRows: any[],
+) {
+  const latestAppraisalByLoan = new Map<string, string>();
+  for (const appraisal of appraisalRows) {
+    const loanId = String(appraisal.loan_id ?? "").trim();
+    const date = String(appraisal.date ?? "").slice(0, 10);
+    if (!loanId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const current = latestAppraisalByLoan.get(loanId);
+    if (!current || date > current) latestAppraisalByLoan.set(loanId, date);
+  }
+
+  await Promise.all(
+    loanRows.map(async (loan) => {
+      const loanId = String(loan.id ?? "").trim();
+      const status = String(loan.status ?? "");
+      if (!loanId || status === "pending" || status === "rejected") return;
+
+      const appraisalDate = latestAppraisalByLoan.get(loanId);
+      const disbursementCompletedAt = String(loan.disbursement_completed_at ?? "").slice(0, 10);
+      const expectedStart = laterIsoDate(
+        loan.start_date,
+        appraisalDate ? collectionStartDateForDisbursement(appraisalDate) : undefined,
+        disbursementCompletedAt
+          ? collectionStartDateForDisbursement(disbursementCompletedAt)
+          : undefined,
+      );
+      if (!expectedStart || expectedStart === String(loan.start_date ?? "").slice(0, 10)) return;
+
+      const { error } = await runtimeDb
+        .from("loans")
+        .update({ start_date: expectedStart })
+        .eq("id", loanId);
+      if (error) throw new Error(error.message);
+      loan.start_date = expectedStart;
+    }),
+  );
+}
+
 function mapTransactionRow(row: any) {
   return {
     id: row.id,
@@ -4740,48 +4789,55 @@ async function buildAppData(version?: string) {
   const dataVersion = version ?? (await getAppDataVersion(supabaseAdmin));
 
   if (session.authMode === "member" && session.memberId) {
+    const portalMemberId = session.memberId;
     const [
       memberResult,
       staffResult,
       investorRows,
       loansResult,
+      appraisalsResult,
       transactionRows,
       penaltiesResult,
       roundOffResult,
       feePoliciesResult,
       policySettingsResult,
     ] = await Promise.all([
-      supabaseAdmin.from("members").select("*").eq("id", session.memberId).maybeSingle(),
+      supabaseAdmin.from("members").select("*").eq("id", portalMemberId).maybeSingle(),
       supabaseAdmin.from("staff").select("id, name, role").order("id"),
       fetchAllRows(() =>
         supabaseAdmin
           .from("investors")
           .select("*")
-          .eq("member_id", session.memberId)
+          .eq("member_id", portalMemberId)
           .order("joined_at", { ascending: false }),
       ),
       supabaseAdmin
         .from("loans")
         .select("*")
-        .eq("member_id", session.memberId)
+        .eq("member_id", portalMemberId)
         .order("start_date", { ascending: false }),
+      supabaseAdmin
+        .from("appraisals")
+        .select("*")
+        .eq("member_id", portalMemberId)
+        .order("date", { ascending: false }),
       fetchAllRows(() =>
         supabaseAdmin
           .from("transactions")
           .select("*")
-          .eq("member_id", session.memberId)
+          .eq("member_id", portalMemberId)
           .order("date", { ascending: false })
           .order("created_at", { ascending: false }),
       ),
       supabaseAdmin
         .from("penalties")
         .select("*")
-        .eq("member_id", session.memberId)
+        .eq("member_id", portalMemberId)
         .order("date", { ascending: false }),
       supabaseAdmin
         .from("round_off")
         .select("*")
-        .eq("member_id", session.memberId)
+        .eq("member_id", portalMemberId)
         .order("date", { ascending: false }),
       supabaseAdmin.from("fee_policies").select("*").order("updated_at", { ascending: false }),
       supabaseAdmin.from("policy_settings").select("*"),
@@ -4791,6 +4847,7 @@ async function buildAppData(version?: string) {
       memberResult,
       staffResult,
       loansResult,
+      appraisalsResult,
       penaltiesResult,
       roundOffResult,
       feePoliciesResult,
@@ -4799,6 +4856,9 @@ async function buildAppData(version?: string) {
     const failedMemberResult = memberResults.find((result) => result.error);
     if (failedMemberResult?.error) throw new Error(failedMemberResult.error.message);
     if (!memberResult.data) return base;
+    const loanRows = loansResult.data ?? [];
+    const appraisalRows = appraisalsResult.data ?? [];
+    await repairLoanStartDatesFromAppraisals(supabaseAdmin, loanRows, appraisalRows);
 
     return {
       ...base,
@@ -4809,9 +4869,10 @@ async function buildAppData(version?: string) {
       staff: (staffResult.data ?? []).map(mapStaffRow),
       members: [mapMemberRow(memberResult.data)],
       investors: investorRows.map(mapInvestorRow),
-      loans: (loansResult.data ?? []).map(mapLoanRow),
+      loans: loanRows.map(mapLoanRow),
       transactions: transactionRows.map(mapTransactionRow),
       penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
+      appraisals: appraisalRows.map(mapAppraisalRow),
       roundOff: (roundOffResult.data ?? []).map(mapRoundOffRow),
       feePolicies: normalizeFeePolicies((feePoliciesResult.data ?? []).map(mapFeePolicyRow)),
       policySettings: mergePolicySettings(
@@ -4893,6 +4954,9 @@ async function buildAppData(version?: string) {
   const memberRows = (membersResult.data ?? []).filter(
     (row) => resolveMemberCategory(row.member_category, row.is_investor) !== "supplier",
   );
+  const loanRows = loansResult.data ?? [];
+  const appraisalRows = appraisalsResult.data ?? [];
+  await repairLoanStartDatesFromAppraisals(supabaseAdmin, loanRows, appraisalRows);
 
   return {
     ...base,
@@ -4902,12 +4966,12 @@ async function buildAppData(version?: string) {
     currentUser: staffRows.find((row) => row.id === actor.id),
     staff: staffRows,
     members: memberRows.map(mapMemberRow),
-    loans: (loansResult.data ?? []).map(mapLoanRow),
+    loans: loanRows.map(mapLoanRow),
     transactions: transactionRows.map(mapTransactionRow),
     pettyCash: (pettyCashResult.data ?? []).map(mapPettyCashRow),
     investors: (investorsResult.data ?? []).map(mapInvestorRow),
     attendance: (attendanceResult.data ?? []).map(mapAttendanceRow),
-    appraisals: (appraisalsResult.data ?? []).map(mapAppraisalRow),
+    appraisals: appraisalRows.map(mapAppraisalRow),
     fieldVisits: (fieldVisitsResult.data ?? []).map(mapFieldVisitRow),
     followups: (followupsResult.data ?? []).map(mapFollowupRow),
     penalties: (penaltiesResult.data ?? []).map(mapPenaltyRow),
@@ -7935,10 +7999,7 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
         rate: pricing.ratePct,
         status: "active",
-        start_date:
-          data.disbursementMode === "cash"
-            ? collectionStartDateForDisbursement(now.slice(0, 10))
-            : loan.start_date,
+        start_date: collectionStartDateForDisbursement(now.slice(0, 10)),
         disbursement_status:
           data.disbursementMode === "mpesa"
             ? "requested"
