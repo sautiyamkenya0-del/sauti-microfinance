@@ -29,9 +29,7 @@ function dedupeLoanRepayments(rows: Transaction[]) {
   return rows.filter((row) => {
     if (row.type !== "loan_repayment") return true;
     const ref = receiptKey(row.ref);
-    const key = ref
-      ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}`
-      : `id|${row.id}`;
+    const key = ref ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}` : `id|${row.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -164,7 +162,15 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     });
-    return list.sort((a, b) => b.daysPastDue + b.daysMissed - (a.daysPastDue + a.daysMissed));
+    return list.sort((a, b) => {
+      const byStartDate = String(b.loan.startDate ?? "").localeCompare(
+        String(a.loan.startDate ?? ""),
+      );
+      if (byStartDate !== 0) return byStartDate;
+      const byDueDate = String(b.dueDate ?? "").localeCompare(String(a.dueDate ?? ""));
+      if (byDueDate !== 0) return byDueDate;
+      return String(b.loan.id ?? "").localeCompare(String(a.loan.id ?? ""));
+    });
   }, [carryoverLoans, loans, members, policySettings, query, transactions]);
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);

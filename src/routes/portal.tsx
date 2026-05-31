@@ -111,15 +111,20 @@ function receiptKey(value: unknown) {
     .toUpperCase();
 }
 
-function dedupeMemberTransactions<T extends { id: string; type: string; amount: number; ref?: string; loanId?: string; date: string }>(
-  rows: T[],
-) {
+function dedupeMemberTransactions<
+  T extends {
+    id: string;
+    type: string;
+    amount: number;
+    ref?: string;
+    loanId?: string;
+    date: string;
+  },
+>(rows: T[]) {
   const seen = new Set<string>();
   return rows.filter((row) => {
     const ref = receiptKey(row.ref);
-    const key = ref
-      ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}`
-      : `id|${row.id}`;
+    const key = ref ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}` : `id|${row.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -244,6 +249,7 @@ function Portal() {
   const [clientNotices, setClientNotices] = useState<ClientNotice[]>([]);
   const [carryoverLoans, setCarryoverLoans] = useState<LegacyCarryoverLoan[]>([]);
   const [clientReadIds, setClientReadIds] = useState<Set<string>>(new Set());
+  const [clientAlertsOpen, setClientAlertsOpen] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification === "undefined" ? "denied" : Notification.permission,
   );
@@ -355,11 +361,19 @@ function Portal() {
   });
   const scopedMpesaReceiptRows = useMemo(
     () =>
-      (mpesaReceiptRows as any[]).filter((row) => {
-        if (!memberId) return false;
-        if (String(row.memberId ?? "") === memberId) return true;
-        return membershipIdCandidates(String(row.account ?? "")).includes(memberId);
-      }),
+      (mpesaReceiptRows as any[])
+        .filter((row) => {
+          if (!memberId) return false;
+          if (String(row.memberId ?? "") === memberId) return true;
+          return membershipIdCandidates(String(row.account ?? "")).includes(memberId);
+        })
+        .sort((left, right) =>
+          String(
+            right.exactReceivedAt ?? right.createdAt ?? right.date ?? right.id ?? "",
+          ).localeCompare(
+            String(left.exactReceivedAt ?? left.createdAt ?? left.date ?? left.id ?? ""),
+          ),
+        ),
     [memberId, mpesaReceiptRows],
   );
   const clientLetters = useMemo(
@@ -465,8 +479,9 @@ function Portal() {
       });
 
     scopedMpesaReceiptRows
-      .filter((receipt: any) =>
-        String(receipt.exactReceivedAt ?? receipt.createdAt ?? "").slice(0, 10) === today,
+      .filter(
+        (receipt: any) =>
+          String(receipt.exactReceivedAt ?? receipt.createdAt ?? "").slice(0, 10) === today,
       )
       .slice(0, 5)
       .forEach((receipt: any) => {
@@ -480,15 +495,7 @@ function Portal() {
       });
 
     return out;
-  }, [
-    clientNotices,
-    displayLoanPaid,
-    member,
-    myLoans,
-    myPen,
-    myUniqueTx,
-    scopedMpesaReceiptRows,
-  ]);
+  }, [clientNotices, displayLoanPaid, member, myLoans, myPen, myUniqueTx, scopedMpesaReceiptRows]);
 
   async function downloadClientLetter(notice: ClientNotice) {
     if (notice.documentKind !== "letter") return;
@@ -621,17 +628,17 @@ function Portal() {
           subtitle="Staff view-as: audit a member's profile, loans, fees and support thread."
         />
       ) : (
-        <header className="border-b border-[#2f5f49] bg-[#18382d] px-4 pb-4 pt-0 text-white shadow-sm sm:px-6">
+        <header className="border-b border-sidebar-border bg-sidebar px-4 pb-4 pt-0 text-sidebar-foreground shadow-sm sm:px-6">
           <div className="safe-area-spacer md:hidden" />
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 pt-3 sm:pt-5">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-white/60">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-sidebar-foreground/60">
                 Sauti Microfinance
               </div>
-              <h1 className="mt-1 font-display text-2xl font-semibold text-white">
+              <h1 className="mt-1 font-display text-2xl font-semibold text-sidebar-foreground">
                 Member Portal
               </h1>
-              <p className="mt-1 text-sm text-white/75">
+              <p className="mt-1 text-sm text-sidebar-foreground/75">
                 Track your daily compliance contribution, loans, fees, and support in one secure
                 place.
               </p>
@@ -640,7 +647,7 @@ function Portal() {
               <button
                 type="button"
                 onClick={() => setPortalNavOpen(true)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white hover:bg-white/15"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent/80"
                 aria-label="Open member menu"
               >
                 <Menu className="h-5 w-5" />
@@ -648,29 +655,96 @@ function Portal() {
               {notificationPermission === "default" ? (
                 <button
                   onClick={() => void enablePhoneAlerts()}
-                  className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
+                  className="inline-flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent px-3 py-2 text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/80"
                 >
                   <Bell className="h-4 w-4" /> Enable alerts
                 </button>
               ) : null}
-              <button
-                onClick={() => {
-                  setTab("overview");
-                  markClientAlertsRead(unreadClientAlerts.map((alert) => alert.id));
-                }}
-                className="relative inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
-              >
-                <Bell className="h-4 w-4" />
-                Alerts
-                {unreadClientAlerts.length > 0 ? (
-                  <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
-                    {unreadClientAlerts.length}
-                  </span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setClientAlertsOpen((open) => !open)}
+                  className="relative inline-flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent px-3 py-2 text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/80"
+                  aria-expanded={clientAlertsOpen}
+                  aria-haspopup="dialog"
+                >
+                  <Bell className="h-4 w-4" />
+                  Alerts
+                  {unreadClientAlerts.length > 0 ? (
+                    <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+                      {unreadClientAlerts.length}
+                    </span>
+                  ) : null}
+                </button>
+                {clientAlertsOpen ? (
+                  <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-xl">
+                    <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                      <div>
+                        <div className="text-sm font-semibold">Alerts</div>
+                        <div className="text-xs text-muted-foreground">
+                          {unreadClientAlerts.length} unread
+                        </div>
+                      </div>
+                      {clientAlerts.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            markClientAlertsRead(clientAlerts.map((alert) => alert.id))
+                          }
+                          className="rounded-md border border-border px-2.5 py-1 text-xs hover:bg-muted"
+                        >
+                          Mark all read
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="max-h-80 overflow-y-auto p-2">
+                      {clientAlerts.length === 0 ? (
+                        <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                          No client notifications right now.
+                        </div>
+                      ) : null}
+                      {clientAlerts.map((alert) => (
+                        <button
+                          key={alert.id}
+                          type="button"
+                          onClick={() => {
+                            if (alert.tab) setTab(alert.tab);
+                            markClientAlertsRead(alert.id);
+                            setClientAlertsOpen(false);
+                          }}
+                          className={`flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left text-sm hover:bg-muted ${
+                            clientReadIds.has(alert.id)
+                              ? "border-border bg-background"
+                              : "border-primary/40 bg-primary/5"
+                          }`}
+                        >
+                          <span
+                            className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                              alert.kind === "alert"
+                                ? "bg-destructive"
+                                : alert.kind === "warning"
+                                  ? "bg-accent"
+                                  : "bg-primary"
+                            }`}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{alert.title}</span>
+                              <Badge tone={alertTone(alert.kind)}>{alert.kind}</Badge>
+                            </span>
+                            <span className="mt-0.5 block text-xs text-muted-foreground">
+                              {alert.detail}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
-              </button>
+              </div>
               <button
                 onClick={() => void logout()}
-                className="rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/15"
+                className="rounded-md border border-sidebar-border bg-sidebar-accent px-4 py-2 text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/80"
               >
                 Sign out
               </button>
@@ -883,8 +957,8 @@ function Portal() {
                     </div>
                   </Section>
                 )}
-                {!isStaffView && (
-                  priorityLoanPaymentNotice ? (
+                {!isStaffView &&
+                  (priorityLoanPaymentNotice ? (
                     <LoanPaymentCallout
                       loanId={priorityLoanPaymentNotice.loan.id}
                       amount={priorityLoanPaymentNotice.amount}
@@ -902,8 +976,7 @@ function Portal() {
                         })
                       }
                     />
-                  ) : null
-                )}
+                  ) : null)}
                 {!isStaffView && (
                   <Section title="Make a payment">
                     <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -1583,8 +1656,7 @@ function Portal() {
                       Math.min(
                         summary.termDays,
                         Math.floor(
-                          (new Date(today.toISOString().slice(0, 10)).getTime() -
-                            start.getTime()) /
+                          (new Date(today.toISOString().slice(0, 10)).getTime() - start.getTime()) /
                             86_400_000,
                         ) + 1,
                       ),
@@ -1837,7 +1909,10 @@ function Portal() {
                       </div>
                     )}
                     {scopedMpesaReceiptRows.map((t: any) => (
-                      <div key={t.id} className="rounded-md border border-border bg-card p-3 text-sm">
+                      <div
+                        key={t.id}
+                        className="rounded-md border border-border bg-card p-3 text-sm"
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="font-mono text-xs font-semibold">
@@ -1863,41 +1938,41 @@ function Portal() {
                     ))}
                   </div>
                   <div className="hidden overflow-x-auto md:block">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
-                      <tr>
-                        <th className="px-5 py-2.5 text-left">Date / Time</th>
-                        <th className="text-left">Receipt</th>
-                        <th className="text-left">Receipt detail</th>
-                        <th className="text-left">Account</th>
-                        <th className="text-right pr-5">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {scopedMpesaReceiptRows.length === 0 && (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                         <tr>
-                          <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
-                            No original M-Pesa receipts found for this member yet.
-                          </td>
+                          <th className="px-5 py-2.5 text-left">Date / Time</th>
+                          <th className="text-left">Receipt</th>
+                          <th className="text-left">Receipt detail</th>
+                          <th className="text-left">Account</th>
+                          <th className="text-right pr-5">Amount</th>
                         </tr>
-                      )}
-                      {scopedMpesaReceiptRows.map((t: any) => (
-                        <tr key={t.id}>
-                          <td className="px-5 py-2">
-                            {t.exactReceivedAt || t.createdAt
-                              ? new Date(t.exactReceivedAt ?? t.createdAt).toLocaleString()
-                              : "-"}
-                          </td>
-                          <td className="font-mono text-xs">{t.mpesaRef ?? t.id}</td>
-                          <td className="text-muted-foreground">{t.note ?? t.ref ?? "—"}</td>
-                          <td className="font-mono text-xs">{t.account ?? memberId}</td>
-                          <td className="text-right pr-5">
-                            {fmtKES(Number(t.originalAmount ?? t.amount ?? 0))}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {scopedMpesaReceiptRows.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="px-5 py-8 text-center text-muted-foreground">
+                              No original M-Pesa receipts found for this member yet.
+                            </td>
+                          </tr>
+                        )}
+                        {scopedMpesaReceiptRows.map((t: any) => (
+                          <tr key={t.id}>
+                            <td className="px-5 py-2">
+                              {t.exactReceivedAt || t.createdAt
+                                ? new Date(t.exactReceivedAt ?? t.createdAt).toLocaleString()
+                                : "-"}
+                            </td>
+                            <td className="font-mono text-xs">{t.mpesaRef ?? t.id}</td>
+                            <td className="text-muted-foreground">{t.note ?? t.ref ?? "—"}</td>
+                            <td className="font-mono text-xs">{t.account ?? memberId}</td>
+                            <td className="text-right pr-5">
+                              {fmtKES(Number(t.originalAmount ?? t.amount ?? 0))}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </Section>
