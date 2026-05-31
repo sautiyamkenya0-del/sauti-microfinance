@@ -209,6 +209,7 @@ function Portal() {
   const myUniqueTx = useMemo(() => dedupeMemberTransactions(myTx), [myTx]);
   const myPen = penalties.filter((p) => p.memberId === memberId);
   const canRequestLoans = member ? !memberIsServiceOnly(member) : false;
+  const serviceOnly = member ? memberIsServiceOnly(member) : false;
   const fees = feePolicies.filter(isFeeActive);
   const visibleFees = member
     ? fees.filter(
@@ -1180,10 +1181,12 @@ function Portal() {
                     </div>
                   </Section>
                 )}
-                {serviceWorkspace.serviceWalletBalance > 0 ||
-                serviceWorkspace.subscriptions.length > 0 ? (
-                  <Section title="Service wallet">
-                    <div className="grid gap-3 p-5 sm:grid-cols-3">
+                {serviceOnly ||
+                serviceWorkspace.serviceWalletBalance > 0 ||
+                serviceWorkspace.subscriptions.length > 0 ||
+                serviceWorkspace.requests.length > 0 ? (
+                  <Section title={serviceOnly ? "My Service Workspace" : "Service wallet"}>
+                    <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
                       <StatCard
                         label="Service wallet"
                         value={fmtKES(serviceWorkspace.serviceWalletBalance)}
@@ -1200,7 +1203,46 @@ function Portal() {
                         value={`${serviceWorkspace.requests.length}`}
                         icon={<MessageSquare className="h-5 w-5" />}
                       />
+                      <StatCard
+                        label="Available services"
+                        value={`${serviceWorkspace.services.length}`}
+                        icon={<PackageCheck className="h-5 w-5" />}
+                      />
                     </div>
+                    {serviceOnly ? (
+                      <div className="grid gap-3 px-5 pb-5 md:grid-cols-3">
+                        <button
+                          type="button"
+                          onClick={() => openPayment({ purpose: "fees" })}
+                          className="rounded-md border border-border bg-muted/20 p-4 text-left text-sm hover:bg-muted"
+                        >
+                          <div className="font-semibold">Top up service wallet</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Pay via M-Pesa using your member reference.
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTab("support")}
+                          className="rounded-md border border-border bg-muted/20 p-4 text-left text-sm hover:bg-muted"
+                        >
+                          <div className="font-semibold">Service support</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Ask for help, statements, or service changes.
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTab("transactions")}
+                          className="rounded-md border border-border bg-muted/20 p-4 text-left text-sm hover:bg-muted"
+                        >
+                          <div className="font-semibold">Payment history</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Review wallet deposits and service charges.
+                          </div>
+                        </button>
+                      </div>
+                    ) : null}
                     {serviceWorkspace.subscriptions.length > 0 ? (
                       <div className="grid gap-2 px-5 pb-5 sm:grid-cols-2">
                         {serviceWorkspace.subscriptions.map((subscription: any) => {
@@ -1229,6 +1271,49 @@ function Portal() {
                             </div>
                           );
                         })}
+                      </div>
+                    ) : null}
+                    {serviceOnly && serviceWorkspace.subscriptions.length === 0 ? (
+                      <div className="px-5 pb-5 text-sm text-muted-foreground">
+                        No active service subscription has been attached yet.
+                      </div>
+                    ) : null}
+                    {serviceOnly && serviceWorkspace.requests.length > 0 ? (
+                      <div className="space-y-2 px-5 pb-5">
+                        {serviceWorkspace.requests.slice(0, 5).map((request: any) => (
+                          <div
+                            key={request.id}
+                            className="rounded-md border border-border bg-muted/20 p-3 text-sm"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <div className="font-medium">
+                                  {request.kind ?? request.request_type ?? "Service request"}
+                                </div>
+                                <div className="mt-0.5 text-xs text-muted-foreground">
+                                  {String(request.created_at ?? request.createdAt ?? "").slice(
+                                    0,
+                                    10,
+                                  )}
+                                </div>
+                              </div>
+                              <Badge
+                                tone={
+                                  String(request.status ?? "").toLowerCase().includes("complete")
+                                    ? "success"
+                                    : "warning"
+                                }
+                              >
+                                {request.status ?? "pending"}
+                              </Badge>
+                            </div>
+                            {request.note || request.description ? (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                {request.note ?? request.description}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
                       </div>
                     ) : null}
                   </Section>

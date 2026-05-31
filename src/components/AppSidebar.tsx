@@ -51,8 +51,8 @@ const ENTRIES: Entry[] = [
   { id: "stock", to: "/stock", label: "Stock", icon: Package, requires: ["stock"] },
   {
     id: "locomotive",
-    to: "/locomotive",
-    label: "Locomotive Admin",
+    to: "/locomotive-admin-portal",
+    label: "Locomotive Portal",
     icon: ReceiptText,
     requires: ["locomotive_dashboard", "locomotive_members", "locomotive_ledger"],
   },

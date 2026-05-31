@@ -31,6 +31,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LocomotiveSupportRouteImport } from './routes/locomotive-support'
 import { Route as LocomotiveMembersRouteImport } from './routes/locomotive-members'
 import { Route as LocomotiveBalancesRouteImport } from './routes/locomotive-balances'
+import { Route as LocomotiveAdminPortalRouteImport } from './routes/locomotive-admin-portal'
 import { Route as LocomotiveRouteImport } from './routes/locomotive'
 import { Route as LoansRouteImport } from './routes/loans'
 import { Route as InvestorsRouteImport } from './routes/investors'
@@ -165,6 +166,11 @@ const LocomotiveBalancesRoute = LocomotiveBalancesRouteImport.update({
   path: '/locomotive-balances',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LocomotiveAdminPortalRoute = LocomotiveAdminPortalRouteImport.update({
+  id: '/locomotive-admin-portal',
+  path: '/locomotive-admin-portal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LocomotiveRoute = LocomotiveRouteImport.update({
   id: '/locomotive',
   path: '/locomotive',
@@ -296,6 +302,7 @@ export interface FileRoutesByFullPath {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-admin-portal': typeof LocomotiveAdminPortalRoute
   '/locomotive-balances': typeof LocomotiveBalancesRoute
   '/locomotive-members': typeof LocomotiveMembersRoute
   '/locomotive-support': typeof LocomotiveSupportRoute
@@ -343,6 +350,7 @@ export interface FileRoutesByTo {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-admin-portal': typeof LocomotiveAdminPortalRoute
   '/locomotive-balances': typeof LocomotiveBalancesRoute
   '/locomotive-members': typeof LocomotiveMembersRoute
   '/locomotive-support': typeof LocomotiveSupportRoute
@@ -391,6 +399,7 @@ export interface FileRoutesById {
   '/investors': typeof InvestorsRoute
   '/loans': typeof LoansRoute
   '/locomotive': typeof LocomotiveRoute
+  '/locomotive-admin-portal': typeof LocomotiveAdminPortalRoute
   '/locomotive-balances': typeof LocomotiveBalancesRoute
   '/locomotive-members': typeof LocomotiveMembersRoute
   '/locomotive-support': typeof LocomotiveSupportRoute
@@ -440,6 +449,7 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-admin-portal'
     | '/locomotive-balances'
     | '/locomotive-members'
     | '/locomotive-support'
@@ -487,6 +497,7 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-admin-portal'
     | '/locomotive-balances'
     | '/locomotive-members'
     | '/locomotive-support'
@@ -534,6 +545,7 @@ export interface FileRouteTypes {
     | '/investors'
     | '/loans'
     | '/locomotive'
+    | '/locomotive-admin-portal'
     | '/locomotive-balances'
     | '/locomotive-members'
     | '/locomotive-support'
@@ -582,6 +594,7 @@ export interface RootRouteChildren {
   InvestorsRoute: typeof InvestorsRoute
   LoansRoute: typeof LoansRoute
   LocomotiveRoute: typeof LocomotiveRoute
+  LocomotiveAdminPortalRoute: typeof LocomotiveAdminPortalRoute
   LocomotiveBalancesRoute: typeof LocomotiveBalancesRoute
   LocomotiveMembersRoute: typeof LocomotiveMembersRoute
   LocomotiveSupportRoute: typeof LocomotiveSupportRoute
@@ -777,6 +790,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LocomotiveBalancesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/locomotive-admin-portal': {
+      id: '/locomotive-admin-portal'
+      path: '/locomotive-admin-portal'
+      fullPath: '/locomotive-admin-portal'
+      preLoaderRoute: typeof LocomotiveAdminPortalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/locomotive': {
       id: '/locomotive'
       path: '/locomotive'
@@ -950,6 +970,7 @@ const rootRouteChildren: RootRouteChildren = {
   InvestorsRoute: InvestorsRoute,
   LoansRoute: LoansRoute,
   LocomotiveRoute: LocomotiveRoute,
+  LocomotiveAdminPortalRoute: LocomotiveAdminPortalRoute,
   LocomotiveBalancesRoute: LocomotiveBalancesRoute,
   LocomotiveMembersRoute: LocomotiveMembersRoute,
   LocomotiveSupportRoute: LocomotiveSupportRoute,

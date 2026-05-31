@@ -7,6 +7,9 @@ import { listLocomotiveBusinessWorkspace } from "@/lib/runtime-data.functions";
 export type LocomotiveWorkspace = {
   actorMemberId: string;
   actorMember: any | null;
+  selectedAdminStaffId?: string;
+  selectedAdmin?: any | null;
+  locomotiveAdmins: any[];
   members: any[];
   allocations: any[];
   services: any[];
@@ -21,6 +24,9 @@ export type LocomotiveWorkspace = {
 const emptyWorkspace: LocomotiveWorkspace = {
   actorMemberId: "",
   actorMember: null,
+  selectedAdminStaffId: "",
+  selectedAdmin: null,
+  locomotiveAdmins: [],
   members: [],
   allocations: [],
   services: [],
@@ -32,17 +38,21 @@ const emptyWorkspace: LocomotiveWorkspace = {
   availableBalance: 0,
 };
 
-export function useLocomotiveWorkspace() {
+export function useLocomotiveWorkspace(options?: { adminStaffId?: string }) {
   const loadWorkspace = useServerFn(listLocomotiveBusinessWorkspace);
   const [workspace, setWorkspace] = useState<LocomotiveWorkspace>(emptyWorkspace);
 
   const refresh = useCallback(async () => {
     try {
-      setWorkspace(await loadWorkspace());
+      setWorkspace(
+        await loadWorkspace({
+          data: options?.adminStaffId ? { adminStaffId: options.adminStaffId } : {},
+        }),
+      );
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to load locomotive workspace.");
     }
-  }, [loadWorkspace]);
+  }, [loadWorkspace, options?.adminStaffId]);
 
   useEffect(() => {
     refresh().catch(() => {});

@@ -2,6 +2,7 @@ import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
   createStaffMemoRecord,
   freezeLoanFollowupRecord,
+  unwaiveLoanFollowupPenaltyRecord,
   waiveLoanFollowupPenaltyRecord,
 } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
@@ -49,6 +50,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
   } = useStore();
   const sendNotice = useServerFn(createStaffMemoRecord);
   const waiveLoanPenalty = useServerFn(waiveLoanFollowupPenaltyRecord);
+  const unwaiveLoanPenalty = useServerFn(unwaiveLoanFollowupPenaltyRecord);
   const freezeLoan = useServerFn(freezeLoanFollowupRecord);
   const [query, setQuery] = useState("");
 
@@ -79,6 +81,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyExpected;
         const penalties = Math.ceil(summary.totalPenalty);
+        const dailyPenalties = Math.ceil(summary.dailyPenalty);
+        const dueDatePenalties = Math.ceil(summary.dueDatePenalty);
+        const waivedPenalties = Math.ceil(summary.penaltyWaivedAmount);
         const dueNow = Math.ceil(summary.defaultedAmount);
         const missedDailyAmount = Math.max(0, dueNow - penalties);
         const outstanding = summary.totalOwedNow;
@@ -100,6 +105,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           outstanding,
           totalDue: dueNow,
           penalties,
+          dailyPenalties,
+          dueDatePenalties,
+          waivedPenalties,
           daysMissed,
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
           dueDate: summary.dueDate,
@@ -121,6 +129,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const dailyInstallment = summary.dailyInclusive;
         const arrears = summary.arrears;
         const defaulted = summary.defaultedAmount || arrears;
+        const dailyPenalties = Math.ceil(summary.calculatedArrearsPenalty);
+        const dueDatePenalties = Math.ceil(summary.overduePenalty);
+        const waivedPenalties = Math.ceil(summary.penaltyWaivedAmount);
         const elapsedScheduledDays = summary.elapsedDays;
         const moneyMissedDays = dailyInstallment > 0 ? Math.ceil(arrears / dailyInstallment) : 0;
         const daysMissed = Math.min(elapsedScheduledDays, moneyMissedDays);
@@ -134,6 +145,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           outstanding: summary.balance,
           totalDue: summary.totalOwedNow,
           penalties: summary.estimatedPenaltyNow,
+          dailyPenalties,
+          dueDatePenalties,
+          waivedPenalties,
           daysMissed,
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
           dueDate: summary.dueDate,
@@ -236,6 +250,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
               outstanding,
               totalDue,
               penalties,
+              dailyPenalties,
+              dueDatePenalties,
+              waivedPenalties,
               daysMissed,
               daysPastDue,
               dueDate,
@@ -272,12 +289,14 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs">
                     <Cell label="Daily Installment" v={fmtKES(dailyInstallment)} />
                     <Cell label="Loan Portion / Day" v={fmtKES(dailyInstallment * 0.7)} />
                     <Cell label="Defaulted" v={fmtKES(defaulted)} tone="destructive" />
                     <Cell label="Outstanding" v={fmtKES(outstanding)} />
                     <Cell label="Penalties" v={fmtKES(penalties)} tone="warning" />
+                    <Cell label="Daily Penalty" v={fmtKES(dailyPenalties)} tone="warning" />
+                    <Cell label="Due Date Penalty" v={fmtKES(dueDatePenalties)} tone="warning" />
                     <Cell label="Total Due" v={fmtKES(totalDue)} tone="primary" />
                   </div>
 
@@ -317,30 +336,83 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                       <>
                         <button
                           onClick={async () => {
-                            const raw = window.prompt(
-                              `Penalty amount to waive for ${loan.id}`,
-                              String(Math.ceil(penalties)),
-                            );
-                            if (raw == null) return;
-                            const amount = Number(raw);
-                            if (!Number.isFinite(amount) || amount <= 0) {
-                              toast.error("Enter a waiver amount above zero.");
-                              return;
-                            }
+                            const amount = dailyPenalties;
+                            if (amount <= 0) return toast.error("No daily penalty to waive.");
                             await waiveLoanPenalty({
                               data: {
                                 loanId: loan.id,
                                 loanKind,
                                 amount,
-                                note: "Director follow-up waiver",
+                                note: "Director follow-up daily penalty waiver",
                               },
                             });
                             await reloadAppData();
-                            toast.success("Penalty waiver saved.");
+                            toast.success("Daily penalty waiver saved.");
                           }}
                           className="inline-flex items-center gap-1 rounded-md border border-warning/50 px-3 py-1.5 text-warning-foreground hover:bg-warning/10"
                         >
-                          Waive Penalty
+                          Waive Daily
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const amount = dueDatePenalties;
+                            if (amount <= 0) return toast.error("No due-date penalty to waive.");
+                            await waiveLoanPenalty({
+                              data: {
+                                loanId: loan.id,
+                                loanKind,
+                                amount,
+                                note: "Director follow-up due-date penalty waiver",
+                              },
+                            });
+                            await reloadAppData();
+                            toast.success("Due-date penalty waiver saved.");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-warning/50 px-3 py-1.5 text-warning-foreground hover:bg-warning/10"
+                        >
+                          Waive Due Date
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (penalties <= 0) return toast.error("No penalties to waive.");
+                            await waiveLoanPenalty({
+                              data: {
+                                loanId: loan.id,
+                                loanKind,
+                                amount: penalties,
+                                note: "Director follow-up full penalty waiver",
+                              },
+                            });
+                            await reloadAppData();
+                            toast.success("All current penalties waived.");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-warning/50 px-3 py-1.5 text-warning-foreground hover:bg-warning/10"
+                        >
+                          Waive All
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (waivedPenalties <= 0) {
+                              toast.error("This loan has no waived penalties to restore.");
+                              return;
+                            }
+                            const confirmed = window.confirm(
+                              `Restore ${fmtKES(waivedPenalties)} waived penalties for loan ${loan.id}? This returns the member's lifetime penalties to the loan balance.`,
+                            );
+                            if (!confirmed) return;
+                            await unwaiveLoanPenalty({
+                              data: {
+                                loanId: loan.id,
+                                loanKind,
+                                note: "Director follow-up unwaiver",
+                              },
+                            });
+                            await reloadAppData();
+                            toast.success("Waived penalties restored.");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-primary/50 px-3 py-1.5 text-primary hover:bg-primary/10"
+                        >
+                          Unwaive {waivedPenalties > 0 ? fmtKES(waivedPenalties) : ""}
                         </button>
                         <button
                           onClick={async () => {

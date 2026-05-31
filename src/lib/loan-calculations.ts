@@ -54,6 +54,7 @@ export type LoanDailyLedgerSummary = {
 };
 
 export const DEFAULT_DEFAULTED_AMOUNT_STOP_CAP = 500_000;
+export const SIMPLE_REDUCING_PENALTY_START_DATE = "2026-05-29";
 
 function dateOnly(value?: string) {
   return String(value ?? "").slice(0, 10);
@@ -139,6 +140,7 @@ export function buildLoanDailyLedger(args: {
   priorPenaltyAmount?: number;
   defaultFromDate?: string;
   defaultedAmountCap?: number;
+  simpleReducingPenaltyFromDate?: string;
 }) {
   const startDate = dateOnly(args.startDate) || new Date().toISOString().slice(0, 10);
   const asOfDate = dateOnly(args.asOfDate) || new Date().toISOString().slice(0, 10);
@@ -154,6 +156,9 @@ export function buildLoanDailyLedger(args: {
   );
   const priorPenaltyAmount = money(args.priorPenaltyAmount);
   const defaultedAmountCap = Math.max(0, Number(args.defaultedAmountCap ?? 0) || 0);
+  const simpleReducingPenaltyFromDate =
+    dateOnly(args.simpleReducingPenaltyFromDate) || SIMPLE_REDUCING_PENALTY_START_DATE;
+  const useSimpleReducingPenalty = startDate >= simpleReducingPenaltyFromDate;
   const paymentsByDate = normalizePayments(
     args.payments,
     startDate,
@@ -164,6 +169,7 @@ export function buildLoanDailyLedger(args: {
   const elapsedDays = asOfDate >= startDate ? Math.max(0, diffIsoDays(startDate, asOfDate) + 1) : 0;
   const rows: LoanDailyLedgerRow[] = [];
   let carryForward = 0;
+  let penaltyBaseCarryForward = 0;
   let cumulativePaid = 0;
   let automaticPenaltyAmount = 0;
   let dailyPenaltyAmount = 0;
@@ -173,7 +179,6 @@ export function buildLoanDailyLedger(args: {
   let defaultPenaltyDays = 0;
   let scheduledCollectedToDate = 0;
   let autoStoppedAt: string | undefined;
-  let displayCarryForward = 0;
   let currentDefaultedAmount = 0;
 
   for (let dayNumber = 1; dayNumber <= elapsedDays; dayNumber += 1) {
@@ -181,13 +186,17 @@ export function buildLoanDailyLedger(args: {
     const isDefaultPhase = date >= defaultFromDate;
     const scheduledInstallment = dayNumber <= termDays ? dailyInstallment : 0;
     scheduledCollectedToDate = roundMoney(scheduledCollectedToDate + scheduledInstallment);
-    const openingCarryForward = displayCarryForward;
-    const expectedToday = Math.max(0, roundMoney(carryForward + scheduledInstallment));
+    const openingCarryForward = carryForward;
+    const penaltyBaseOpening = useSimpleReducingPenalty ? penaltyBaseCarryForward : carryForward;
+    const expectedToday = Math.max(0, roundMoney(penaltyBaseOpening + scheduledInstallment));
     const paidToday = money(paymentsByDate.get(date));
     cumulativePaid = roundMoney(cumulativePaid + paidToday);
-    const dailyBalance = roundMoney(expectedToday - paidToday);
+    const penaltyBaseBalance = roundMoney(expectedToday - paidToday);
+    const dailyBalanceBeforePenalty = useSimpleReducingPenalty
+      ? roundMoney(carryForward + scheduledInstallment - paidToday)
+      : penaltyBaseBalance;
+    const dailyBalance = dailyBalanceBeforePenalty;
     const unpaidToday = Math.max(0, dailyBalance);
-    const scheduledUnpaidToday = Math.max(0, roundMoney(scheduledInstallment - paidToday));
     const totalBalanceBeforePenalty = Math.max(0, roundMoney(totalExpected - cumulativePaid));
     const penaltyRatePct = isDefaultPhase ? defaultPenaltyPct : penaltyPct;
     const totalDueBeforePenalty = roundMoney(
@@ -197,7 +206,7 @@ export function buildLoanDailyLedger(args: {
       isDefaultPhase && defaultedAmountCap > 0
         ? Math.max(0, roundMoney(defaultedAmountCap - totalDueBeforePenalty))
         : Number.POSITIVE_INFINITY;
-    const penaltyBase = unpaidToday;
+    const penaltyBase = Math.max(0, useSimpleReducingPenalty ? penaltyBaseBalance : unpaidToday);
     let penalty =
       penaltyBase > 0 && penaltyRatePct > 0 && capRemaining > 0
         ? penaltyCeil(penaltyBase * (penaltyRatePct / 100))
@@ -218,8 +227,11 @@ export function buildLoanDailyLedger(args: {
       }
     }
     automaticPenaltyAmount = roundMoney(automaticPenaltyAmount + penalty);
-    carryForward = dailyBalance < 0 ? dailyBalance : roundMoney(dailyBalance + penalty);
-    displayCarryForward = dailyBalance;
+    penaltyBaseCarryForward = penaltyBaseBalance;
+    carryForward =
+      dailyBalanceBeforePenalty < 0
+        ? dailyBalanceBeforePenalty
+        : roundMoney(dailyBalanceBeforePenalty + penalty);
     const totalBalance = Math.max(0, roundMoney(totalExpected - cumulativePaid));
     const totalDue = Math.max(
       0,

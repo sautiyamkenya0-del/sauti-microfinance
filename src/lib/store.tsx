@@ -1953,6 +1953,9 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "supportinbox",
     "ai",
     "portal",
+    "locomotive_dashboard",
+    "locomotive_members",
+    "locomotive_ledger",
   ],
   manager: [
     "dashboard",
@@ -1972,6 +1975,9 @@ export const ROLE_NAV: Record<Role, string[]> = {
     "supportinbox",
     "ai",
     "portal",
+    "locomotive_dashboard",
+    "locomotive_members",
+    "locomotive_ledger",
   ],
   loan_officer: [
     "dashboard",

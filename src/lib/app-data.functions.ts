@@ -801,6 +801,10 @@ async function liveLoanAccountingSummary(
     totalExpectedCollected,
     totalPaid: ledger.totalPaid,
     totalPenalty,
+    rawPenaltyTotal: ledger.totalPenalty,
+    dailyPenaltyAmount: ledger.dailyPenaltyAmount,
+    defaultPenaltyAmount: ledger.defaultPenaltyAmount,
+    penaltyWaivedAmount,
     totalOwedNow,
     balance: totalOwedNow,
     total: roundMoney(ledger.totalPaid + totalOwedNow),
@@ -13429,6 +13433,88 @@ export const waiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
       .eq("id", data.loanId);
     if (updateError) throw new Error(updateError.message);
     return { ok: true, waivedAmount: waiveAmount };
+  });
+
+export const unwaiveLoanFollowupPenaltyRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { loanId: string; loanKind?: "live" | "carryover"; note?: string }) => ({
+    loanId: String(data?.loanId ?? "").trim(),
+    loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
+    note: data?.note?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.loanId) throw new Error("Loan id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    if (data.loanKind === "carryover") {
+      const { data: loan, error } = await runtimeDb
+        .from("member_carryover_loans")
+        .select("id, member_id, penalty_waived_amount, notes")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!loan) throw new Error("Carryover loan not found.");
+      const restoredAmount = toNumber(loan.penalty_waived_amount);
+      if (restoredAmount <= 0) throw new Error("This loan has no waived penalties to restore.");
+
+      const { error: updateError } = await runtimeDb
+        .from("member_carryover_loans")
+        .update({
+          penalty_waived_amount: 0,
+          notes: [
+            loan.notes,
+            `Penalty unwaived ${restoredAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          updated_by: actor.id,
+        })
+        .eq("id", data.loanId);
+      if (updateError) throw new Error(updateError.message);
+      await refreshCarryoverMemberSummary(runtimeDb, loan.member_id);
+      await auditAction({
+        actor,
+        action: "loan_followup.penalty_unwaived",
+        targetType: "member_carryover_loan",
+        targetId: data.loanId,
+        summary: `${actor.name} restored ${restoredAmount}/= waived penalties for carryover loan ${data.loanId}`,
+        details: { loanKind: data.loanKind, restoredAmount, note: clipAuditText(data.note, 180) },
+      });
+      return { ok: true, restoredAmount };
+    }
+
+    const { data: loan, error } = await runtimeDb
+      .from("loans")
+      .select("id, penalty_waived_amount, review_note")
+      .eq("id", data.loanId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!loan) throw new Error("Loan not found.");
+    const restoredAmount = toNumber(loan.penalty_waived_amount);
+    if (restoredAmount <= 0) throw new Error("This loan has no waived penalties to restore.");
+
+    const { error: updateError } = await runtimeDb
+      .from("loans")
+      .update({
+        penalty_waived_amount: 0,
+        review_note: [
+          loan.review_note,
+          `Penalty unwaived ${restoredAmount}/= by ${actor.name}${data.note ? ` - ${data.note}` : ""}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      })
+      .eq("id", data.loanId);
+    if (updateError) throw new Error(updateError.message);
+    await auditAction({
+      actor,
+      action: "loan_followup.penalty_unwaived",
+      targetType: "loan",
+      targetId: data.loanId,
+      summary: `${actor.name} restored ${restoredAmount}/= waived penalties for loan ${data.loanId}`,
+      details: { loanKind: data.loanKind, restoredAmount, note: clipAuditText(data.note, 180) },
+    });
+    return { ok: true, restoredAmount };
   });
 
 export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })

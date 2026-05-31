@@ -648,38 +648,59 @@ export const listServiceAdministrationReports = createServerFn({ method: "GET" }
   },
 );
 
-export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" }).handler(
-  async () => {
+export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
+  .inputValidator((data: { adminStaffId?: string } | undefined) => ({
+    adminStaffId: String(data?.adminStaffId ?? "").trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
     const actor = await requireStaffActor();
     const supabaseAdmin = requireSupabaseAdmin();
-    const adminFilter =
-      actor.role === "locomotive_admin"
-        ? { column: "locomotive_admin_staff_id", value: actor.id }
-        : null;
+    const canInspectAll = actor.role === "director" || actor.role === "manager";
+    const selectedAdminStaffId = actor.role === "locomotive_admin" ? actor.id : data.adminStaffId;
+
+    const adminsResult = await supabaseAdmin
+      .from("staff")
+      .select("id, name, email, phone, member_id, role, active")
+      .eq("role", "locomotive_admin")
+      .order("name", { ascending: true });
+    if (adminsResult.error && !isMissingRelationError(adminsResult.error)) {
+      throw new Error(adminsResult.error.message);
+    }
+    const locomotiveAdmins = adminsResult.error ? [] : ((adminsResult.data ?? []) as DbRow[]);
+    const selectedAdmin = selectedAdminStaffId
+      ? (locomotiveAdmins.find((row) => readText(row.id) === selectedAdminStaffId) ?? null)
+      : null;
+    const selectedAdminMemberId = readText(selectedAdmin?.member_id);
+    const adminStaffFilter =
+      selectedAdminStaffId && (actor.role === "locomotive_admin" || canInspectAll)
+        ? selectedAdminStaffId
+        : "";
 
     const memberQuery = supabaseAdmin
       .from("members")
       .select("*")
       .eq("locomotive_business_member", true)
       .order("joined_at", { ascending: false });
-    if (adminFilter) memberQuery.eq(adminFilter.column, adminFilter.value);
+    if (adminStaffFilter) memberQuery.eq("locomotive_admin_staff_id", adminStaffFilter);
 
     const allocationQuery = supabaseAdmin
       .from("locomotive_business_wallet_allocations")
       .select("*")
       .order("allocated_at", { ascending: false })
       .limit(200);
-    if (actor.role === "locomotive_admin") allocationQuery.eq("admin_staff_id", actor.id);
+    if (adminStaffFilter) allocationQuery.eq("admin_staff_id", adminStaffFilter);
 
     const depositQuery = supabaseAdmin
       .from("transactions")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(200);
-    if (actor.memberId) depositQuery.eq("member_id", actor.memberId);
+    const depositMemberId =
+      actor.role === "locomotive_admin" ? actor.memberId : selectedAdminMemberId;
+    if (depositMemberId) depositQuery.eq("member_id", depositMemberId);
 
-    const actorMemberQuery = actor.memberId
-      ? supabaseAdmin.from("members").select("*").eq("id", actor.memberId).maybeSingle()
+    const actorMemberQuery = depositMemberId
+      ? supabaseAdmin.from("members").select("*").eq("id", depositMemberId).maybeSingle()
       : Promise.resolve({ data: null, error: null });
 
     const [
@@ -734,8 +755,11 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       .reduce((sum: number, row: DbRow) => sum + readNumber(row.gross_amount), 0);
 
     return {
-      actorMemberId: actor.memberId ?? "",
+      actorMemberId: depositMemberId ?? "",
       actorMember: actorMemberResult.error ? null : ((actorMemberResult.data ?? null) as DbRow | null),
+      selectedAdminStaffId: adminStaffFilter,
+      selectedAdmin,
+      locomotiveAdmins,
       members: membersResult.error ? [] : ((membersResult.data ?? []) as DbRow[]),
       allocations,
       services: servicesResult.error ? [] : ((servicesResult.data ?? []) as DbRow[]),
@@ -746,8 +770,7 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       cashTotal,
       availableBalance: Math.max(0, depositTotal - allocatedTotal),
     };
-  },
-);
+  });
 
 export const listMemberSelfServiceWorkspaceRecord = createServerFn({ method: "GET" })
   .inputValidator((data: { memberId?: string } | undefined) => ({
