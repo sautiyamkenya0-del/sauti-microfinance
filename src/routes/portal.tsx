@@ -127,7 +127,12 @@ function dedupeMemberTransactions<T extends { id: string; type: string; amount: 
 }
 
 export const Route = createFileRoute("/portal")({
-  head: () => ({ meta: [{ title: "Member Portal — Sauti Microfinance" }] }),
+  head: () => ({
+    meta: [
+      { title: "Member Portal - Sauti Microfinance" },
+      { name: "theme-color", content: "#18382d" },
+    ],
+  }),
   component: Portal,
 });
 
@@ -616,17 +621,17 @@ function Portal() {
           subtitle="Staff view-as: audit a member's profile, loans, fees and support thread."
         />
       ) : (
-        <header className="border-b border-border bg-card/70 px-4 pb-4 pt-0 backdrop-blur sm:px-6">
+        <header className="border-b border-[#2f5f49] bg-[#18382d] px-4 pb-4 pt-0 text-white shadow-sm sm:px-6">
           <div className="safe-area-spacer md:hidden" />
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 pt-3 sm:pt-5">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-white/60">
                 Sauti Microfinance
               </div>
-              <h1 className="mt-1 font-display text-2xl font-semibold text-foreground">
+              <h1 className="mt-1 font-display text-2xl font-semibold text-white">
                 Member Portal
               </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-sm text-white/75">
                 Track your daily compliance contribution, loans, fees, and support in one secure
                 place.
               </p>
@@ -635,7 +640,7 @@ function Portal() {
               <button
                 type="button"
                 onClick={() => setPortalNavOpen(true)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-border bg-background hover:bg-muted"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white hover:bg-white/15"
                 aria-label="Open member menu"
               >
                 <Menu className="h-5 w-5" />
@@ -643,7 +648,7 @@ function Portal() {
               {notificationPermission === "default" ? (
                 <button
                   onClick={() => void enablePhoneAlerts()}
-                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted"
+                  className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
                 >
                   <Bell className="h-4 w-4" /> Enable alerts
                 </button>
@@ -653,7 +658,7 @@ function Portal() {
                   setTab("overview");
                   markClientAlertsRead(unreadClientAlerts.map((alert) => alert.id));
                 }}
-                className="relative inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted"
+                className="relative inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
               >
                 <Bell className="h-4 w-4" />
                 Alerts
@@ -665,7 +670,7 @@ function Portal() {
               </button>
               <button
                 onClick={() => void logout()}
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+                className="rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/15"
               >
                 Sign out
               </button>
