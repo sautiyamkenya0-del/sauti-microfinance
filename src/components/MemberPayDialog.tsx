@@ -48,7 +48,10 @@ export function MemberPayDialog({
   const [loanId, setLoanId] = useState(initialLoanId ?? activeLoans[0]?.id ?? "");
   const activeLoan = activeLoans.find((loan) => loan.id === loanId) ?? activeLoans[0];
   const loanBalance = activeLoan
-    ? loanPenaltySummary(activeLoan, transactions).totalOwedNow
+    ? (() => {
+        const summary = loanPenaltySummary(activeLoan, transactions);
+        return Math.ceil(summary.defaultedAmount || summary.totalOwedNow);
+      })()
     : 0;
   const [busy, setBusy] = useState(false);
 

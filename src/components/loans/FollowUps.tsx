@@ -44,25 +44,27 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const daysAfterFinalDueDate = Math.max(0, daysBetweenDates(summary.dueDate, today));
         const isOverdue = daysAfterFinalDueDate > 0;
         const dailyInstallment = summary.dailyExpected;
-        const arrears = summary.dailyUnpaidBalance;
-        const defaulted = summary.defaultedAmount || arrears;
-        const outstanding = Math.max(0, summary.totalOwedNow - summary.totalPenalty);
-        const elapsedScheduledDays = Math.max(0, daysBetweenDates(l.startDate, today));
-        const moneyMissedDays = dailyInstallment > 0 ? Math.ceil(arrears / dailyInstallment) : 0;
+        const penalties = Math.ceil(summary.totalPenalty);
+        const dueNow = Math.ceil(summary.defaultedAmount);
+        const missedDailyAmount = Math.max(0, dueNow - penalties);
+        const outstanding = summary.totalOwedNow;
+        const elapsedScheduledDays =
+          l.startDate <= today ? Math.max(0, daysBetweenDates(l.startDate, today) + 1) : 0;
+        const moneyMissedDays =
+          dailyInstallment > 0 ? Math.ceil(missedDailyAmount / dailyInstallment) : 0;
         const daysMissed = Math.min(
           elapsedScheduledDays,
           Math.max(summary.skippedPaymentDays, moneyMissedDays),
         );
         const daysPastDue = summary.daysPastDue;
-        const penalties = summary.totalPenalty;
         return {
           loan: l,
           loanKind: "live" as const,
           member: members.find((m) => m.id === l.memberId)!,
           dailyInstallment,
-          defaulted,
+          defaulted: missedDailyAmount,
           outstanding,
-          totalDue: summary.totalOwedNow,
+          totalDue: dueNow,
           penalties,
           daysMissed,
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
@@ -70,7 +72,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           frozen: Boolean(l.frozenAt),
           autoStopped: summary.autoStopped,
           include:
-            !isComplete && (l.status === "defaulted" || isOverdue || arrears > 0 || penalties > 0),
+            !isComplete &&
+            (l.status === "defaulted" || isOverdue || missedDailyAmount > 0 || penalties > 0),
         };
       })
       .filter((x) => x.member && x.include);

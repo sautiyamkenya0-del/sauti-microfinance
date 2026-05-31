@@ -919,7 +919,7 @@ function Portal() {
                             ? "Pay a specific active loan."
                             : "No active loan right now."
                         }
-                        amount="Balance or custom"
+                        amount="Due now or custom"
                         disabled={
                           !myLoans.some(
                             (loan) => loan.status === "active" || loan.status === "defaulted",
@@ -1695,7 +1695,7 @@ function Portal() {
                               openPayment({
                                 purpose: "loan",
                                 loanId: l.id,
-                                amount: Math.max(0, balance),
+                                amount: Math.ceil(summary.defaultedAmount || balance),
                               })
                             }
                             className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
