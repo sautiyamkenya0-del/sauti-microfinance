@@ -702,6 +702,13 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
     const actorMemberQuery = depositMemberId
       ? supabaseAdmin.from("members").select("*").eq("id", depositMemberId).maybeSingle()
       : Promise.resolve({ data: null, error: null });
+    const docketBalancesQuery = depositMemberId
+      ? supabaseAdmin
+          .from("member_docket_balances")
+          .select("docket, amount")
+          .eq("member_id", depositMemberId)
+          .in("docket", ["withdrawable_savings", "loan_savings"])
+      : Promise.resolve({ data: [], error: null });
 
     const [
       membersResult,
@@ -709,6 +716,7 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       servicesResult,
       depositsResult,
       actorMemberResult,
+      docketBalancesResult,
     ] = await Promise.all([
       memberQuery,
       allocationQuery,
@@ -720,6 +728,7 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
         .order("name", { ascending: true }),
       depositQuery,
       actorMemberQuery,
+      docketBalancesQuery,
     ]);
 
     const failed = [
@@ -728,6 +737,7 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       servicesResult,
       depositsResult,
       actorMemberResult,
+      docketBalancesResult,
     ].find((result) => result.error && !isMissingRelationError(result.error));
     if (failed?.error) throw new Error(failed.error.message);
 
@@ -753,6 +763,15 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
           readText(row.payment_method || "mpesa") === "cash",
       )
       .reduce((sum: number, row: DbRow) => sum + readNumber(row.gross_amount), 0);
+    const docketBalances = docketBalancesResult.error
+      ? []
+      : ((docketBalancesResult.data ?? []) as DbRow[]);
+    const withdrawableSavingsBalance = docketBalances
+      .filter((row) => readText(row.docket) === "withdrawable_savings")
+      .reduce((sum: number, row: DbRow) => sum + readNumber(row.amount), 0);
+    const loanSavingsBalance = docketBalances
+      .filter((row) => readText(row.docket) === "loan_savings")
+      .reduce((sum: number, row: DbRow) => sum + readNumber(row.amount), 0);
 
     return {
       actorMemberId: depositMemberId ?? "",
@@ -769,6 +788,8 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
       pendingTotal,
       cashTotal,
       availableBalance: Math.max(0, depositTotal - allocatedTotal),
+      withdrawableSavingsBalance,
+      loanSavingsBalance,
     };
   });
 

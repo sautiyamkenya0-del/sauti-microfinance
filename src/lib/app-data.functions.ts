@@ -6197,6 +6197,7 @@ export const createStaffRecord = createServerFn({ method: "POST" })
 export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
+      adminStaffId?: string;
       name: string;
       phone?: string;
       businessName?: string;
@@ -6204,6 +6205,7 @@ export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "PO
       route?: string;
       stage?: string;
     }) => ({
+      adminStaffId: String(data?.adminStaffId ?? "").trim() || undefined,
       name: String(data?.name ?? "").trim(),
       phone: String(data?.phone ?? "").trim(),
       businessName: String(data?.businessName ?? "").trim() || undefined,
@@ -6229,6 +6231,11 @@ export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "PO
     if (!data.name) throw new Error("Member name is required.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const actionActor = await resolveLocomotiveBusinessActionActor(
+      runtimeDb,
+      actor,
+      data.adminStaffId,
+    );
     const { data: existingServiceMembers, error: serviceNumberError } = await runtimeDb
       .from("members")
       .select("service_member_number");
@@ -6248,7 +6255,7 @@ export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "PO
       vehicleRegistrationNumber: data.vehiclePlate ?? null,
       routeOfOperation: data.route ?? null,
       stageOfOperation: data.stage ?? null,
-      registeredByLocomotiveAdmin: actor.id,
+      registeredByLocomotiveAdmin: actionActor.id,
     };
 
     const { error } = await runtimeDb.from("members").insert({
@@ -6268,8 +6275,8 @@ export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "PO
       service_member_number: serviceMemberNumber,
       locomotive_details: locomotiveDetails,
       locomotive_business_member: true,
-      locomotive_admin_staff_id: actor.id,
-      locomotive_admin_member_id: actor.memberId ?? null,
+      locomotive_admin_staff_id: actionActor.id,
+      locomotive_admin_member_id: actionActor.memberId ?? null,
       fee_membership: false,
       fee_card: false,
       fee_sticker: false,
@@ -6285,6 +6292,7 @@ export const createLocomotiveBusinessMemberRecord = createServerFn({ method: "PO
       details: {
         memberId,
         serviceMemberNumber,
+        locomotiveAdminStaffId: actionActor.id,
         vehiclePlate: data.vehiclePlate ?? null,
         route: data.route ?? null,
         stage: data.stage ?? null,
@@ -6323,6 +6331,43 @@ async function resolveLocomotiveBusinessWalletService(runtimeDb: any, serviceId?
         .maybeSingle();
   if (error && !isMissingRelationError(error)) throw new Error(error.message);
   return service;
+}
+
+async function resolveLocomotiveBusinessActionActor(
+  runtimeDb: any,
+  actor: Awaited<ReturnType<typeof requireStaffActor>>,
+  adminStaffId?: string,
+) {
+  const selectedAdminStaffId = String(adminStaffId ?? "").trim();
+  if (!selectedAdminStaffId || actor.role === "locomotive_admin") return actor;
+  if (actor.role !== "director" && actor.role !== "manager") return actor;
+
+  let { data, error } = await runtimeDb
+    .from("staff")
+    .select("id, name, role, can_mark_attendance, member_id")
+    .eq("id", selectedAdminStaffId)
+    .maybeSingle();
+  if (error && isMissingColumnError(error, "member_id")) {
+    const retry = await runtimeDb
+      .from("staff")
+      .select("id, name, role, can_mark_attendance")
+      .eq("id", selectedAdminStaffId)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
+  if (error) throw new Error(error.message);
+  if (!data || data.role !== "locomotive_admin") {
+    throw new Error("Select a valid locomotive admin workspace.");
+  }
+
+  return {
+    id: data.id,
+    name: data.name,
+    role: "locomotive_admin" as const,
+    canMarkAttendance: Boolean(data.can_mark_attendance),
+    memberId: data.member_id ?? undefined,
+  };
 }
 
 async function insertLocomotiveBusinessWalletAllocation(args: {
@@ -6386,6 +6431,7 @@ async function insertLocomotiveBusinessWalletAllocation(args: {
 }
 
 async function createPendingLocomotiveBusinessWalletPrompt(args: {
+  adminStaffId?: string;
   beneficiaryMemberId: string;
   grossAmount: number;
   expectedPhone?: string;
@@ -6401,13 +6447,20 @@ async function createPendingLocomotiveBusinessWalletPrompt(args: {
   ) {
     throw new Error("Only locomotive admins and management can create wallet prompts.");
   }
-  if (!actor.memberId) throw new Error("This staff account is not linked to a wallet member.");
   if (!args.beneficiaryMemberId) throw new Error("Select the member being prompted.");
   if (args.grossAmount <= 0) throw new Error("Prompt amount must be above zero.");
 
   const runtimeDb = (await requireSupabaseAdmin()) as any;
-  const result = await insertLocomotiveBusinessWalletAllocation({
+  const actionActor = await resolveLocomotiveBusinessActionActor(
+    runtimeDb,
     actor,
+    args.adminStaffId,
+  );
+  if (!actionActor.memberId) {
+    throw new Error("This locomotive admin is not linked to a wallet member.");
+  }
+  const result = await insertLocomotiveBusinessWalletAllocation({
+    actor: actionActor,
     runtimeDb,
     beneficiaryMemberId: args.beneficiaryMemberId,
     grossAmount: args.grossAmount,
@@ -6420,7 +6473,7 @@ async function createPendingLocomotiveBusinessWalletPrompt(args: {
   });
   await reconcileLocomotiveBusinessWalletPendingAllocations({
     runtimeDb,
-    adminMemberId: actor.memberId,
+    adminMemberId: actionActor.memberId,
     amount: args.grossAmount,
     checkoutRequestId: args.checkoutRequestId,
   });
@@ -6430,6 +6483,7 @@ async function createPendingLocomotiveBusinessWalletPrompt(args: {
 export const createLocomotiveBusinessWalletPromptRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
+      adminStaffId?: string;
       beneficiaryMemberId?: string;
       grossAmount?: number;
       expectedPhone?: string;
@@ -6437,6 +6491,7 @@ export const createLocomotiveBusinessWalletPromptRecord = createServerFn({ metho
       merchantRequestId?: string;
       note?: string;
     }) => ({
+      adminStaffId: String(data?.adminStaffId ?? "").trim() || undefined,
       beneficiaryMemberId: String(data?.beneficiaryMemberId ?? "").trim(),
       grossAmount: Math.max(0, Number(data?.grossAmount ?? 0)),
       expectedPhone: String(data?.expectedPhone ?? "").trim() || undefined,
@@ -6560,6 +6615,7 @@ async function hasExpectedLocomotiveWalletAllocation(args: {
 export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
+      adminStaffId?: string;
       beneficiaryMemberId: string;
       grossAmount: number;
       serviceId?: string;
@@ -6567,6 +6623,7 @@ export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ m
       purpose?: string;
       note?: string;
     }) => ({
+      adminStaffId: String(data?.adminStaffId ?? "").trim() || undefined,
       beneficiaryMemberId: String(data?.beneficiaryMemberId ?? "").trim(),
       grossAmount: Math.max(0, Number(data?.grossAmount ?? 0)),
       serviceId: String(data?.serviceId ?? "").trim() || undefined,
@@ -6590,8 +6647,16 @@ export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ m
     if (data.grossAmount <= 0) throw new Error("Allocation amount must be above zero.");
 
     const runtimeDb = (await requireSupabaseAdmin()) as any;
-    const result = await insertLocomotiveBusinessWalletAllocation({
+    const actionActor = await resolveLocomotiveBusinessActionActor(
+      runtimeDb,
       actor,
+      data.adminStaffId,
+    );
+    if (!actionActor.memberId) {
+      throw new Error("This locomotive admin is not linked to a wallet member.");
+    }
+    const result = await insertLocomotiveBusinessWalletAllocation({
+      actor: actionActor,
       runtimeDb,
       beneficiaryMemberId: data.beneficiaryMemberId,
       grossAmount: data.grossAmount,
@@ -6604,10 +6669,10 @@ export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ m
           ? "Cash payment recorded by locomotive admin"
           : "Manual M-Pesa claim pending exact wallet deposit"),
     });
-    if (data.paymentMethod === "mpesa_manual" && actor.memberId) {
+    if (data.paymentMethod === "mpesa_manual" && actionActor.memberId) {
       await reconcileLocomotiveBusinessWalletPendingAllocations({
         runtimeDb,
-        adminMemberId: actor.memberId,
+        adminMemberId: actionActor.memberId,
         amount: data.grossAmount,
       });
     }
@@ -6620,6 +6685,7 @@ export const createLocomotiveBusinessWalletAllocationRecord = createServerFn({ m
       summary: `${actor.name} recorded ${data.grossAmount} for ${result.member.name}`,
       details: {
         beneficiaryMemberId: data.beneficiaryMemberId,
+        locomotiveAdminStaffId: actionActor.id,
         serviceId: data.serviceId ?? result.service?.id ?? null,
         grossAmount: data.grossAmount,
         deductionAmount: result.deductionAmount,
@@ -10950,8 +11016,11 @@ const DOCKET_ACCOUNT_ALIASES: Record<string, MemberDocket> = {
   CONTRIBUTION: "mandatory_savings",
   MANDATORY: "mandatory_savings",
   COMPLIANCE: "mandatory_savings",
+  LS: "loan_savings",
   LOANSAVINGS: "loan_savings",
   LOAN_SAVINGS: "loan_savings",
+  LOANSAVE: "loan_savings",
+  LOANS: "loan_savings",
   MULTIPLIER: "loan_savings",
   SHARES: "shares",
   SHARE: "shares",

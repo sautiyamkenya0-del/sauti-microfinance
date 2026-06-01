@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { AppHeader } from "@/components/AppHeader";
 import {
   DataTable,
+  getAdminStaffIdFromLocation,
   inputCls,
   useLocomotiveWorkspace,
 } from "@/components/locomotive/LocomotiveWorkspace";
@@ -22,6 +23,7 @@ function LocomotiveMembersPage() {
   const { currentUser } = useStore();
   const createMember = useServerFn(createLocomotiveBusinessMemberRecord);
   const { workspace, refresh } = useLocomotiveWorkspace();
+  const [scopedAdminStaffId] = useState(() => getAdminStaffIdFromLocation());
   const [busy, setBusy] = useState(false);
   const [memberDraft, setMemberDraft] = useState({
     name: "",
@@ -36,6 +38,7 @@ function LocomotiveMembersPage() {
     currentUser.role === "locomotive_admin" ||
     currentUser.role === "director" ||
     currentUser.role === "manager";
+  const actionAdminStaffId = workspace.selectedAdminStaffId || scopedAdminStaffId || undefined;
 
   if (!allowed) return <Navigate to="/" />;
 
@@ -50,7 +53,9 @@ function LocomotiveMembersPage() {
         return;
       }
       setBusy(true);
-      const result = await createMember({ data: memberDraft });
+      const result = await createMember({
+        data: { ...memberDraft, adminStaffId: actionAdminStaffId },
+      });
       setMemberDraft({
         name: "",
         phone: "",

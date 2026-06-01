@@ -19,6 +19,8 @@ export type LocomotiveWorkspace = {
   pendingTotal: number;
   cashTotal: number;
   availableBalance: number;
+  withdrawableSavingsBalance: number;
+  loanSavingsBalance: number;
 };
 
 const emptyWorkspace: LocomotiveWorkspace = {
@@ -36,23 +38,27 @@ const emptyWorkspace: LocomotiveWorkspace = {
   pendingTotal: 0,
   cashTotal: 0,
   availableBalance: 0,
+  withdrawableSavingsBalance: 0,
+  loanSavingsBalance: 0,
 };
 
 export function useLocomotiveWorkspace(options?: { adminStaffId?: string }) {
   const loadWorkspace = useServerFn(listLocomotiveBusinessWorkspace);
   const [workspace, setWorkspace] = useState<LocomotiveWorkspace>(emptyWorkspace);
+  const [urlAdminStaffId] = useState(() => getAdminStaffIdFromLocation());
+  const adminStaffId = options?.adminStaffId ?? urlAdminStaffId;
 
   const refresh = useCallback(async () => {
     try {
       setWorkspace(
         await loadWorkspace({
-          data: options?.adminStaffId ? { adminStaffId: options.adminStaffId } : {},
+          data: adminStaffId ? { adminStaffId } : {},
         }),
       );
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to load locomotive workspace.");
     }
-  }, [loadWorkspace, options?.adminStaffId]);
+  }, [adminStaffId, loadWorkspace]);
 
   useEffect(() => {
     refresh().catch(() => {});
@@ -108,3 +114,8 @@ export function DataTable({
 
 export const inputCls =
   "w-full rounded-md border border-border bg-muted px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary";
+
+export function getAdminStaffIdFromLocation() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("adminStaffId") ?? "";
+}

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { AppHeader } from "@/components/AppHeader";
 import {
   DataTable,
+  getAdminStaffIdFromLocation,
   inputCls,
   useLocomotiveWorkspace,
 } from "@/components/locomotive/LocomotiveWorkspace";
@@ -20,6 +21,29 @@ import {
 import { formatMembershipNumber } from "@/lib/membership";
 import { fmtKES, useStore } from "@/lib/store";
 
+type PromptDestination = "locomotive_wallet" | "withdrawable_savings" | "loan_savings";
+
+const promptDestinations: Record<
+  PromptDestination,
+  { label: string; token: string; description: string }
+> = {
+  locomotive_wallet: {
+    label: "Locomotive wallet",
+    token: "LW",
+    description: "Collects into the selected locomotive admin wallet.",
+  },
+  withdrawable_savings: {
+    label: "Withdrawable savings",
+    token: "WDS",
+    description: "Prompts the selected member into their withdrawable savings docket.",
+  },
+  loan_savings: {
+    label: "Loan savings",
+    token: "LS",
+    description: "Prompts the selected member into their loan savings docket.",
+  },
+};
+
 export const Route = createFileRoute("/locomotive-balances")({
   head: () => ({ meta: [{ title: "Locomotive Balances - Sauti Microfinance" }] }),
   component: LocomotiveBalancesPage,
@@ -31,6 +55,7 @@ function LocomotiveBalancesPage() {
   const createPromptRecord = useServerFn(createLocomotiveBusinessWalletPromptRecord);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const { workspace, refresh } = useLocomotiveWorkspace();
+  const [scopedAdminStaffId] = useState(() => getAdminStaffIdFromLocation());
   const [busy, setBusy] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
   const [allocationDraft, setAllocationDraft] = useState({
@@ -41,6 +66,7 @@ function LocomotiveBalancesPage() {
     note: "",
   });
   const [promptDraft, setPromptDraft] = useState({
+    destination: "locomotive_wallet" as PromptDestination,
     payer: "self",
     phone: "",
     amount: "",
@@ -51,6 +77,7 @@ function LocomotiveBalancesPage() {
     currentUser.role === "locomotive_admin" ||
     currentUser.role === "director" ||
     currentUser.role === "manager";
+  const actionAdminStaffId = workspace.selectedAdminStaffId || scopedAdminStaffId || undefined;
 
   const deductionPreview = useMemo(() => {
     const amount = Number(allocationDraft.grossAmount || 0);
@@ -81,6 +108,15 @@ function LocomotiveBalancesPage() {
     promptDraft.payer === "self"
       ? workspace.actorMember
       : workspace.members.find((member: any) => member.id === promptDraft.payer);
+  const promptDestination = promptDestinations[promptDraft.destination];
+  const promptMemberAccountRef = selectedPromptMember?.id
+    ? formatMembershipNumber(selectedPromptMember.id)
+    : "";
+  const promptBaseAccountRef =
+    promptDraft.destination === "locomotive_wallet" ? adminAccountRef : promptMemberAccountRef;
+  const promptAccountRef = promptBaseAccountRef
+    ? `${promptBaseAccountRef}-${promptDestination.token}`.slice(0, 12)
+    : "";
   const promptPhone =
     promptDraft.payer === "custom"
       ? promptDraft.phone
@@ -100,6 +136,7 @@ function LocomotiveBalancesPage() {
       setBusy(true);
       const result = await createAllocation({
         data: {
+          adminStaffId: actionAdminStaffId,
           beneficiaryMemberId: allocationDraft.beneficiaryMemberId,
           grossAmount: Number(allocationDraft.grossAmount || 0),
           serviceId: allocationDraft.serviceId || undefined,
@@ -130,8 +167,16 @@ function LocomotiveBalancesPage() {
 
   async function sendCollectionPrompt() {
     const amount = Math.max(0, Math.floor(Number(promptDraft.amount || 0)));
-    if (!adminAccountRef) {
+    if (promptDraft.destination === "locomotive_wallet" && !adminAccountRef) {
       toast.error("Link this locomotive admin staff account to a member account first.");
+      return;
+    }
+    if (promptDraft.destination !== "locomotive_wallet" && promptDraft.payer === "custom") {
+      toast.error("Select a registered member before prompting savings.");
+      return;
+    }
+    if (!promptAccountRef) {
+      toast.error("The selected account cannot receive this prompt yet.");
       return;
     }
     if (amount <= 0) {
@@ -149,24 +194,25 @@ function LocomotiveBalancesPage() {
         promptDraft.payer === "custom"
           ? "Custom payer"
           : String(selectedPromptMember?.name ?? "Locomotive admin");
+      const isWalletPrompt = promptDraft.destination === "locomotive_wallet";
       const res = await fetch("/api/public/mpesa/stkpush", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: promptPhone,
           amount,
-          accountRef: `${adminAccountRef}-LW`,
-          description: `Locomotive wallet deposit - ${payerName}${
+          accountRef: promptAccountRef,
+          description: `${promptDestination.label} deposit - ${payerName}${
             promptDraft.note ? ` - ${promptDraft.note}` : ""
           }`,
           locomotiveWallet:
-            promptDraft.payer === "custom"
-              ? undefined
-              : {
+            isWalletPrompt && promptDraft.payer !== "custom"
+              ? {
                   beneficiaryMemberId:
                     promptDraft.payer === "self" ? workspace.actorMemberId : promptDraft.payer,
                   note: promptDraft.note,
-                },
+                }
+              : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -174,10 +220,11 @@ function LocomotiveBalancesPage() {
         toast.error(data.error ?? data.errorMessage ?? "STK prompt failed.");
         return;
       }
-      if (promptDraft.payer !== "custom") {
+      if (isWalletPrompt && promptDraft.payer !== "custom") {
         try {
           await createPromptRecord({
             data: {
+              adminStaffId: actionAdminStaffId,
               beneficiaryMemberId:
                 promptDraft.payer === "self" ? workspace.actorMemberId : promptDraft.payer,
               grossAmount: amount,
@@ -193,9 +240,15 @@ function LocomotiveBalancesPage() {
           });
         }
       }
-      setPromptDraft({ payer: "self", phone: "", amount: "", note: "" });
+      setPromptDraft({
+        destination: "locomotive_wallet",
+        payer: "self",
+        phone: "",
+        amount: "",
+        note: "",
+      });
       await refresh();
-      toast.success(`Prompt sent. Payment will land in ${adminAccountRef}.`);
+      toast.success(`Prompt sent. Payment will land in ${promptAccountRef}.`);
     } catch {
       toast.error("M-Pesa request failed. Check the server configuration and try again.");
     } finally {
@@ -253,6 +306,27 @@ function LocomotiveBalancesPage() {
               ))}
               <option value="custom">Other phone</option>
             </select>
+            <select
+              className={inputCls}
+              value={promptDraft.destination}
+              onChange={(event) =>
+                setPromptDraft((draft) => ({
+                  ...draft,
+                  destination: event.target.value as PromptDestination,
+                  payer:
+                    event.target.value === "locomotive_wallet" || draft.payer !== "custom"
+                      ? draft.payer
+                      : "self",
+                  phone: event.target.value === "locomotive_wallet" ? draft.phone : "",
+                }))
+              }
+            >
+              {Object.entries(promptDestinations).map(([value, destination]) => (
+                <option key={value} value={value}>
+                  {destination.label}
+                </option>
+              ))}
+            </select>
             <input
               className={inputCls}
               placeholder="Phone to prompt"
@@ -283,11 +357,14 @@ function LocomotiveBalancesPage() {
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm md:col-span-2">
               Account receiving payment:{" "}
               <span className="font-mono font-semibold">
-                {adminAccountRef ? `${adminAccountRef}-LW` : "Not linked"}
+                {promptAccountRef || "Not linked"}
               </span>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {promptDestination.description}
+              </div>
             </div>
             <button
-              disabled={promptBusy || !adminAccountRef}
+              disabled={promptBusy || !promptAccountRef}
               onClick={() => void sendCollectionPrompt()}
               className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60 md:col-span-2"
             >
@@ -296,7 +373,7 @@ function LocomotiveBalancesPage() {
               ) : (
                 <Smartphone className="h-4 w-4" />
               )}
-              Send STK prompt to admin account
+              Send STK prompt
             </button>
           </div>
         </Section>

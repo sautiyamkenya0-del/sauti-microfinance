@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 
 import { AppHeader } from "@/components/AppHeader";
-import { DataTable, useLocomotiveWorkspace } from "@/components/locomotive/LocomotiveWorkspace";
+import {
+  DataTable,
+  getAdminStaffIdFromLocation,
+  inputCls,
+  useLocomotiveWorkspace,
+} from "@/components/locomotive/LocomotiveWorkspace";
 import { Badge, Section, StatCard } from "@/components/ui-bits";
 import { fmtKES, useStore } from "@/lib/store";
 
@@ -24,7 +29,8 @@ export const Route = createFileRoute("/locomotive-admin-portal")({
 
 function LocomotiveAdminPortalPage() {
   const { currentUser } = useStore();
-  const [adminStaffId, setAdminStaffId] = useState("");
+  const [adminStaffId, setAdminStaffId] = useState(() => getAdminStaffIdFromLocation());
+  const [adminQuery, setAdminQuery] = useState("");
   const { workspace, refresh } = useLocomotiveWorkspace({ adminStaffId });
   const allowed = currentUser.role === "director" || currentUser.role === "manager";
 
@@ -33,12 +39,38 @@ function LocomotiveAdminPortalPage() {
     setAdminStaffId(String(workspace.locomotiveAdmins[0].id ?? ""));
   }, [adminStaffId, workspace.locomotiveAdmins]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (adminStaffId) url.searchParams.set("adminStaffId", adminStaffId);
+    else url.searchParams.delete("adminStaffId");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [adminStaffId]);
+
   const selectedAdmin = useMemo(
     () =>
       workspace.locomotiveAdmins.find((admin: any) => String(admin.id) === adminStaffId) ??
       workspace.selectedAdmin,
     [adminStaffId, workspace.locomotiveAdmins, workspace.selectedAdmin],
   );
+  const filteredAdmins = useMemo(() => {
+    const query = adminQuery.trim().toLowerCase();
+    if (!query) return workspace.locomotiveAdmins;
+    return workspace.locomotiveAdmins.filter((admin: any) =>
+      [
+        admin.id,
+        admin.name,
+        admin.member_id,
+        admin.email,
+        admin.phone,
+        admin.branch,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [adminQuery, workspace.locomotiveAdmins]);
   const recentCash = workspace.allocations
     .filter((row: any) => String(row.payment_method ?? "") === "cash")
     .slice(0, 8);
@@ -68,18 +100,26 @@ function LocomotiveAdminPortalPage() {
           }
         >
           <div className="grid gap-3 p-5 lg:grid-cols-[minmax(16rem,24rem),1fr]">
-            <select
-              value={adminStaffId}
-              onChange={(event) => setAdminStaffId(event.target.value)}
-              className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
-            >
-              <option value="">All locomotive admins</option>
-              {workspace.locomotiveAdmins.map((admin: any) => (
-                <option key={admin.id} value={admin.id}>
-                  {admin.name} - {admin.member_id || "no linked member"}
-                </option>
-              ))}
-            </select>
+            <div className="grid gap-2">
+              <input
+                className={inputCls}
+                placeholder="Search admin by name, staff ID, member, phone"
+                value={adminQuery}
+                onChange={(event) => setAdminQuery(event.target.value)}
+              />
+              <select
+                value={adminStaffId}
+                onChange={(event) => setAdminStaffId(event.target.value)}
+                className={inputCls}
+              >
+                <option value="">All locomotive admins</option>
+                {filteredAdmins.map((admin: any) => (
+                  <option key={admin.id} value={admin.id}>
+                    {admin.name} - {admin.member_id || "no linked member"}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
               <div className="font-medium text-foreground">
                 {selectedAdmin?.name ?? "All locomotive admin workspaces"}
@@ -88,6 +128,11 @@ function LocomotiveAdminPortalPage() {
                 <span>Staff ID: {selectedAdmin?.id ?? "all"}</span>
                 <span>Linked member: {workspace.actorMemberId || selectedAdmin?.member_id || "-"}</span>
                 <span>{selectedAdmin?.email ?? "No email on file"}</span>
+                <span>
+                  {adminQuery
+                    ? `${filteredAdmins.length} matching admin${filteredAdmins.length === 1 ? "" : "s"}`
+                    : `${workspace.locomotiveAdmins.length} admins available`}
+                </span>
               </div>
             </div>
           </div>
@@ -118,24 +163,28 @@ function LocomotiveAdminPortalPage() {
           <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
             <InterfaceLink
               to="/locomotive"
+              adminStaffId={adminStaffId}
               icon={<LayoutDashboard className="h-4 w-4" />}
               title="Dashboard"
               detail="Stats, recent members, and recent allocations."
             />
             <InterfaceLink
               to="/locomotive-members"
+              adminStaffId={adminStaffId}
               icon={<UserPlus className="h-4 w-4" />}
               title="Members"
               detail="Register members and inspect the assigned member list."
             />
             <InterfaceLink
               to="/locomotive-balances"
+              adminStaffId={adminStaffId}
               icon={<Wallet className="h-4 w-4" />}
               title="Balances"
               detail="Collect into the admin account and allocate wallet funds."
             />
             <InterfaceLink
               to="/locomotive-support"
+              adminStaffId={adminStaffId}
               icon={<LifeBuoy className="h-4 w-4" />}
               title="Support"
               detail="Linked account deposits and support audit."
@@ -212,11 +261,13 @@ function LocomotiveAdminPortalPage() {
 
 function InterfaceLink({
   to,
+  adminStaffId,
   icon,
   title,
   detail,
 }: {
   to: string;
+  adminStaffId?: string;
   icon: ReactNode;
   title: string;
   detail: string;
@@ -224,6 +275,7 @@ function InterfaceLink({
   return (
     <Link
       to={to as never}
+      search={adminStaffId ? ({ adminStaffId } as never) : undefined}
       className="group rounded-md border border-border bg-muted/20 p-4 text-sm hover:bg-muted"
     >
       <div className="flex items-start justify-between gap-3">
