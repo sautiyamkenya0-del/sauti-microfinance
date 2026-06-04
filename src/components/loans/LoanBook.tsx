@@ -13,6 +13,7 @@ import {
 } from "@/lib/store";
 import { updateLoanRecord, upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
+import { trueLoanStatus, trueLoanStatusLabel, trueLoanStatusTone } from "@/lib/loan-status";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -67,19 +68,6 @@ function termDaysOf(l: Loan): number {
 
 function dueDateOf(l: Loan): string {
   return loanSummary(l).dueDate;
-}
-
-function logicalLoanStatus(
-  status: string,
-  balance: number,
-  dueDate: string,
-  today: string = new Date().toISOString().slice(0, 10),
-) {
-  if (status === "closed") return "closed";
-  if (balance <= 0) return "closed";
-  if (status === "rejected" || status === "pending") return status;
-  if (status === "defaulted" || dueDate < today) return "defaulted";
-  return "active";
 }
 
 function liveLoanCycleNumber(loan: Loan, loans: Loan[]) {
@@ -282,7 +270,7 @@ export function LoanBook({
           ? rowSummary.totalOwedNow
           : (rowSummary as ReturnType<typeof loanPenaltySummary>).totalOwedNow;
       const dueDate = rowSummary.dueDate;
-      const logicalStatus = logicalLoanStatus(status, balance, dueDate, today);
+      const logicalStatus = trueLoanStatus({ storedStatus: status, balance, dueDate, today });
       switch (tableOnly ? "all" : filter) {
         case "all":
           return true;
@@ -309,12 +297,24 @@ export function LoanBook({
       const q = activeQuery.trim().toLowerCase();
       list = list.filter((row) => {
         const m = members.find((x) => x.id === row.loan.memberId);
+        const rowSummary =
+          row.kind === "carryover"
+            ? summarizeLegacyCarryoverLoan(row.loan, policySettings)
+            : loanPenaltySummary(row.loan, transactions);
         return [
           m?.id,
           m?.name,
           m?.phone,
           m?.businessName,
           row.loan.id,
+          row.loan.startDate,
+          rowSummary.dueDate,
+          row.kind === "live"
+            ? (rowSummary as ReturnType<typeof loanPenaltySummary>).totalOwedNow
+            : (rowSummary as ReturnType<typeof summarizeLegacyCarryoverLoan>).totalOwedNow,
+          row.kind === "live"
+            ? (rowSummary as ReturnType<typeof loanPenaltySummary>).approved
+            : row.loan.principal,
           row.kind === "carryover" ? row.loan.label : undefined,
         ]
           .filter(Boolean)
@@ -476,22 +476,13 @@ export function LoanBook({
                 row.kind === "live"
                   ? (summary as ReturnType<typeof loanPenaltySummary>).totalOwedNow
                   : (summary as ReturnType<typeof summarizeLegacyCarryoverLoan>).totalOwedNow;
-              const statusLabel = logicalLoanStatus(
-                l.status,
-                currentBalance,
-                summary.dueDate,
+              const statusLabel = trueLoanStatus({
+                storedStatus: l.status,
+                balance: currentBalance,
+                dueDate: summary.dueDate,
                 today,
-              );
-              const tone =
-                statusLabel === "active"
-                  ? "success"
-                  : statusLabel === "closed"
-                    ? "default"
-                    : statusLabel === "pending"
-                      ? "warning"
-                      : statusLabel === "rejected"
-                        ? "destructive"
-                        : "destructive";
+              });
+              const tone = trueLoanStatusTone(statusLabel);
               return (
                 <tr key={`${row.kind}-${l.id}`} className="hover:bg-muted/30">
                   <td className="px-5 py-3 font-medium">
@@ -534,11 +525,7 @@ export function LoanBook({
                       (m?.businessType ?? <span className="text-muted-foreground">N/A</span>)}
                   </td>
                   <td className="px-5 py-3">
-                    <Badge tone={tone as never}>
-                      {statusLabel === "closed"
-                        ? "Completed"
-                        : statusLabel[0].toUpperCase() + statusLabel.slice(1)}
-                    </Badge>
+                    <Badge tone={tone as never}>{trueLoanStatusLabel(statusLabel)}</Badge>
                   </td>
                   <td className="px-5 py-3 text-xs">
                     {fmtKES(
@@ -988,7 +975,6 @@ export function MemberLoanHistory({
             productChargeAmount: editDraft.productChargeAmount,
             manualPenaltyAmount: editDraft.manualPenaltyAmount,
             penaltyWaivedAmount: editDraft.penaltyWaivedAmount,
-            dailySavingsAmount: editDraft.dailySavingsAmount,
           },
         });
         await reloadAppData();
@@ -1070,7 +1056,10 @@ export function MemberLoanHistory({
             <div className="font-semibold mb-2">Active compliance alerts</div>
             <div className="space-y-2">
               {complianceAlerts.map(({ source, loan, summary, balance }) => {
-                const dailyCompliance = summary.dailySavingsAmount;
+                const dailyCompliance =
+                  source === "carryover"
+                    ? loan.dailySavingsAmount
+                    : (summary as ReturnType<typeof loanPenaltySummary>).dailySavingsAmount;
                 const totalCompliance = dailyCompliance * summary.termDays;
                 return (
                   <div
@@ -1196,7 +1185,10 @@ export function MemberLoanHistory({
                     rows={[
                       ["Day given", l.startDate],
                       ["Amount", fmtKES(l.principal)],
-                      ["Interest / charge", fmtKES(safeMoney(summary.interest + summary.feeChargesTotal))],
+                      [
+                        "Interest / charge",
+                        fmtKES(safeMoney(summary.interest + summary.feeChargesTotal)),
+                      ],
                       [
                         "Manual penalties",
                         fmtKES(
@@ -1281,7 +1273,7 @@ export function MemberLoanHistory({
                       ["Amount", fmtKES(summary.approved)],
                       [
                         "Interest / charges",
-                        fmtKES(safeMoney(summary.interestAmount + loanProductChargeAmount(l))),
+                        fmtKES(safeMoney(summary.interest + loanProductChargeAmount(l))),
                       ],
                       ["Manual penalties", fmtKES(loanManualPenaltyAmount(l))],
                       ["Penalty waived", fmtKES(l.penaltyWaivedAmount ?? 0)],

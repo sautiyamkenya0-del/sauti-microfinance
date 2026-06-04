@@ -134,6 +134,8 @@ export const listStaffPayrollPayments = createServerFn({ method: "POST" }).handl
     presentDays: Math.max(0, Math.floor(toNumber(row.present_days))),
     payableAmount: toNumber(row.payable_amount),
     paidAmount: toNumber(row.paid_amount),
+    payoutMode:
+      readText(row.payout_mode) === "base_salary" ? "base_salary" : "gross_payable",
     status: readText(row.status) || "requested",
     requestedBy: readText(row.requested_by) || undefined,
     requestedAt: readText(row.requested_at) || undefined,
@@ -170,10 +172,17 @@ export const upsertStaffPayrollProfileRecord = createServerFn({ method: "POST" }
   });
 
 export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" })
-  .inputValidator((data: { staffId: string; month: string; note?: string }) => ({
+  .inputValidator(
+    (data: {
+      staffId: string;
+      month: string;
+      note?: string;
+      payoutMode?: "gross_payable" | "base_salary";
+    }) => ({
     staffId: readText(data?.staffId),
     month: readText(data?.month),
     note: readText(data?.note) || undefined,
+    payoutMode: data?.payoutMode === "base_salary" ? "base_salary" : "gross_payable",
   }))
   .handler(async ({ data }) => {
     const actor = await requireDirectorActor();
@@ -227,6 +236,7 @@ export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" }
       start: period.start,
       end: period.end,
       alreadyPaid,
+      payoutMode: data.payoutMode,
     });
     if (payroll.outstanding <= 0) {
       throw new Error("This payroll period has already been fully paid.");
@@ -260,8 +270,9 @@ export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" }
       base_salary: toNumber(profileResult.data.base_salary),
       work_days: payroll.workDays,
       present_days: payroll.presentDays,
-      payable_amount: payroll.grossPayable,
+      payable_amount: payroll.targetPayable,
       paid_amount: 0,
+      payout_mode: payroll.payoutMode,
       status: "requested",
       requested_by: actor.id,
       requested_at: new Date().toISOString(),
@@ -289,6 +300,7 @@ export const requestStaffPayrollPayoutRecord = createServerFn({ method: "POST" }
         month: period.month,
         periodStart: period.start,
         periodEnd: period.end,
+        payoutMode: payroll.payoutMode,
       } as any,
     });
     if (payoutRequestError) throw new Error(payoutRequestError.message);

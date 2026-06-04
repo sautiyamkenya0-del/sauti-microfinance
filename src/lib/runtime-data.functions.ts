@@ -7,9 +7,20 @@ import {
   requireSignedInSession,
   requireStaffActor,
 } from "@/lib/auth.server";
-import { normalizeLegacyCarryoverLoanFeeBreakdown } from "@/lib/legacy-finance";
+import {
+  deriveCarryoverPaidToDateByLoan,
+  normalizeLegacyCarryoverLoanFeeBreakdown,
+  summarizeLegacyCarryoverLoan,
+} from "@/lib/legacy-finance";
+import {
+  DEFAULT_POLICY_SETTINGS,
+  mergePolicySettings,
+  type PolicySettings,
+  type PolicySettingRow,
+} from "@/lib/policy-settings";
 
 type DbRow = Record<string, unknown>;
+const SUPABASE_PAGE_SIZE = 1000;
 
 function requireSupabaseAdmin() {
   const supabaseAdmin = getSupabaseAdminOrNull();
@@ -35,6 +46,22 @@ function readNumber(value: unknown) {
   return Number.isFinite(next) ? next : 0;
 }
 
+async function fetchAllRows<T = any>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const to = from + SUPABASE_PAGE_SIZE - 1;
+    const { data, error } = await queryFactory().range(from, to);
+    if (error) throw new Error(error.message);
+
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < SUPABASE_PAGE_SIZE) break;
+  }
+
+  return rows;
+}
+
 function isMissingColumnError(error: any, column: string) {
   const message = String(error?.message ?? "");
   return error?.code === "42703" || message.includes(column);
@@ -43,6 +70,25 @@ function isMissingColumnError(error: any, column: string) {
 function isMissingRelationError(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
   return error?.code === "42P01" || message.includes("does not exist");
+}
+
+function mapPolicySettingRow(row: DbRow): PolicySettingRow {
+  return {
+    key: readText(row.key),
+    label: readText(row.label),
+    value: row.value ?? {},
+    notes: optionalText(row.notes),
+    updatedAt: optionalText(row.updated_at),
+  };
+}
+
+async function loadRuntimePolicySettings(runtimeDb: any): Promise<PolicySettings> {
+  const { data, error } = await runtimeDb.from("policy_settings").select("*");
+  if (error) {
+    if (isMissingRelationError(error)) return DEFAULT_POLICY_SETTINGS;
+    throw new Error(error.message);
+  }
+  return mergePolicySettings((data ?? []).map((row: DbRow) => mapPolicySettingRow(row)));
 }
 
 function mapStaffMessageRow(row: DbRow) {
@@ -307,8 +353,22 @@ function mapCarryoverProfileRow(row: DbRow) {
   };
 }
 
-function mapCarryoverLoanRow(row: DbRow) {
-  return {
+function normalizeCarryoverStatus(value: unknown) {
+  return value === "closed" || value === "defaulted" || value === "active" ? value : "active";
+}
+
+function mapCarryoverLoanRow(
+  row: DbRow,
+  options?: {
+    paidToDate?: number;
+    deriveStatus?: boolean;
+    settings?: PolicySettings;
+    asOfDate?: string;
+  },
+) {
+  const loanCycleNumber = Math.max(1, Math.floor(readNumber(row.loan_cycle_number)));
+  const paidToDate = options?.paidToDate ?? readNumber(row.paid_to_date);
+  const loan = {
     id: readText(row.id),
     memberId: readText(row.member_id),
     label: readText(row.label) || "Legacy loan",
@@ -318,7 +378,7 @@ function mapCarryoverLoanRow(row: DbRow) {
       readText(row.loan_kind) === "service"
         ? (readText(row.loan_kind) as "fuel" | "stock" | "service")
         : "financial",
-    loanCycleNumber: Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
+    loanCycleNumber,
     principal: readNumber(row.principal),
     interestRatePct: readNumber(row.interest_rate_pct),
     termDays: Math.max(1, Math.floor(readNumber(row.term_days))),
@@ -326,15 +386,15 @@ function mapCarryoverLoanRow(row: DbRow) {
     startDate: readText(row.start_date),
     dueDate: optionalText(row.due_date),
     closedOn: optionalText(row.closed_on),
-    paidToDate: readNumber(row.paid_to_date),
-    status: readText(row.status) as "active" | "closed" | "defaulted",
+    paidToDate,
+    status: normalizeCarryoverStatus(readText(row.status)) as "active" | "closed" | "defaulted",
     finished: row.finished === true,
     penaltyWaivedAmount: readNumber(row.penalty_waived_amount),
     feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
       row.fee_breakdown && typeof row.fee_breakdown === "object"
         ? (row.fee_breakdown as Record<string, unknown>)
         : {},
-      Math.max(1, Math.floor(readNumber(row.loan_cycle_number))),
+      loanCycleNumber,
     ),
     notes: optionalText(row.notes),
     createdBy: optionalText(row.created_by),
@@ -342,6 +402,81 @@ function mapCarryoverLoanRow(row: DbRow) {
     createdAt: optionalText(row.created_at),
     updatedAt: optionalText(row.updated_at),
   };
+  if (!options?.deriveStatus) return loan;
+
+  const asOfDate = options.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const summary = summarizeLegacyCarryoverLoan(
+    loan,
+    options.settings ?? DEFAULT_POLICY_SETTINGS,
+    asOfDate,
+  );
+  const status =
+    summary.totalOwedNow <= 0
+      ? "closed"
+      : summary.dueDate < asOfDate || loan.status === "defaulted"
+        ? "defaulted"
+        : "active";
+
+  return {
+    ...loan,
+    status,
+    finished: status === "closed",
+    closedOn: status === "closed" ? (loan.closedOn ?? summary.dueDate) : undefined,
+  };
+}
+
+async function listCarryoverRepaymentLedgerRows(runtimeDb: any, memberIds: string[]) {
+  const uniqueMemberIds = Array.from(new Set(memberIds.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueMemberIds.length === 0) {
+    return { transactions: [] as DbRow[], allocations: [] as DbRow[] };
+  }
+
+  const transactions = await fetchAllRows<DbRow>(() =>
+    runtimeDb
+      .from("transactions")
+      .select("id, member_id, loan_id, type, amount, note, date, created_at")
+      .in("member_id", uniqueMemberIds)
+      .order("created_at", { ascending: true }),
+  );
+
+  let allocations: DbRow[] = [];
+  try {
+    allocations = await fetchAllRows<DbRow>(() =>
+      runtimeDb
+        .from("mpesa_receipt_allocations")
+        .select("id, member_id, loan_id, transaction_id, allocation_type, amount, note, created_at")
+        .in("member_id", uniqueMemberIds)
+        .eq("allocation_type", "carryover_loan_repayment")
+        .order("created_at", { ascending: true }),
+    );
+  } catch (error: any) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+
+  return { transactions, allocations };
+}
+
+async function mapCarryoverLoanRowsWithLedger(runtimeDb: any, rows: DbRow[]) {
+  const memberIds = rows.map((row) => readText(row.member_id)).filter(Boolean);
+  const [settings, ledger] = await Promise.all([
+    loadRuntimePolicySettings(runtimeDb),
+    listCarryoverRepaymentLedgerRows(runtimeDb, memberIds),
+  ]);
+  const paidByLoanId = deriveCarryoverPaidToDateByLoan({
+    loans: rows.map((row) => ({ id: readText(row.id), memberId: readText(row.member_id) })),
+    transactions: ledger.transactions,
+    allocations: ledger.allocations,
+  });
+
+  return rows.map((row) => {
+    const loanId = readText(row.id);
+    const hasLedgerPaid = paidByLoanId.has(loanId);
+    return mapCarryoverLoanRow(row, {
+      paidToDate: hasLedgerPaid ? (paidByLoanId.get(loanId) ?? 0) : undefined,
+      deriveStatus: hasLedgerPaid,
+      settings,
+    });
+  });
 }
 
 function mapReportSnapshotRow(row: DbRow) {
@@ -775,7 +910,9 @@ export const listLocomotiveBusinessWorkspace = createServerFn({ method: "GET" })
 
     return {
       actorMemberId: depositMemberId ?? "",
-      actorMember: actorMemberResult.error ? null : ((actorMemberResult.data ?? null) as DbRow | null),
+      actorMember: actorMemberResult.error
+        ? null
+        : ((actorMemberResult.data ?? null) as DbRow | null),
       selectedAdminStaffId: adminStaffFilter,
       selectedAdmin,
       locomotiveAdmins,
@@ -915,7 +1052,7 @@ export const loadMemberCarryover = createServerFn({ method: "POST" })
 
     return {
       profile: profileResult.data ? mapCarryoverProfileRow(profileResult.data as DbRow) : null,
-      loans: (loansResult.data ?? []).map((row: DbRow) => mapCarryoverLoanRow(row)),
+      loans: await mapCarryoverLoanRowsWithLedger(runtimeDb, (loansResult.data ?? []) as DbRow[]),
     };
   });
 
@@ -928,7 +1065,7 @@ export const listAllCarryoverLoans = createServerFn({ method: "POST" }).handler(
     .order("start_date", { ascending: false });
 
   if (error) throw new Error(error.message);
-  return (data ?? []).map((row: DbRow) => mapCarryoverLoanRow(row));
+  return mapCarryoverLoanRowsWithLedger(runtimeDb, (data ?? []) as DbRow[]);
 });
 
 export const listAllCarryoverProfiles = createServerFn({ method: "POST" }).handler(async () => {
@@ -960,7 +1097,7 @@ export const listPortalCarryoverLoans = createServerFn({ method: "POST" })
       .order("start_date", { ascending: false });
 
     if (error) throw new Error(error.message);
-    return (rows ?? []).map((row: DbRow) => mapCarryoverLoanRow(row));
+    return mapCarryoverLoanRowsWithLedger(runtimeDb, (rows ?? []) as DbRow[]);
   });
 
 export const listReportSnapshots = createServerFn({ method: "POST" }).handler(async () => {

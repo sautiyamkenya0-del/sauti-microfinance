@@ -4,10 +4,12 @@ import {
   fmtKES,
   loanPricingPreview,
   loanProductTypeForAmount,
+  nearestPremiumLoanAmountCoveredByUpfront,
   SBC_FEES,
   PREMIUM_LOAN_TERMS,
   STANDARD_LOAN_TERMS,
   termPeriodsFromDays,
+  upfrontRequirementForMemberAmount,
   type LoanChargeMode,
   type LoanKind,
 } from "@/lib/store";
@@ -119,11 +121,13 @@ export function RepeatApplication({
       interest: pricing.interest,
       total: pricing.totalRepayment,
       ded,
+      upfrontBase: upfrontRequirementForMemberAmount(requestedLoanAmount, member),
       net: pricing.netDisbursedAmount,
       financedPrincipal: pricing.financedPrincipal,
       daily: pricing.dailyInclusive,
       grandTotalCollected: pricing.grandTotalCollected,
       roundOffBasket: pricing.roundOff * pricing.termDays,
+      totalSavingsAccrued: pricing.totalSavingsAccrued,
     };
   }, [
     insuranceFeeMode,
@@ -139,9 +143,18 @@ export function RepeatApplication({
     processingFeeMode,
     repaymentDays,
     compliancePlan,
+    member,
   ]);
 
   if (!member) return <div className="text-sm text-muted-foreground">Select a member first.</div>;
+
+  const nearestCoveredPremium = nearestPremiumLoanAmountCoveredByUpfront(member);
+  const premiumUpfrontApplies = loanType === "premium" && loanKind !== "fuel";
+  const premiumUpfrontGap = premiumUpfrontApplies ? calc.upfrontBase.total : 0;
+  const premiumUpfrontMessage =
+    nearestCoveredPremium.amount > 0
+      ? `Nearest premium amount covered without more upfront is ${fmtKES(nearestCoveredPremium.amount)}.`
+      : "No premium band is currently covered without more upfront.";
 
   const submit = async () => {
     if (!confirmKYC || !confirmKin || !confirmGuar || !confirmBiz)
@@ -153,6 +166,11 @@ export function RepeatApplication({
     }
     if (loanKind === "fuel" && requestedLoanAmount <= 0) {
       return toast.error("Enter at least one fuel refill entry.");
+    }
+    if (premiumUpfrontGap > 0) {
+      return toast.error(
+        `Premium upfront still needed: savings ${fmtKES(calc.upfrontBase.savingsGap)}, shares ${fmtKES(calc.upfrontBase.sharesGap)}. ${premiumUpfrontMessage}`,
+      );
     }
     try {
       const applicationPayload = {
@@ -487,9 +505,30 @@ export function RepeatApplication({
               <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
               <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
               <Row label="Daily repayment (daily installment)" value={fmtKES(calc.daily)} />
+              <Row
+                label="Compliance collected after finish"
+                value={fmtKES(calc.totalSavingsAccrued)}
+              />
+              {premiumUpfrontApplies ? (
+                <>
+                  <Row label="Premium upfront due now" value={fmtKES(premiumUpfrontGap)} />
+                  <Row label="Shares still needed" value={fmtKES(calc.upfrontBase.sharesGap)} />
+                  <Row
+                    label="Compliance still needed"
+                    value={fmtKES(calc.upfrontBase.savingsGap)}
+                  />
+                </>
+              ) : null}
               <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
               <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
               <Row label="Period" value={`${calc.termDays} days`} />
+              {premiumUpfrontApplies ? (
+                <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  {premiumUpfrontGap > 0
+                    ? premiumUpfrontMessage
+                    : "Premium upfront threshold is met."}
+                </div>
+              ) : null}
             </div>
           </div>
         )}

@@ -73,6 +73,28 @@ export const DEFAULT_FEE_POLICIES: FeePolicy[] = [
     custom: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
+  {
+    key: "monthly_member_subscription",
+    label: "Monthly Member Subscription",
+    amount: 100,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "loan_holders",
+    custom: false,
+    notes: "Applies to members with active loan savings / loan accounts.",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    key: "annual_member_subscription",
+    label: "Annual Member Subscription",
+    amount: 100,
+    permanence: "permanent",
+    effectiveFrom: "2026-01-01",
+    scope: "loan_holders",
+    custom: false,
+    notes: "Applies annually to members with active loan savings / loan accounts.",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
 ];
 
 export function isFeeActive(p: FeePolicy): boolean {
@@ -123,6 +145,9 @@ export function normalizeFeePolicies(rows?: FeePolicy[] | null) {
         ? "financial_members"
         : row.key === "fuel_buffer"
           ? "locomotive_members"
+          : row.key === "monthly_member_subscription" ||
+              row.key === "annual_member_subscription"
+            ? "loan_holders"
           : row.scope;
     merged.set(row.key, {
       ...row,

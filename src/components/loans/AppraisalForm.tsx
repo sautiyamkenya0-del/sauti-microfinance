@@ -5,6 +5,48 @@ import { Input, Select, Snap, inputCss } from "./atoms";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+function daysBetween(from: string, to = new Date().toISOString().slice(0, 10)) {
+  const start = new Date(`${String(from).slice(0, 10)}T00:00:00Z`).getTime();
+  const end = new Date(`${to}T00:00:00Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.floor((end - start) / 86400000));
+}
+
+function clampScore(value: number, max: number) {
+  return Math.max(0, Math.min(max, Math.round(value)));
+}
+
+function premiumMultiplierForScore(score: number) {
+  if (score < 60) return 0;
+  if (score < 70) return 1;
+  if (score < 75) return 2;
+  if (score < 80) return 3;
+  if (score < 85) return 4;
+  if (score < 90) return 5;
+  if (score < 93) return 6;
+  if (score < 96) return 7;
+  if (score < 98) return 8;
+  if (score < 100) return 9;
+  return 10;
+}
+
+function businessMultiplierForScore(score: number) {
+  if (score < 50) return 0;
+  if (score < 60) return 1;
+  if (score < 70) return 2;
+  if (score < 80) return 3;
+  if (score < 90) return 4;
+  return 5;
+}
+
+function riskRatingForScore(score: number) {
+  if (score >= 90) return "Very Low Risk";
+  if (score >= 80) return "Low Risk";
+  if (score >= 70) return "Moderate Risk";
+  if (score >= 60) return "High Risk";
+  return "Very High Risk";
+}
+
 export function AppraisalForm({
   memberId: presetMember,
   loanId: presetLoan,
@@ -12,7 +54,7 @@ export function AppraisalForm({
   memberId?: string;
   loanId?: string;
 }) {
-  const { members, loans, currentUser, addAppraisal, appraisals } = useStore();
+  const { members, loans, transactions, currentUser, addAppraisal, appraisals } = useStore();
   const [memberId, setMemberId] = useState(presetMember ?? "");
   const [loanId, setLoanId] = useState(presetLoan ?? "");
   const [amountApplied, setAmountApplied] = useState(20000);
@@ -86,6 +128,169 @@ export function AppraisalForm({
 
   const member = members.find((m) => m.id === memberId);
   const memberLoans = member ? loans.filter((l) => l.memberId === member.id) : [];
+  const selectedLoan = loans.find((row) => row.id === loanId);
+  const multiplierAppraisal = useMemo(() => {
+    if (!member) return undefined;
+    const memberTransactions = transactions.filter((tx) => tx.memberId === member.id);
+    const today = new Date();
+    const eightWeeksAgo = new Date(today);
+    eightWeeksAgo.setDate(today.getDate() - 56);
+    const recentSavingsTx = memberTransactions.filter((tx) => {
+      const date = new Date(`${tx.date.slice(0, 10)}T00:00:00`);
+      return date >= eightWeeksAgo && (tx.type === "deposit" || tx.type === "withdrawal");
+    });
+    const weeklyNet = Array.from({ length: 8 }, (_, index) => {
+      const start = new Date(eightWeeksAgo);
+      start.setDate(eightWeeksAgo.getDate() + index * 7);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 7);
+      return recentSavingsTx.reduce((sum, tx) => {
+        const date = new Date(`${tx.date.slice(0, 10)}T00:00:00`);
+        if (date < start || date >= end) return sum;
+        return sum + (tx.type === "withdrawal" ? -tx.amount : tx.amount);
+      }, 0);
+    });
+    const activeLoans = memberLoans.filter((loan) => loan.status === "active");
+    const defaultedLoans = memberLoans.filter((loan) => loan.status === "defaulted");
+    const closedLoans = memberLoans.filter((loan) => loan.status === "closed");
+    const loanRepayments = memberTransactions.filter((tx) => tx.type === "loan_repayment");
+    const shareValue =
+      Math.max(0, member.shares) * 100 + Math.max(0, Number(member.shareReserveBalance ?? 0));
+    const complianceBalance = Math.max(0, member.savingsBalance);
+    const qualifiedSavings = Math.max(
+      0,
+      weeklyNet.reduce((sum, value) => sum + Math.max(0, value), 0) / 8,
+    );
+    const contributionConsistency =
+      weeklyNet.length > 0
+        ? (weeklyNet.filter((value) => value > 0).length / weeklyNet.length) * 100
+        : 0;
+    const membershipDays = daysBetween(member.joinedAt);
+    const repaymentSuccess =
+      memberLoans.length > 0 ? (closedLoans.length / memberLoans.length) * 100 : 100;
+    const onTimeRate =
+      loanRepayments.length > 0
+        ? Math.min(100, (loanRepayments.length / Math.max(loanTermDays, 1)) * 100)
+        : closedLoans.length > 0
+          ? 80
+          : 50;
+    const defaultSeverity =
+      defaultedLoans.length === 0
+        ? "No Default"
+        : defaultedLoans.length === 1
+          ? "Minor Default"
+          : defaultedLoans.length <= 3
+            ? "Major Default"
+            : "Chronic Default";
+    const monthlyNetIncome = Math.max(0, totalIncome - totalExpenses);
+    const debtServiceRatio =
+      monthlyNetIncome > 0 ? (proposedInstallment * 30) / monthlyNetIncome : 1;
+
+    const complianceScore = clampScore(
+      (complianceBalance >= 5000 ? 10 : (complianceBalance / 5000) * 10) +
+        (contributionConsistency / 100) * 10,
+      20,
+    );
+    const sharesScore = clampScore(shareValue >= 3000 ? 10 : (shareValue / 3000) * 10, 10);
+    const savingsScore = clampScore(
+      (qualifiedSavings >= 1000 ? 7 : (qualifiedSavings / 1000) * 7) +
+        (weeklyNet[7] >= weeklyNet[0] ? 3 : weeklyNet[7] >= qualifiedSavings ? 2 : 1),
+      10,
+    );
+    const performanceScore = clampScore((repaymentSuccess / 100) * 12 + (onTimeRate / 100) * 8, 20);
+    const defaultScore = clampScore(
+      defaultSeverity === "No Default"
+        ? 15
+        : defaultSeverity === "Minor Default"
+          ? 10
+          : defaultSeverity === "Major Default"
+            ? 5
+            : 0,
+      15,
+    );
+    const businessScore = clampScore(
+      (member.businessType ? 3 : 0) +
+        (member.businessName ? 2 : 0) +
+        (member.businessAddress ? 2 : 0) +
+        (debtServiceRatio <= 0.35 ? 3 : debtServiceRatio <= 0.5 ? 2 : debtServiceRatio <= 0.7 ? 1 : 0),
+      10,
+    );
+    const walletScore = clampScore(
+      Math.min(5, loanRepayments.length) +
+        Math.min(3, recentSavingsTx.length / 4) +
+        (member.status === "active" ? 2 : 0),
+      10,
+    );
+    const assetScore = 5;
+    const totalScore =
+      complianceScore +
+      sharesScore +
+      savingsScore +
+      performanceScore +
+      defaultScore +
+      businessScore +
+      walletScore +
+      assetScore;
+    const isPremium = amountApplied > 5000 || selectedLoan?.principal > 5000;
+    const multiplier = isPremium
+      ? premiumMultiplierForScore(totalScore)
+      : businessMultiplierForScore(totalScore);
+    const maxAmount = Math.floor(qualifiedSavings * multiplier);
+    const conditions = [
+      complianceBalance >= 5000 ? "" : "Increase compliance balance to KSh 5,000.",
+      shareValue >= 3000 ? "" : "Increase shares to KSh 3,000.",
+      contributionConsistency >= 100 ? "" : "Complete 8 weeks of consistent savings.",
+      defaultedLoans.length === 0 ? "" : "Clear active default before disbursement.",
+      maxAmount >= amountApplied ? "" : `Downsize request to ${fmtKES(maxAmount)}.`,
+    ].filter(Boolean);
+
+    return {
+      isPremium,
+      membershipDuration: `${Math.floor(membershipDays / 365)} years ${Math.floor((membershipDays % 365) / 30)} months`,
+      complianceBalance,
+      shareValue,
+      qualifiedSavings,
+      contributionConsistency,
+      repaymentSuccess,
+      onTimeRate,
+      activeLoans: activeLoans.length,
+      defaults: defaultedLoans.length,
+      defaultSeverity,
+      debtServiceRatio,
+      scores: {
+        complianceScore,
+        sharesScore,
+        savingsScore,
+        performanceScore,
+        defaultScore,
+        businessScore,
+        walletScore,
+        assetScore,
+      },
+      totalScore,
+      riskRating: riskRatingForScore(totalScore),
+      multiplier,
+      maxAmount,
+      recommendation:
+        multiplier <= 0 || conditions.length >= 3
+          ? "Declined"
+          : conditions.length > 0
+            ? "Conditionally Approved"
+            : "Approved",
+      recommendedTerm: `${loanTermDays} days`,
+      conditions,
+    };
+  }, [
+    amountApplied,
+    loanTermDays,
+    member,
+    memberLoans,
+    proposedInstallment,
+    selectedLoan?.principal,
+    totalExpenses,
+    totalIncome,
+    transactions,
+  ]);
   const pendingAppraisalLoans = useMemo(
     () =>
       loans.filter(
@@ -250,6 +455,78 @@ export function AppraisalForm({
           {member && <Snap label="Savings on file" v={fmtKES(member.savingsBalance)} />}
         </div>
       </Section>
+
+      {multiplierAppraisal ? (
+        <Section title="SBC Multiplier Appraisal (Auto)">
+          <div className="space-y-4 p-5">
+            <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-4">
+              <Snap label="Membership age" v={multiplierAppraisal.membershipDuration} />
+              <Snap label="Compliance balance" v={fmtKES(multiplierAppraisal.complianceBalance)} />
+              <Snap label="Share value" v={fmtKES(multiplierAppraisal.shareValue)} />
+              <Snap label="8-week qualified savings" v={fmtKES(multiplierAppraisal.qualifiedSavings)} />
+              <Snap
+                label="Consistency"
+                v={`${multiplierAppraisal.contributionConsistency.toFixed(1)}%`}
+              />
+              <Snap
+                label="Repayment success"
+                v={`${multiplierAppraisal.repaymentSuccess.toFixed(1)}%`}
+              />
+              <Snap label="Default status" v={multiplierAppraisal.defaultSeverity} />
+              <Snap
+                label="Debt service ratio"
+                v={`${(multiplierAppraisal.debtServiceRatio * 100).toFixed(1)}%`}
+              />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-4">
+              <ScoreSnap label="Compliance" value={multiplierAppraisal.scores.complianceScore} max={20} />
+              <ScoreSnap label="Shares" value={multiplierAppraisal.scores.sharesScore} max={10} />
+              <ScoreSnap label="Savings" value={multiplierAppraisal.scores.savingsScore} max={10} />
+              <ScoreSnap
+                label="Loan performance"
+                value={multiplierAppraisal.scores.performanceScore}
+                max={20}
+              />
+              <ScoreSnap label="Default history" value={multiplierAppraisal.scores.defaultScore} max={15} />
+              <ScoreSnap label="Business" value={multiplierAppraisal.scores.businessScore} max={10} />
+              <ScoreSnap label="Wallet" value={multiplierAppraisal.scores.walletScore} max={10} />
+              <ScoreSnap label="Asset security" value={multiplierAppraisal.scores.assetScore} max={5} />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-5">
+              <Snap label="Final score" v={`${multiplierAppraisal.totalScore}/100`} />
+              <Snap label="Risk rating" v={multiplierAppraisal.riskRating} />
+              <Snap label="Multiplier" v={`${multiplierAppraisal.multiplier}x`} />
+              <Snap label="Max amount" v={fmtKES(multiplierAppraisal.maxAmount)} />
+              <Snap label="Recommendation" v={multiplierAppraisal.recommendation} />
+            </div>
+
+            {multiplierAppraisal.conditions.length > 0 ? (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                {multiplierAppraisal.conditions.join(" ")}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setApprovedAmount(Math.min(amountApplied, multiplierAppraisal.maxAmount));
+                  setApprovedTerm(multiplierAppraisal.recommendedTerm);
+                  setSpecialConditions(multiplierAppraisal.conditions.join("\n"));
+                  setOfficerJustification(
+                    `Auto multiplier appraisal: ${multiplierAppraisal.totalScore}/100, ${multiplierAppraisal.riskRating}, ${multiplierAppraisal.multiplier}x.`,
+                  );
+                }}
+                className="rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+              >
+                Use recommendation
+              </button>
+            </div>
+          </div>
+        </Section>
+      ) : null}
 
       <Section title="2. Loan Details">
         <div className="p-5 grid md:grid-cols-3 gap-3">
@@ -442,6 +719,17 @@ export function AppraisalForm({
         </button>
       </div>
       <style>{inputCss}</style>
+    </div>
+  );
+}
+
+function ScoreSnap({ label, value, max }: { label: string; value: number; max: number }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-3">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold text-foreground">
+        {value}/{max}
+      </div>
     </div>
   );
 }

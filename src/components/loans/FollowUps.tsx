@@ -2,6 +2,7 @@ import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
   createStaffMemoRecord,
   freezeLoanFollowupRecord,
+  unfreezeLoanFollowupRecord,
   unwaiveLoanFollowupPenaltyRecord,
   waiveLoanFollowupPenaltyRecord,
 } from "@/lib/app-data.functions";
@@ -52,6 +53,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
   const waiveLoanPenalty = useServerFn(waiveLoanFollowupPenaltyRecord);
   const unwaiveLoanPenalty = useServerFn(unwaiveLoanFollowupPenaltyRecord);
   const freezeLoan = useServerFn(freezeLoanFollowupRecord);
+  const unfreezeLoan = useServerFn(unfreezeLoanFollowupRecord);
   const [query, setQuery] = useState("");
 
   const items = useMemo(() => {
@@ -115,7 +117,11 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           autoStopped: summary.autoStopped,
           include:
             !isComplete &&
-            (l.status === "defaulted" || isOverdue || missedDailyAmount > 0 || penalties > 0),
+            (Boolean(l.frozenAt) ||
+              l.status === "defaulted" ||
+              isOverdue ||
+              missedDailyAmount > 0 ||
+              penalties > 0),
         };
       })
       .filter((x) => x.member && x.include);
@@ -155,7 +161,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           autoStopped: summary.autoStopped,
           include:
             !isComplete &&
-            (loan.status === "defaulted" ||
+            (Boolean(summary.frozenAsOf) ||
+              loan.status === "defaulted" ||
               isOverdue ||
               arrears > 0 ||
               summary.estimatedPenaltyNow > 0),
@@ -434,6 +441,28 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                         >
                           Stop Loan
                         </button>
+                        {frozen ? (
+                          <button
+                            onClick={async () => {
+                              const confirmed = window.confirm(
+                                `Resume penalty accrual for loan ${loan.id}? Penalties will recalculate from the current date context.`,
+                              );
+                              if (!confirmed) return;
+                              await unfreezeLoan({
+                                data: {
+                                  loanId: loan.id,
+                                  loanKind,
+                                  note: "Director resumed accrual from follow-ups",
+                                },
+                              });
+                              await reloadAppData();
+                              toast.success("Penalty accrual resumed.");
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border border-primary/50 px-3 py-1.5 text-primary hover:bg-primary/10"
+                          >
+                            Resume Penalties
+                          </button>
+                        ) : null}
                       </>
                     ) : null}
                   </div>

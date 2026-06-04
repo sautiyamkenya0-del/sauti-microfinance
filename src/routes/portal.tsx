@@ -45,6 +45,7 @@ import { downloadLetterheadHtml, LetterheadDocument } from "@/components/Letterh
 import type { Member } from "@/lib/store";
 import { useApprovalActions } from "@/lib/approvals";
 import { feePolicyAppliesToMember, isFeeActive, scopeLabel } from "@/lib/fees-policy";
+import { trueLoanStatus, trueLoanStatusLabel, trueLoanStatusTone } from "@/lib/loan-status";
 import { createMemberLoanApplicationRecord, listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   listClientNotices,
@@ -109,6 +110,13 @@ function receiptKey(value: unknown) {
   return String(value ?? "")
     .trim()
     .toUpperCase();
+}
+
+function numericInputValue(value: string) {
+  const next = value.replace(/[^\d.]/g, "");
+  const [whole, ...rest] = next.split(".");
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, "");
+  return rest.length > 0 ? `${normalizedWhole || "0"}.${rest.join("")}` : normalizedWhole;
 }
 
 function dedupeMemberTransactions<
@@ -1052,7 +1060,21 @@ function Portal() {
                   />
                   <StatCard
                     label="Active loans"
-                    value={`${myLoans.filter((l) => l.status === "active").length}`}
+                    value={`${
+                      myLoans.filter((loan) => {
+                        const summary = loanPenaltySummary(
+                          { ...loan, paid: displayLoanPaid(loan) },
+                          myUniqueTx,
+                        );
+                        return (
+                          trueLoanStatus({
+                            storedStatus: loan.status,
+                            balance: summary.totalOwedNow,
+                            dueDate: summary.dueDate,
+                          }) === "active"
+                        );
+                      }).length
+                    }`}
                     icon={<Banknote className="h-5 w-5" />}
                   />
                   <StatCard
@@ -1299,7 +1321,9 @@ function Portal() {
                               </div>
                               <Badge
                                 tone={
-                                  String(request.status ?? "").toLowerCase().includes("complete")
+                                  String(request.status ?? "")
+                                    .toLowerCase()
+                                    .includes("complete")
                                     ? "success"
                                     : "warning"
                                 }
@@ -1361,7 +1385,9 @@ function Portal() {
                           </select>
                           <input
                             value={loanRequestAmount}
-                            onChange={(event) => setLoanRequestAmount(event.target.value)}
+                            onChange={(event) =>
+                              setLoanRequestAmount(numericInputValue(event.target.value))
+                            }
                             placeholder="Amount"
                             type="number"
                             min={1}
@@ -1369,7 +1395,9 @@ function Portal() {
                           />
                           <input
                             value={loanRequestDays}
-                            onChange={(event) => setLoanRequestDays(event.target.value)}
+                            onChange={(event) =>
+                              setLoanRequestDays(numericInputValue(event.target.value))
+                            }
                             placeholder="Repayment days"
                             type="number"
                             min={1}
@@ -1748,6 +1776,11 @@ function Portal() {
                     const outstandingPen = loanPenalties
                       .filter((p) => p.status === "outstanding")
                       .reduce((s, p) => s + p.amount, 0);
+                    const displayStatus = trueLoanStatus({
+                      storedStatus: l.status,
+                      balance,
+                      dueDate: summary.dueDate,
+                    });
                     return (
                       <div
                         key={l.id}
@@ -1765,16 +1798,8 @@ function Portal() {
                               </div>
                             )}
                           </div>
-                          <Badge
-                            tone={
-                              l.status === "active"
-                                ? "warning"
-                                : l.status === "closed"
-                                  ? "success"
-                                  : "default"
-                            }
-                          >
-                            {l.status}
+                          <Badge tone={trueLoanStatusTone(displayStatus) as never}>
+                            {trueLoanStatusLabel(displayStatus)}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
@@ -1787,14 +1812,14 @@ function Portal() {
                           />
                           <Stat
                             label={
-                              l.status === "active"
+                              displayStatus === "active"
                                 ? `Daily required (${daysLeft}d left)`
                                 : "Daily required"
                             }
-                            value={l.status === "active" ? fmtKES(dailyDue) : "—"}
+                            value={displayStatus === "active" ? fmtKES(dailyDue) : "—"}
                           />
                         </div>
-                        {l.status === "active" ? (
+                        {displayStatus === "active" ? (
                           <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
                             <Stat
                               label="Loan part / day"
@@ -1844,7 +1869,8 @@ function Portal() {
                             )}
                           </div>
                         )}
-                        {!isStaffView && (l.status === "active" || l.status === "defaulted") ? (
+                        {!isStaffView &&
+                        (displayStatus === "active" || displayStatus === "defaulted") ? (
                           <button
                             type="button"
                             onClick={() =>
@@ -1865,7 +1891,12 @@ function Portal() {
                   })}
                   {myCarryoverLoans.map((loan) => {
                     const summary = summarizeLegacyCarryoverLoan(loan, policySettings);
-                    const balance = summary.balance;
+                    const balance = summary.totalOwedNow;
+                    const displayStatus = trueLoanStatus({
+                      storedStatus: loan.status,
+                      balance,
+                      dueDate: summary.dueDate,
+                    });
                     return (
                       <div
                         key={loan.id}
@@ -1882,16 +1913,8 @@ function Portal() {
                             </div>
                             <div className="text-xs text-muted-foreground mt-0.5">{loan.label}</div>
                           </div>
-                          <Badge
-                            tone={
-                              loan.status === "active"
-                                ? "warning"
-                                : loan.status === "closed"
-                                  ? "success"
-                                  : "destructive"
-                            }
-                          >
-                            {loan.status}
+                          <Badge tone={trueLoanStatusTone(displayStatus) as never}>
+                            {trueLoanStatusLabel(displayStatus)}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2 text-xs pt-1">
@@ -1940,7 +1963,9 @@ function Portal() {
                         </select>
                         <input
                           value={loanRequestAmount}
-                          onChange={(event) => setLoanRequestAmount(event.target.value)}
+                          onChange={(event) =>
+                            setLoanRequestAmount(numericInputValue(event.target.value))
+                          }
                           type="number"
                           min={1}
                           placeholder="Amount"
@@ -1948,7 +1973,9 @@ function Portal() {
                         />
                         <input
                           value={loanRequestDays}
-                          onChange={(event) => setLoanRequestDays(event.target.value)}
+                          onChange={(event) =>
+                            setLoanRequestDays(numericInputValue(event.target.value))
+                          }
                           type="number"
                           min={1}
                           placeholder="Days"

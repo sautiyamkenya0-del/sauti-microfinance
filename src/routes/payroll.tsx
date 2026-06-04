@@ -39,6 +39,7 @@ type PayrollPayment = {
   presentDays: number;
   payableAmount: number;
   paidAmount: number;
+  payoutMode?: "gross_payable" | "base_salary";
   status: string;
   requestedAt?: string;
   paidAt?: string;
@@ -67,6 +68,7 @@ function PayrollPage() {
   } | null>(null);
   const [savingStaffId, setSavingStaffId] = useState<string | null>(null);
   const [payingStaffId, setPayingStaffId] = useState<string | null>(null);
+  const [payoutMode, setPayoutMode] = useState<"gross_payable" | "base_salary">("gross_payable");
 
   const period = useMemo(() => payrollMonthWindow(month), [month]);
 
@@ -115,6 +117,7 @@ function PayrollPage() {
           start: period.start,
           end: period.end,
           alreadyPaid,
+          payoutMode,
         });
         const latestPayment = paymentsForMonth.find(
           (payment) => payment.staffId === staffMember.id,
@@ -126,10 +129,11 @@ function PayrollPage() {
           latestPayment,
         };
       }),
-    [attendance, paymentsForMonth, period.end, period.start, profiles, staff],
+    [attendance, paymentsForMonth, payoutMode, period.end, period.start, profiles, staff],
   );
 
   const grossPayroll = rows.reduce((sum, row) => sum + row.payroll.grossPayable, 0);
+  const targetPayroll = rows.reduce((sum, row) => sum + row.payroll.targetPayable, 0);
   const outstandingPayroll = rows.reduce((sum, row) => sum + row.payroll.outstanding, 0);
 
   if (currentUser.role !== "director") return <Navigate to="/" />;
@@ -150,10 +154,15 @@ function PayrollPage() {
             icon={<DollarSign className="h-5 w-5" />}
           />
           <StatCard
-            label="Gross Payroll"
-            value={fmtKES(grossPayroll)}
+            label={payoutMode === "base_salary" ? "Base Salary Payroll" : "Gross Payroll"}
+            value={fmtKES(targetPayroll)}
             icon={<Wallet className="h-5 w-5" />}
             tone="accent"
+            hint={
+              payoutMode === "base_salary"
+                ? `Attendance gross ${fmtKES(grossPayroll)}`
+                : undefined
+            }
           />
           <StatCard
             label="Outstanding Payroll"
@@ -196,9 +205,24 @@ function PayrollPage() {
                 className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
               />
             </label>
-            <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground md:col-span-2">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Payout basis
+              </span>
+              <select
+                value={payoutMode}
+                onChange={(event) =>
+                  setPayoutMode(event.target.value as "gross_payable" | "base_salary")
+                }
+                className="mt-1 w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                <option value="gross_payable">Gross payable</option>
+                <option value="base_salary">Base salary</option>
+              </select>
+            </label>
+            <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
               Salaries are prorated by actual signed-in working days only. Sundays are excluded from
-              the divisor and from counted attendance days.
+              the divisor and from counted attendance days when gross payable is selected.
             </div>
           </div>
         </Section>
@@ -312,6 +336,7 @@ function PayrollPage() {
                                 data: {
                                   staffId: staffMember.id,
                                   month: period.month,
+                                  payoutMode,
                                 },
                               });
                               await refresh();

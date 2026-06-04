@@ -8,6 +8,7 @@ import {
   isMemberCategory,
   loanPricingPreview,
   memberNeedsSticker,
+  nearestPremiumLoanAmountCoveredByUpfront,
   normalizeLoanTermDaysForType,
   upfrontRequirementForMemberAmount,
   useStore,
@@ -150,6 +151,7 @@ export function Simulator() {
     ],
   );
   const baseUpfront = upfrontRequirementForMemberAmount(amount, selectedMember);
+  const nearestCoveredPremium = nearestPremiumLoanAmountCoveredByUpfront(selectedMember);
 
   const dueDates = Array.from({ length: pricing.termDays }, (_, index) => {
     const dueDate = new Date(startDate);
@@ -383,6 +385,20 @@ export function Simulator() {
                 label="Pay Upfront Now"
                 value={fmtKES(baseUpfront.total + pricing.totalUpfrontCharges)}
                 sub="Tiered upfront + any charges marked upfront"
+              />
+              <Tile
+                label="Compliance Collected"
+                value={fmtKES(pricing.totalSavingsAccrued)}
+                sub={`After loan finish over ${pricing.termDays} day(s)`}
+              />
+              <Tile
+                label="Nearest Covered Premium"
+                value={nearestCoveredPremium.amount > 0 ? fmtKES(nearestCoveredPremium.amount) : "None"}
+                sub={
+                  selectedMember
+                    ? `${fmtKES(nearestCoveredPremium.currentSavings)} compliance + ${fmtKES(nearestCoveredPremium.currentSharesValue)} shares`
+                    : "Select a member to test current thresholds"
+                }
               />
             </div>
 

@@ -8,6 +8,7 @@ import {
   loanPricingPreview,
   loanProductTypeForAmount,
   memberIsFuelMember,
+  nearestPremiumLoanAmountCoveredByUpfront,
   nextMembershipNumber,
   normalizeMembershipNumber,
   SBC_FEES,
@@ -272,7 +273,8 @@ export function FirstTimeApplication({
       fixedFeeRows: pricing.fixedFees.rows,
       fixedFeesUpfront: pricing.fixedFees.totalUpfront,
       fixedFeesFinanced: pricing.fixedFees.totalFinanced,
-      totalUpfrontNow: upfrontBase.total + pricing.totalUpfrontCharges,
+      totalUpfrontNow:
+        upfrontBase.total + pricing.totalUpfrontCharges + pricing.fixedFees.totalUpfront,
       netDisbursed: pricing.netDisbursedAmount,
       financedPrincipal: pricing.financedPrincipal,
       dailyPay: pricing.dailyInclusive,
@@ -280,6 +282,7 @@ export function FirstTimeApplication({
       roundOffBasket: pricing.roundOff * pricing.termDays,
       totalUpfrontCharges: pricing.totalUpfrontCharges,
       totalFinancedCharges: pricing.totalFinancedCharges,
+      totalSavingsAccrued: pricing.totalSavingsAccrued,
     };
   }, [
     cardFeeDue,
@@ -306,6 +309,16 @@ export function FirstTimeApplication({
     stickerApplicable,
     stickerFeeDue,
   ]);
+  const nearestCoveredPremium = useMemo(
+    () => nearestPremiumLoanAmountCoveredByUpfront(existing),
+    [existing],
+  );
+  const premiumUpfrontApplies = loanType === "premium" && !isFuelApplication;
+  const premiumUpfrontGap = premiumUpfrontApplies ? calc.upfrontBase.total : 0;
+  const premiumUpfrontMessage =
+    nearestCoveredPremium.amount > 0
+      ? `Nearest premium amount covered without more upfront is ${fmtKES(nearestCoveredPremium.amount)}.`
+      : "No premium band is currently covered without more upfront.";
 
   const submit = async () => {
     if (!f.fullName || !f.phone || requestedLoanAmount <= 0)
@@ -329,6 +342,11 @@ export function FirstTimeApplication({
     }
     if (f.loanKind === "fuel" && requestedLoanAmount <= 0) {
       return toast.error("Enter at least one fuel refill entry.");
+    }
+    if (premiumUpfrontGap > 0) {
+      return toast.error(
+        `Premium upfront still needed: savings ${fmtKES(calc.upfrontBase.savingsGap)}, shares ${fmtKES(calc.upfrontBase.sharesGap)}. ${premiumUpfrontMessage}`,
+      );
     }
     try {
       let mid = existing?.id ?? members.find((x) => x.phone === phone)?.id;
@@ -1095,6 +1113,10 @@ export function FirstTimeApplication({
               <Row label="Financed Principal" value={fmtKES(calc.financedPrincipal)} />
               <Row label="Total Repayable" value={fmtKES(calc.total)} bold />
               <Row label="Daily repayment (daily installment)" value={fmtKES(calc.dailyPay)} />
+              <Row
+                label="Compliance collected after finish"
+                value={fmtKES(calc.totalSavingsAccrued)}
+              />
               <Row label="Grand Total Collected" value={fmtKES(calc.grandTotalCollected)} />
               <Row label="Round-off Basket" value={fmtKES(calc.roundOffBasket)} />
               <Row label="Repayment Period" value={`${calc.termDays} days`} />
@@ -1127,6 +1149,13 @@ export function FirstTimeApplication({
                     Processing upfront {fmtKES(calc.ded.processingUpfront)} · Insurance upfront{" "}
                     {fmtKES(calc.ded.insuranceUpfront)}
                   </div>
+                  {premiumUpfrontApplies ? (
+                    <div className="mt-2 rounded-md border border-border bg-background/60 px-2 py-1.5 text-muted-foreground">
+                      {premiumUpfrontGap > 0
+                        ? premiumUpfrontMessage
+                        : "Premium upfront threshold is met."}
+                    </div>
+                  ) : null}
                   <div className="mt-2 text-muted-foreground">
                     Sticker fee is only added when the business setup is marked permanent and the
                     member is not a locomotive fuel member.

@@ -477,6 +477,10 @@ function PolicyCenterPage() {
   const cardAmount = feeRows.find((fee) => fee.key === "card")?.amount ?? 0;
   const stickerAmount = feeRows.find((fee) => fee.key === "sticker")?.amount ?? 0;
   const fuelBufferFeeAmount = feeRows.find((fee) => fee.key === "fuel_buffer")?.amount ?? 0;
+  const monthlySubscriptionAmount =
+    feeRows.find((fee) => fee.key === "monthly_member_subscription")?.amount ?? 0;
+  const annualSubscriptionAmount =
+    feeRows.find((fee) => fee.key === "annual_member_subscription")?.amount ?? 0;
   const filteredClients = memberAccounts.filter((member) => {
     const q = clientQuery.trim().toLowerCase();
     if (!q) return true;
@@ -557,7 +561,6 @@ function PolicyCenterPage() {
   );
   const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
     guidedLoanEntries,
-    lifetimeNetAvailableForCarryover,
     policySettings,
     todayIso,
   );
@@ -588,8 +591,7 @@ function PolicyCenterPage() {
     openCarryoverLoanSummaries.length > 0 ||
     guidedLoanEntries.length > 0 ||
     guidedOpenLoanSummaries.length > 0
-      ? guidedClosedLoanSummaries.reduce((sum, row) => sum + row.summary.totalRepayment, 0) +
-        guidedOpenLoanSummaries.reduce((sum, row) => sum + row.loan.paidToDate, 0)
+      ? derivedGuidedLoanRows.reduce((sum, row) => sum + row.loan.paidToDate, 0)
       : carryoverProfile.loanRepaymentsTotal;
   const effectiveCarryoverSavingsBalance = Math.max(
     carryoverProfile.savingsBalance,
@@ -901,7 +903,9 @@ function PolicyCenterPage() {
     if (!editingFee.label.trim()) return toast.error("Label required.");
     if (editingFee.amount < 0) return toast.error("Amount must be 0 or more.");
     if (!isCoreFeePolicy(editingFee)) {
-      return toast.error("Only membership, card, sticker, and fuel buffer fees are managed here.");
+      return toast.error(
+        "Only membership, card, sticker, fuel buffer, monthly, and annual fees are managed here.",
+      );
     }
     const nextFee = {
       ...editingFee,
@@ -911,6 +915,9 @@ function PolicyCenterPage() {
           ? "locomotive_members"
           : editingFee.key === "sticker"
             ? "financial_members"
+            : editingFee.key === "monthly_member_subscription" ||
+                editingFee.key === "annual_member_subscription"
+              ? "loan_holders"
             : editingFee.scope,
     } satisfies FeePolicy;
     if (nextFee.scope === "selected_members" && (nextFee.selectedMemberIds?.length ?? 0) === 0) {
@@ -1532,11 +1539,13 @@ function PolicyCenterPage() {
         {tab === "fees" && (
           <>
             <Section title="Mandatory fee heads">
-              <div className="grid gap-4 p-5 md:grid-cols-4">
+              <div className="grid gap-4 p-5 md:grid-cols-6">
                 <StatCard label="Membership" value={fmtKES(membershipAmount)} />
                 <StatCard label="Card" value={fmtKES(cardAmount)} />
                 <StatCard label="Sticker (financial)" value={fmtKES(stickerAmount)} />
                 <StatCard label="Fuel buffer (locomotive)" value={fmtKES(fuelBufferFeeAmount)} />
+                <StatCard label="Monthly (loan holders)" value={fmtKES(monthlySubscriptionAmount)} />
+                <StatCard label="Annual (loan holders)" value={fmtKES(annualSubscriptionAmount)} />
               </div>
               <div className="overflow-x-auto border-t border-border">
                 <table className="w-full text-sm">
@@ -1682,7 +1691,12 @@ function PolicyCenterPage() {
                         })
                       }
                       className="input"
-                      disabled={editingFee.key === "fuel_buffer" || editingFee.key === "sticker"}
+                      disabled={
+                        editingFee.key === "fuel_buffer" ||
+                        editingFee.key === "sticker" ||
+                        editingFee.key === "monthly_member_subscription" ||
+                        editingFee.key === "annual_member_subscription"
+                      }
                     >
                       {SCOPES.map((scope) => (
                         <option key={scope} value={scope}>
@@ -1698,6 +1712,12 @@ function PolicyCenterPage() {
                     {editingFee.key === "sticker" ? (
                       <div className="mt-1 text-xs text-muted-foreground">
                         Sticker fee is fixed to financial members.
+                      </div>
+                    ) : null}
+                    {editingFee.key === "monthly_member_subscription" ||
+                    editingFee.key === "annual_member_subscription" ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        This fee is fixed to members with active loan accounts.
                       </div>
                     ) : null}
                   </Field>
@@ -4854,7 +4874,14 @@ function blankFee(): FeePolicy {
 }
 
 function isCoreFeePolicy(fee: Pick<FeePolicy, "key">) {
-  return ["membership", "card", "sticker", "fuel_buffer"].includes(fee.key);
+  return [
+    "membership",
+    "card",
+    "sticker",
+    "fuel_buffer",
+    "monthly_member_subscription",
+    "annual_member_subscription",
+  ].includes(fee.key);
 }
 
 function blankServiceDraft(): ServiceDraft {
@@ -5154,26 +5181,8 @@ function resizeGuidedCarryoverLoans(
   });
 }
 
-function applyDerivedCarryoverPayments(
-  loans: LegacyCarryoverLoan[],
-  availableCollected: number,
-  policySettings: Parameters<typeof summarizeLegacyCarryoverLoan>[1],
-) {
-  let remaining = Math.max(0, Number(availableCollected) || 0);
-  return loans.map((loan) => {
-    const summary = summarizeLegacyCarryoverLoan({ ...loan, paidToDate: 0 }, policySettings);
-    const paidToDate = Math.min(remaining, summary.totalExpectedCollected);
-    remaining = Math.max(0, remaining - paidToDate);
-    return {
-      ...loan,
-      paidToDate,
-    };
-  });
-}
-
 function deriveGuidedCarryoverLoanRows(
   loans: LegacyCarryoverLoan[],
-  availableCollected: number,
   policySettings: Parameters<typeof summarizeLegacyCarryoverLoan>[1],
   asOfDate: string,
 ) {
@@ -5185,7 +5194,6 @@ function deriveGuidedCarryoverLoanRows(
       status: "closed" | "defaulted" | "active";
     }
   >();
-  let remaining = Math.max(0, Number(availableCollected) || 0);
   const sortedLoans = loans
     .map((loan, index) => ({ loan, index }))
     .sort((left, right) => {
@@ -5197,14 +5205,7 @@ function deriveGuidedCarryoverLoanRows(
     });
 
   sortedLoans.forEach(({ loan, index }) => {
-    const unpaidSummary = summarizeLegacyCarryoverLoan(
-      { ...loan, paidToDate: 0 },
-      policySettings,
-      asOfDate,
-    );
-    const paidToDate = Math.min(remaining, unpaidSummary.totalExpectedCollected);
-    remaining = Math.max(0, remaining - paidToDate);
-    const paidLoan = { ...loan, paidToDate };
+    const paidLoan = { ...loan, paidToDate: Math.max(0, Number(loan.paidToDate) || 0) };
     const summary = summarizeLegacyCarryoverLoan(paidLoan, policySettings, asOfDate);
     const status =
       summary.totalOwedNow <= 0
@@ -5859,7 +5860,7 @@ function GuidedCarryoverLoanCard({
                 className="input"
               />
             </Field>
-            <NumberField label="Paid from lifetime net" value={loan.paidToDate} readOnly />
+            <NumberField label="Paid from transaction ledger" value={loan.paidToDate} readOnly />
             <NumberField
               label="Penalty waived"
               value={loan.penaltyWaivedAmount}

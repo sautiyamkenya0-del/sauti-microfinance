@@ -1856,7 +1856,7 @@ export const SBC_UPFRONT_TABLE: SbcUpfrontTier[] = [
 
 export function upfrontTierForAmount(amount: number) {
   const normalized = Number(amount ?? 0);
-  if (normalized <= 0) return undefined;
+  if (normalized <= 5000) return undefined;
   const directMatch = SBC_UPFRONT_TABLE.find(
     (tier) => normalized >= tier.min && normalized <= tier.max,
   );
@@ -1898,6 +1898,25 @@ export function upfrontRequirementForMemberAmount(
     sharesGap,
     total: savingsGap + sharesGap,
     originalTotal: base.total,
+  };
+}
+
+export function nearestPremiumLoanAmountCoveredByUpfront(
+  member?: Pick<Member, "savingsBalance" | "shares" | "shareReserveBalance"> | null,
+) {
+  const currentSavings = Math.max(0, Number(member?.savingsBalance ?? 0));
+  const currentSharesValue =
+    Math.max(0, Number(member?.shares ?? 0)) * SHARE_PRICE +
+    Math.max(0, Number(member?.shareReserveBalance ?? 0));
+  const covered = SBC_UPFRONT_TABLE.filter(
+    (tier) => currentSharesValue >= tier.minShares && currentSavings >= tier.minSavings,
+  ).at(-1);
+
+  return {
+    amount: covered?.max ?? 0,
+    tier: covered,
+    currentSavings,
+    currentSharesValue,
   };
 }
 

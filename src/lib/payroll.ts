@@ -52,18 +52,23 @@ export function payableSalaryFromAttendance(args: {
   start: string;
   end: string;
   alreadyPaid?: number;
+  payoutMode?: "gross_payable" | "base_salary";
 }) {
   const baseSalary = Math.max(0, Number(args.baseSalary ?? 0));
   const workDays = workingDaysExcludingSundays(args.start, args.end);
   const presentDays = attendedWorkingDays(args.rows, args.staffId, args.start, args.end);
   const grossPayable = workDays > 0 ? Math.round((baseSalary * presentDays) / workDays) : 0;
+  const payoutMode = args.payoutMode === "base_salary" ? "base_salary" : "gross_payable";
+  const targetPayable = payoutMode === "base_salary" ? baseSalary : grossPayable;
   const alreadyPaid = Math.max(0, Number(args.alreadyPaid ?? 0));
   return {
     workDays,
     presentDays,
     grossPayable,
+    targetPayable,
+    payoutMode,
     alreadyPaid,
-    outstanding: Math.max(0, grossPayable - alreadyPaid),
+    outstanding: Math.max(0, targetPayable - alreadyPaid),
   };
 }
 

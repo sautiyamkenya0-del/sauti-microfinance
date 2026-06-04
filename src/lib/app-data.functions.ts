@@ -42,6 +42,7 @@ import {
   type PolicySettings,
 } from "@/lib/policy-settings";
 import {
+  deriveCarryoverPaidToDateByLoan,
   normalizeLegacyCarryoverLoanFeeBreakdown,
   summarizeLegacyCarryoverLoan,
 } from "@/lib/legacy-finance";
@@ -906,6 +907,49 @@ async function assertNoDuplicateOpenLoanKind(
 ) {
   const loanKind = normalizeLoanKindValue(args.loanKind);
   const policySettings = await loadRuntimePolicySettings(supabaseAdmin);
+  const { data: defaultedLiveData, error: defaultedLiveError } = await (supabaseAdmin as any)
+    .from("loans")
+    .select(
+      "id, status, principal, approved_amount, financed_principal_amount, rate, term_days, term_months, paid, loan_kind, supplier_payload, processing_fee_amount, penalty_waived_amount, start_date, frozen_at",
+    )
+    .eq("member_id", args.memberId)
+    .eq("status", "defaulted")
+    .limit(50);
+  if (defaultedLiveError) throw new Error(defaultedLiveError.message);
+  for (const defaultedLoan of (defaultedLiveData ?? []) as Record<string, unknown>[]) {
+    if (args.excludeLoanId && String(defaultedLoan.id ?? "") === args.excludeLoanId) continue;
+    const summary = await liveLoanAccountingSummary(
+      supabaseAdmin,
+      defaultedLoan as Record<string, any>,
+      policySettings,
+    );
+    if (summary.totalOwedNow > 0) {
+      throw new Error(
+        `This member has defaulted loan ${defaultedLoan.id}. Clear the defaulted balance before creating or approving another loan.`,
+      );
+    }
+  }
+
+  const { data: defaultedCarryoverData, error: defaultedCarryoverError } = await (
+    supabaseAdmin as any
+  )
+    .from("member_carryover_loans")
+    .select("*")
+    .eq("member_id", args.memberId)
+    .eq("status", "defaulted")
+    .eq("finished", false)
+    .limit(50);
+  if (defaultedCarryoverError) throw new Error(defaultedCarryoverError.message);
+  for (const defaultedLoan of (defaultedCarryoverData ?? []) as Record<string, unknown>[]) {
+    if (args.excludeLoanId && String(defaultedLoan.id ?? "") === args.excludeLoanId) continue;
+    const summary = carryoverLoanBalanceSummary(defaultedLoan, policySettings);
+    if (summary.balance > 0) {
+      throw new Error(
+        `This member has defaulted carryover loan ${defaultedLoan.id}. Clear the defaulted balance before creating or approving another loan.`,
+      );
+    }
+  }
+
   let query = (supabaseAdmin as any)
     .from("loans")
     .select(
@@ -1927,7 +1971,8 @@ export async function applyMpesaPaymentToDatabase(args: {
     paymentDate = paymentCreatedAt ? paymentCreatedAt.slice(0, 10) : paymentDate;
     const raw = asJsonObject(event?.raw);
     const stkCallback = asJsonObject(asJsonObject(raw.Body).stkCallback);
-    checkoutRequestId = String(stkCallback.CheckoutRequestID ?? raw.CheckoutRequestID ?? "").trim() || undefined;
+    checkoutRequestId =
+      String(stkCallback.CheckoutRequestID ?? raw.CheckoutRequestID ?? "").trim() || undefined;
     if (!norm || amount <= 0) {
       // If there's no account but a positive amount, create an unallocated ledger row
       if (!norm && amount > 0) {
@@ -2274,9 +2319,7 @@ export async function applyMpesaPaymentToDatabase(args: {
       checkoutRequestId,
     }));
   const useNormalWaterfallForLocomotiveAdminSelfPayment =
-    isLocomotiveAdminSelfMember &&
-    !targetedDocket &&
-    !hasExpectedLocomotiveWalletPrompt;
+    isLocomotiveAdminSelfMember && !targetedDocket && !hasExpectedLocomotiveWalletPrompt;
 
   const { data: outstandingPenalties, error: penaltiesError } = await supabaseAdmin
     .from("penalties")
@@ -2407,6 +2450,45 @@ export async function applyMpesaPaymentToDatabase(args: {
       required: memberNeedsStickerRow(member) && feeApplies("sticker"),
     },
   };
+  const periodFeePolicies = [
+    {
+      key: "monthly_member_subscription",
+      label: "Monthly member subscription",
+      period: paymentDate.slice(0, 7),
+      allocationType: "monthly_member_subscription",
+    },
+    {
+      key: "annual_member_subscription",
+      label: "Annual member subscription",
+      period: paymentDate.slice(0, 4),
+      allocationType: "annual_member_subscription",
+    },
+  ]
+    .map((row) => ({
+      ...row,
+      amount: feeApplies(row.key) ? feePolicyAmount(normalizedFeePolicies, row.key, 0) : 0,
+      required: feeApplies(row.key),
+      note: `${row.label} ${row.period} (auto)`,
+    }))
+    .filter((row) => row.required && row.amount > 0);
+  const periodFeeNotes =
+    periodFeePolicies.length > 0
+      ? await Promise.all(
+          periodFeePolicies.map(async (fee) => {
+            const { data, error } = await supabaseAdmin
+              .from("transactions")
+              .select("id")
+              .eq("member_id", memberId)
+              .eq("type", "fee_payment")
+              .eq("note", fee.note)
+              .limit(1);
+            if (error) throw new Error(error.message);
+            return [fee.key, (data ?? []).length > 0] as const;
+          }),
+        )
+      : [];
+  const periodFeePaidByKey = new Map(periodFeeNotes);
+  const periodFeesDue = periodFeePolicies.filter((fee) => !periodFeePaidByKey.get(fee.key));
 
   const scenario = hasOpenLoan ? "member_with_loan" : "member_without_loan";
   const waterfall = waterfallRuleForScenario(scenario, policySettings).steps;
@@ -2597,6 +2679,32 @@ export async function applyMpesaPaymentToDatabase(args: {
       "purpose_pool",
     );
     notes.push(`Routed ${amount}/= into the internal purpose pool (${reason}).`);
+  }
+
+  function allocatePeriodSubscriptionFees() {
+    for (const fee of periodFeesDue) {
+      if (remaining <= 0) break;
+      if (remaining < fee.amount) continue;
+      remaining = roundMoney(remaining - fee.amount);
+      setPrimaryIfMissing("fee_payment", fee.amount, `${fee.label} via Paybill ${norm}`);
+      queueTransaction(
+        {
+          date: paymentDate,
+          created_at: paymentCreatedAt ?? null,
+          type: "fee_payment",
+          amount: fee.amount,
+          member_id: memberId,
+          by_staff: MPESA_SYSTEM_STAFF_ID,
+          ref: args.mpesaRef,
+          account: norm,
+          payer_name: args.payerName,
+          note: fee.note,
+        },
+        fee.allocationType,
+      );
+      periodFeePaidByKey.set(fee.key, true);
+      notes.push(`Paid ${fee.label} for ${fee.period} - ${fee.amount}/=.`);
+    }
   }
 
   function allocatePostComplianceSplit(applied: number, reason: string) {
@@ -3075,6 +3183,8 @@ export async function applyMpesaPaymentToDatabase(args: {
       notes,
     };
   }
+
+  if (hasOpenLoan) allocatePeriodSubscriptionFees();
 
   if (hasDefaultedLoan) {
     const overflow = await applyLoanRepayment(remaining);
@@ -6440,11 +6550,7 @@ async function createPendingLocomotiveBusinessWalletPrompt(args: {
   note?: string;
 }) {
   const actor = await requireStaffActor();
-  if (
-    actor.role !== "locomotive_admin" &&
-    actor.role !== "director" &&
-    actor.role !== "manager"
-  ) {
+  if (actor.role !== "locomotive_admin" && actor.role !== "director" && actor.role !== "manager") {
     throw new Error("Only locomotive admins and management can create wallet prompts.");
   }
   if (!args.beneficiaryMemberId) throw new Error("Select the member being prompted.");
@@ -7144,9 +7250,6 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_months: termMonths,
       term_days: termDays,
-      daily_savings_amount: supplierBacked
-        ? 0
-        : dailyComplianceAmountForLoan(netAmount ?? data.principal, data.dailySavingsAmount),
       start_date: collectionStartDate,
       status: data.status as never,
       officer_id: officerId,
@@ -7895,7 +7998,9 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         excludeLoanId: data.loanId,
       });
       if (!appraisal && !hasPriorMemberAppraisal) {
-        throw new Error("This member has no appraisal history. Complete appraisal before approval.");
+        throw new Error(
+          "This member has no appraisal history. Complete appraisal before approval.",
+        );
       }
       if (String(appraisal?.decision ?? "").toLowerCase() === "reject") {
         throw new Error(
@@ -7951,10 +8056,6 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
       supplierPayload: asJsonObject(loan.supplier_payload),
       settings: policySettings,
     });
-    const dailySavingsAmount =
-      loanKind === "financial"
-        ? dailyComplianceAmountForLoan(approvedAmount, loan.daily_savings_amount)
-        : 0;
     if (loanKind !== "financial") {
       const { error } = await supabaseAdmin
         .from("loans")
@@ -7963,7 +8064,6 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
           financed_principal_amount: pricing.financedPrincipal,
           term_days: pricing.termDays,
           term_months: pricing.termMonths,
-          daily_savings_amount: 0,
           net_disbursed_amount: 0,
           processing_fee_amount: 0,
           insurance_fee_amount: 0,
@@ -8064,7 +8164,6 @@ export const reviewLoanRecord = createServerFn({ method: "POST" })
         transaction_fee_amount: pricing.transactionFee,
         term_days: pricing.termDays,
         term_months: pricing.termMonths,
-        daily_savings_amount: dailySavingsAmount,
         processing_fee_mode: loan.processing_fee_mode === "upfront" ? "upfront" : "financed",
         insurance_fee_mode: loan.insurance_fee_mode === "upfront" ? "upfront" : "financed",
         rate: pricing.ratePct,
@@ -8240,9 +8339,6 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_days: termDays,
       term_months: termMonths,
-      daily_savings_amount: supplierBacked
-        ? 0
-        : dailyComplianceAmountForLoan(approvedAmount, data.dailySavingsAmount ?? existingLoan.daily_savings_amount),
       start_date: data.startDate ?? existingLoan.start_date,
       paid: data.paid ?? Number(existingLoan.paid ?? 0),
       purpose: data.purpose ?? existingLoan.purpose ?? null,
@@ -13649,6 +13745,72 @@ export const freezeLoanFollowupRecord = createServerFn({ method: "POST" })
     return { ok: true, frozenAt };
   });
 
+export const unfreezeLoanFollowupRecord = createServerFn({ method: "POST" })
+  .inputValidator((data: { loanId: string; loanKind?: "live" | "carryover"; note?: string }) => ({
+    loanId: String(data?.loanId ?? "").trim(),
+    loanKind: data?.loanKind === "carryover" ? "carryover" : "live",
+    note: data?.note?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const actor = await requireDirectorActor();
+    if (!data.loanId) throw new Error("Loan id is required.");
+
+    const runtimeDb = (await requireSupabaseAdmin()) as any;
+    const resumedAt = new Date().toISOString().slice(0, 10);
+    if (data.loanKind === "carryover") {
+      const { data: loan, error } = await runtimeDb
+        .from("member_carryover_loans")
+        .select("*")
+        .eq("id", data.loanId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!loan) throw new Error("Carryover loan not found.");
+      const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+        asJsonObject(loan.fee_breakdown),
+        Math.max(1, Math.floor(toNumber(loan.loan_cycle_number) || 1)),
+      );
+      const productMeta = { ...(feeBreakdown.productMeta ?? {}) };
+      delete productMeta.frozenAsOf;
+      delete productMeta.frozenBy;
+      delete productMeta.frozenNote;
+
+      const { error: updateError } = await runtimeDb
+        .from("member_carryover_loans")
+        .update({
+          fee_breakdown: {
+            ...feeBreakdown,
+            productMeta: {
+              ...productMeta,
+              resumedPenaltyAt: resumedAt,
+              resumedPenaltyBy: actor.id,
+              resumedPenaltyNote: data.note ?? null,
+            },
+          },
+          notes: [
+            loan.notes,
+            `Penalty accrual resumed by ${actor.name} on ${resumedAt}${data.note ? ` - ${data.note}` : ""}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          updated_by: actor.id,
+        })
+        .eq("id", data.loanId);
+      if (updateError) throw new Error(updateError.message);
+      await refreshCarryoverMemberSummary(runtimeDb, loan.member_id);
+      return { ok: true, resumedAt };
+    }
+
+    const { error: updateError } = await runtimeDb
+      .from("loans")
+      .update({
+        frozen_at: null,
+        frozen_note: data.note ?? null,
+      })
+      .eq("id", data.loanId);
+    if (updateError) throw new Error(updateError.message);
+    return { ok: true, resumedAt };
+  });
+
 export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).handler(async () => {
   const actor = await requireDirectorActor();
   const runtimeDb = (await requireSupabaseAdmin()) as any;
@@ -13657,28 +13819,33 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     loadRuntimeFeePolicies(runtimeDb),
   ]);
 
-  const [members, transactions, liveLoans, carryoverLoans, carryoverProfiles] = await Promise.all([
-    fetchAllRows<Record<string, unknown>>(() =>
-      runtimeDb
-        .from("members")
-        .select(
-          "id, old_system_id, savings_balance, shares, share_reserve_balance, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid",
-        ),
-    ),
-    fetchAllRows<Record<string, unknown>>(() =>
-      runtimeDb
-        .from("transactions")
-        .select("id, member_id, loan_id, account, date, created_at, type, amount")
-        .order("date", { ascending: true }),
-    ),
-    fetchAllRows<Record<string, unknown>>(() => runtimeDb.from("loans").select("*")),
-    fetchAllRows<Record<string, unknown>>(() =>
-      runtimeDb.from("member_carryover_loans").select("*").order("start_date", { ascending: true }),
-    ),
-    fetchAllRows<Record<string, unknown>>(() =>
-      runtimeDb.from("member_carryover_profiles").select("*"),
-    ),
-  ]);
+  const [members, transactions, liveLoans, carryoverLoans, carryoverProfiles, receiptAllocations] =
+    await Promise.all([
+      fetchAllRows<Record<string, unknown>>(() =>
+        runtimeDb
+          .from("members")
+          .select(
+            "id, old_system_id, savings_balance, shares, share_reserve_balance, fee_membership, fee_card, fee_sticker, fee_first_upfront_paid",
+          ),
+      ),
+      fetchAllRows<Record<string, unknown>>(() =>
+        runtimeDb
+          .from("transactions")
+          .select("id, member_id, loan_id, account, date, created_at, type, amount, note")
+          .order("date", { ascending: true }),
+      ),
+      fetchAllRows<Record<string, unknown>>(() => runtimeDb.from("loans").select("*")),
+      fetchAllRows<Record<string, unknown>>(() =>
+        runtimeDb
+          .from("member_carryover_loans")
+          .select("*")
+          .order("start_date", { ascending: true }),
+      ),
+      fetchAllRows<Record<string, unknown>>(() =>
+        runtimeDb.from("member_carryover_profiles").select("*"),
+      ),
+      listMpesaReceiptAllocationRows(runtimeDb),
+    ]);
 
   const memberIdByAlias = new Map<string, string>();
   const membersById = new Map<string, Record<string, unknown>>();
@@ -13729,6 +13896,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       if (transactionId && String(transaction.member_id ?? "").trim() !== memberId) {
         transactionMemberPatches.push({ id: transactionId, memberId });
       }
+      transaction.member_id = memberId;
     }
 
     if (String(transaction.type ?? "") === "loan_repayment") {
@@ -13787,25 +13955,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     return roundMoney(savings + shares + fees);
   };
 
-  const snapshotLoanRemainingByMember = new Map<string, number>();
   const snapshotLoanPaidByMember = new Map<string, number>();
-  const snapshotLifetimeNetByMember = new Map<string, number>();
-  const getSnapshotLoanRemaining = (memberId: string) => {
-    if (snapshotLoanRemainingByMember.has(memberId)) {
-      return snapshotLoanRemainingByMember.get(memberId) ?? 0;
-    }
-    const lifetimeNet = lifetimeNetForTransactions(transactionsByMember.get(memberId) ?? []);
-    const member = membersById.get(memberId);
-    const reserved = member ? reservedSnapshotBalanceForMember(member) : 0;
-    const remaining = Math.max(0, roundMoney(lifetimeNet - reserved));
-    snapshotLifetimeNetByMember.set(memberId, lifetimeNet);
-    snapshotLoanRemainingByMember.set(memberId, remaining);
-    snapshotLoanPaidByMember.set(memberId, 0);
-    return remaining;
-  };
-  const setSnapshotLoanRemaining = (memberId: string, remaining: number) => {
-    snapshotLoanRemainingByMember.set(memberId, Math.max(0, roundMoney(remaining)));
-  };
   const addSnapshotLoanPayment = (memberId: string, amount: number) => {
     snapshotLoanPaidByMember.set(
       memberId,
@@ -13897,11 +14047,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
   for (const loan of liveLoans) {
     const memberId = String(loan.member_id ?? "").trim();
     const currentStatus = String(loan.status ?? "active");
-    if (
-      !memberId ||
-      currentStatus === "pending" ||
-      currentStatus === "rejected"
-    ) {
+    if (!memberId || currentStatus === "pending" || currentStatus === "rejected") {
       continue;
     }
     const group = liveLoansByMember.get(memberId) ?? [];
@@ -13927,9 +14073,18 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
     ...Array.from(carryoverByMember.keys()),
   ]);
   const today = new Date().toISOString().slice(0, 10);
+  const carryoverPaidByLoanId = deriveCarryoverPaidToDateByLoan({
+    loans: carryoverLoans.map((loan) => ({
+      id: String(loan.id ?? "").trim(),
+      memberId: String(loan.member_id ?? "").trim(),
+    })),
+    transactions,
+    allocations: receiptAllocations,
+  });
 
   for (const memberId of memberIdsWithOpenLoans) {
-    let remaining = getSnapshotLoanRemaining(memberId);
+    const memberTransactions = transactionsByMember.get(memberId) ?? [];
+    const hasMemberTransactionLedger = memberTransactions.length > 0;
     const loanTargets = [
       ...(liveLoansByMember.get(memberId) ?? []).map((loan) => ({
         source: "live" as const,
@@ -13956,23 +14111,27 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       if (!loanId) continue;
 
       if (target.source === "live") {
-        const zeroPaidSummary = await liveLoanAccountingSummary(
+        const payments = mapLoanRepaymentPayments(repaymentRowsByLiveLoan.get(loanId) ?? []);
+        if (!hasMemberTransactionLedger && payments.length === 0) continue;
+        const paidFromLedger = payments.reduce(
+          (sum, payment) => roundMoney(sum + payment.amount),
+          0,
+        );
+        addSnapshotLoanPayment(memberId, paidFromLedger);
+        const summary = await liveLoanAccountingSummary(
           runtimeDb,
           target.loan as any,
           policySettings,
           {
-            payments: [],
-            overridePaid: 0,
+            payments,
+            overridePaid: paidFromLedger,
           },
         );
-        const applied = Math.min(remaining, zeroPaidSummary.totalOwedNow);
-        remaining = roundMoney(remaining - applied);
-        addSnapshotLoanPayment(memberId, applied);
-        const summary = await liveLoanAccountingSummary(runtimeDb, target.loan as any, policySettings, {
-          payments: [],
-          overridePaid: applied,
-        });
-        const nextStatus = nextLiveLoanStatus(String(target.loan.status ?? "active"), summary, today);
+        const nextStatus = nextLiveLoanStatus(
+          String(target.loan.status ?? "active"),
+          summary,
+          today,
+        );
         const { error } = await runtimeDb
           .from("loans")
           .update({ paid: summary.totalPaid, status: nextStatus })
@@ -13982,27 +14141,23 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
         continue;
       }
 
+      if (!carryoverPaidByLoanId.has(loanId)) continue;
+      const paidFromLedger = carryoverPaidByLoanId.get(loanId) ?? 0;
+      addSnapshotLoanPayment(memberId, paidFromLedger);
       const summary = summarizeLegacyCarryoverLoan(
-        { ...mapCarryoverLoanForSummary(target.loan), paidToDate: 0 },
+        { ...mapCarryoverLoanForSummary(target.loan), paidToDate: paidFromLedger },
         policySettings,
       );
-      const applied = Math.min(remaining, summary.totalOwedNow);
-      remaining = roundMoney(remaining - applied);
-      addSnapshotLoanPayment(memberId, applied);
-      const appliedSummary = summarizeLegacyCarryoverLoan(
-        { ...mapCarryoverLoanForSummary(target.loan), paidToDate: applied },
-        policySettings,
-      );
-      const finished = appliedSummary.totalOwedNow <= 0;
+      const finished = summary.totalOwedNow <= 0;
       const nextStatus = finished
         ? "closed"
-        : appliedSummary.dueDate < today || target.loan.status === "defaulted"
+        : summary.dueDate < today || target.loan.status === "defaulted"
           ? "defaulted"
           : "active";
       const { error } = await runtimeDb
         .from("member_carryover_loans")
         .update({
-          paid_to_date: applied,
+          paid_to_date: paidFromLedger,
           status: nextStatus,
           finished,
           closed_on: finished ? String(target.loan.due_date ?? summary.dueDate) : null,
@@ -14012,14 +14167,12 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       carryoverLoansUpdated += 1;
       carryoverMembersUpdated.add(memberId);
     }
-
-    setSnapshotLoanRemaining(memberId, remaining);
   }
 
   for (const [memberId, profile] of carryoverProfileByMember) {
-    const lifetimeNet =
-      snapshotLifetimeNetByMember.get(memberId) ??
-      lifetimeNetForTransactions(transactionsByMember.get(memberId) ?? []);
+    const memberTransactions = transactionsByMember.get(memberId) ?? [];
+    if (memberTransactions.length === 0) continue;
+    const lifetimeNet = lifetimeNetForTransactions(memberTransactions);
     const member = membersById.get(memberId);
     const reserved = member ? reservedSnapshotBalanceForMember(member) : 0;
     const loanPaid = snapshotLoanPaidByMember.get(memberId) ?? 0;
