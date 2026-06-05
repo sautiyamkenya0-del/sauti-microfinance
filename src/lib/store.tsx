@@ -223,6 +223,7 @@ export type Transaction = {
     | "petty_cash"
     | "investor_contribution"
     | "fee_payment"
+    | "purpose_pool"
     | "mpesa_unallocated"
     | "staff_payroll";
   account?: string; // M-Pesa Paybill account = membership number

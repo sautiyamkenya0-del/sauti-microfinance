@@ -7855,6 +7855,7 @@ function isInflowTransactionType(type: string) {
     type === "share_purchase" ||
     type === "investor_contribution" ||
     type === "fee_payment" ||
+    type === "purpose_pool" ||
     type === "mpesa_unallocated"
   );
 }
@@ -8529,6 +8530,7 @@ export const createTransactionRecord = createServerFn({ method: "POST" })
         | "petty_cash"
         | "investor_contribution"
         | "fee_payment"
+        | "purpose_pool"
         | "mpesa_unallocated"
         | "staff_payroll";
       account?: string;
@@ -11497,19 +11499,11 @@ async function computeMemberLifetimeNet(runtimeDb: any, memberId: string) {
     throw new Error(profileResult.error.message);
   }
 
-  const inflowTypes = new Set([
-    "deposit",
-    "loan_repayment",
-    "share_purchase",
-    "fee_payment",
-    "investor_contribution",
-  ]);
-  const outflowTypes = new Set(["withdrawal", "loan_disbursement"]);
   const ledgerNet = transactions.reduce((sum, transaction) => {
     const type = String(transaction.type ?? "");
     const amount = toNumber(transaction.amount as any);
-    if (inflowTypes.has(type)) return sum + amount;
-    if (outflowTypes.has(type)) return sum - amount;
+    if (isInflowTransactionType(type)) return sum + amount;
+    if (isOutflowTransactionType(type)) return sum - amount;
     return sum;
   }, 0);
 
@@ -13934,20 +13928,10 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
 
   const lifetimeNetForTransactions = (memberTransactions: Record<string, unknown>[]) => {
     const inflow = memberTransactions
-      .filter((transaction) =>
-        [
-          "deposit",
-          "loan_repayment",
-          "share_purchase",
-          "fee_payment",
-          "investor_contribution",
-        ].includes(String(transaction.type ?? "")),
-      )
+      .filter((transaction) => isInflowTransactionType(String(transaction.type ?? "")))
       .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
     const outflow = memberTransactions
-      .filter((transaction) =>
-        ["withdrawal", "loan_disbursement"].includes(String(transaction.type ?? "")),
-      )
+      .filter((transaction) => isOutflowTransactionType(String(transaction.type ?? "")))
       .reduce((sum, transaction) => sum + toNumber(transaction.amount as any), 0);
     return Math.max(0, roundMoney(inflow - outflow));
   };

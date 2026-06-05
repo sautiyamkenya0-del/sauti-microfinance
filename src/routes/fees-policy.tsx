@@ -41,6 +41,7 @@ import {
   deleteFeePolicyRecord,
   deleteMemberCarryoverLoanRecord,
   deleteServiceCatalogRecord,
+  listMpesaReceiptAudit,
   resetMemberCarryoverRecord,
   triggerPurposePoolRedistributionRecord,
   upsertMemberCarryoverLoanRecord,
@@ -259,6 +260,7 @@ function PolicyCenterPage() {
   const saveService = useServerFn(upsertServiceCatalogRecord);
   const saveServiceApplication = useServerFn(upsertServiceApplicationRecord);
   const deleteService = useServerFn(deleteServiceCatalogRecord);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const savePolicySetting = useServerFn(upsertPolicySettingRecord);
   const loadCarryover = useServerFn(loadMemberCarryover);
   const loadAllCarryoverLoans = useServerFn(listAllCarryoverLoans);
@@ -356,6 +358,7 @@ function PolicyCenterPage() {
   const [carryoverResetting, setCarryoverResetting] = useState(false);
   const [carryoverSaving, setCarryoverSaving] = useState(false);
   const [showCarryoverAdvanced, setShowCarryoverAdvanced] = useState(false);
+  const [selectedClientMpesaAuditRows, setSelectedClientMpesaAuditRows] = useState<any[]>([]);
 
   useEffect(() => {
     setPercentagesDraft(policySettings.percentages);
@@ -467,12 +470,44 @@ function PolicyCenterPage() {
     };
   }, [clientId, loadCarryover, memberAccounts]);
 
+  useEffect(() => {
+    if (!clientId) {
+      setSelectedClientMpesaAuditRows([]);
+      return;
+    }
+
+    let active = true;
+    fetchMpesaAudit({ data: { memberId: clientId } })
+      .then((rows) => {
+        if (active) setSelectedClientMpesaAuditRows(Array.isArray(rows) ? rows : []);
+      })
+      .catch((error: any) => {
+        if (active) {
+          setSelectedClientMpesaAuditRows([]);
+          toast.error(error?.message ?? "Failed to load selected client M-Pesa totals.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [clientId, fetchMpesaAudit]);
+
   const todayIso = new Date().toISOString().slice(0, 10);
   const selectedClient = memberAccounts.find((member) => member.id === clientId) ?? null;
   const selectedClientLoans = loans.filter((loan) => loan.memberId === clientId);
   const selectedClientPenalties = penalties.filter((penalty) => penalty.memberId === clientId);
   const selectedClientTransactions = transactions.filter(
     (transaction) => transaction.memberId === clientId,
+  );
+  const selectedClientMpesaTransactionIds = new Set(
+    selectedClientMpesaAuditRows.flatMap((row) => row.transactionIds ?? []),
+  );
+  const selectedClientLedgerTransactions = selectedClientTransactions.filter(
+    (transaction) =>
+      transaction.by !== "MPESA" &&
+      !selectedClientMpesaTransactionIds.has(transaction.id) &&
+      !isInternalSyntheticTransaction(transaction),
   );
   const feeRows = feePolicies.length > 0 ? feePolicies : DEFAULT_FEE_POLICIES;
   const activeFees = feeRows.filter(isFeeActive);
@@ -499,22 +534,21 @@ function PolicyCenterPage() {
   const currentWaterfall =
     waterfallDraft.find((rule) => rule.scenario === waterfallScenario) ??
     policySettings.waterfallRules.find((rule) => rule.scenario === waterfallScenario);
-  const selectedClientInflow = selectedClientTransactions
-    .filter((transaction) =>
-      [
-        "deposit",
-        "loan_repayment",
-        "share_purchase",
-        "fee_payment",
-        "investor_contribution",
-      ].includes(transaction.type),
-    )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const selectedClientOutflow = selectedClientTransactions
-    .filter((transaction) => ["withdrawal", "loan_disbursement"].includes(transaction.type))
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const selectedClientMpesaInflow = selectedClientMpesaAuditRows
+    .filter((row) => row.direction === "in")
+    .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  const selectedClientMpesaOutflow = selectedClientMpesaAuditRows
+    .filter((row) => row.direction === "out")
+    .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  const selectedClientInflow =
+    selectedClientLedgerTransactions
+      .filter((transaction) => isClientInflowTransactionType(transaction.type))
+      .reduce((sum, transaction) => sum + transaction.amount, 0) + selectedClientMpesaInflow;
+  const selectedClientOutflow =
+    selectedClientLedgerTransactions
+      .filter((transaction) => isClientOutflowTransactionType(transaction.type))
+      .reduce((sum, transaction) => sum + transaction.amount, 0) + selectedClientMpesaOutflow;
   const selectedClientNet = selectedClientInflow - selectedClientOutflow;
-  const lifetimeNetAvailableForCarryover = Math.max(0, selectedClientNet);
 
   const clientLoansSummary = selectedClientLoans.map((loan) => ({
     loan,
@@ -534,6 +568,12 @@ function PolicyCenterPage() {
   );
   const carryoverLoanDraftFuelRows = carryoverFuelRows(carryoverLoanDraft);
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
+  const lifetimeNetAvailableForCarryover = Math.max(
+    0,
+    selectedClientNet,
+    carryoverProfile.totalCollected,
+    carryoverBreakdown.totalDepositsRecorded,
+  );
   const carryoverLoanInputs = guidedLoanEntries;
   const carryoverHasDraftData =
     hasCarryoverProfile ||
@@ -548,7 +588,7 @@ function PolicyCenterPage() {
     carryoverBreakdown.purposePoolBalance > 0;
   const automaticCarryoverDeductions = deriveAutomaticCarryoverDeductions({
     available: carryoverHasDraftData ? lifetimeNetAvailableForCarryover : 0,
-    member: selectedClient,
+    member: selectedClient ?? undefined,
     loans: carryoverLoanInputs.length > 0 ? carryoverLoanInputs : carryoverLoans,
     membershipAmount,
     cardAmount,
@@ -702,50 +742,58 @@ function PolicyCenterPage() {
   const penaltiesOutstanding = selectedClientPenalties
     .filter((penalty) => penalty.status === "outstanding")
     .reduce((sum, penalty) => sum + penalty.amount, 0);
-  const totalCollections = selectedClientTransactions
-    .filter((transaction) =>
-      [
-        "deposit",
-        "loan_repayment",
-        "share_purchase",
-        "fee_payment",
-        "investor_contribution",
-      ].includes(transaction.type),
-    )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const combinedCollections = totalCollections + derivedCarryoverTotalCollected;
+  const totalCollections = selectedClientInflow;
+  const combinedCollections = Math.max(totalCollections, derivedCarryoverTotalCollected);
   const combinedOutstandingBalance = totalBalance + carryoverBalance;
-  const clientLifetimeNet = selectedClientNet;
+  const clientLifetimeNet = Math.max(selectedClientNet, derivedCarryoverTotalCollected);
   const selectedClientTransactionTotals = [
     {
       label: "Deposits",
-      value: selectedClientTransactions
-        .filter((transaction) => transaction.type === "deposit")
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "deposit",
+      ),
     },
     {
       label: "Withdrawals",
-      value: selectedClientTransactions
-        .filter((transaction) => transaction.type === "withdrawal")
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "withdrawal",
+      ),
     },
     {
       label: "Loan repayments",
-      value: selectedClientTransactions
-        .filter((transaction) => transaction.type === "loan_repayment")
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "loan_repayment",
+      ),
     },
     {
       label: "Shares",
-      value: selectedClientTransactions
-        .filter((transaction) => transaction.type === "share_purchase")
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "share_purchase",
+      ),
     },
     {
       label: "Fees",
-      value: selectedClientTransactions
-        .filter((transaction) => transaction.type === "fee_payment")
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "fee_payment",
+      ),
+    },
+    {
+      label: "Purpose pool",
+      value: selectedClientTransactionTotal(
+        selectedClientLedgerTransactions,
+        selectedClientMpesaAuditRows,
+        "purpose_pool",
+      ),
     },
   ];
   const clientRating = selectedClient
@@ -5407,6 +5455,56 @@ function readCarryoverBreakdown(
       transaction: Number(feeBuckets.transaction ?? 0) || 0,
     },
   };
+}
+
+const CLIENT_INFLOW_TRANSACTION_TYPES = new Set([
+  "deposit",
+  "loan_repayment",
+  "share_purchase",
+  "investor_contribution",
+  "fee_payment",
+  "purpose_pool",
+  "mpesa_unallocated",
+]);
+
+const CLIENT_OUTFLOW_TRANSACTION_TYPES = new Set([
+  "withdrawal",
+  "loan_disbursement",
+  "petty_cash",
+  "staff_payroll",
+]);
+
+function isClientInflowTransactionType(type: string) {
+  return CLIENT_INFLOW_TRANSACTION_TYPES.has(String(type ?? ""));
+}
+
+function isClientOutflowTransactionType(type: string) {
+  return CLIENT_OUTFLOW_TRANSACTION_TYPES.has(String(type ?? ""));
+}
+
+function isInternalSyntheticTransaction(transaction: { note?: string }) {
+  const note = String(transaction.note ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    note.startsWith("policy redistribution:") ||
+    note.startsWith("purpose pool reallocation ->") ||
+    note.startsWith("round-off captured from m-pesa receipt")
+  );
+}
+
+function selectedClientTransactionTotal(
+  ledgerTransactions: Array<{ type: string; amount: number }>,
+  mpesaAuditRows: any[],
+  type: string,
+) {
+  const ledgerTotal = ledgerTransactions
+    .filter((transaction) => transaction.type === type)
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const mpesaTotal = mpesaAuditRows
+    .filter((row) => String(row.type ?? "") === type)
+    .reduce((sum, row) => sum + Number(row.originalAmount ?? row.amount ?? 0), 0);
+  return ledgerTotal + mpesaTotal;
 }
 
 function hydrateCarryoverProfile(profile: LegacyCarryoverProfile): LegacyCarryoverProfile {

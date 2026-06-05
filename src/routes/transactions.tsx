@@ -29,6 +29,7 @@ const TYPES = [
   "petty_cash",
   "investor_contribution",
   "fee_payment",
+  "purpose_pool",
   "mpesa_unallocated",
   "staff_payroll",
 ] as const;
@@ -39,6 +40,7 @@ const INFLOWS: ReadonlyArray<string> = [
   "share_purchase",
   "investor_contribution",
   "fee_payment",
+  "purpose_pool",
   "mpesa_unallocated",
 ];
 const OUTFLOWS: ReadonlyArray<string> = [
