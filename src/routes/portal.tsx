@@ -54,6 +54,7 @@ import {
   listSupplierWorkspaceRecord,
 } from "@/lib/runtime-data.functions";
 import { membershipIdCandidates } from "@/lib/membership";
+import { dedupeMemberTransactions } from "@/lib/transaction-dedupe";
 import { createPortal } from "react-dom";
 
 type Tab = "overview" | "profile" | "loans" | "transactions" | "fees" | "support";
@@ -106,37 +107,11 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function receiptKey(value: unknown) {
-  return String(value ?? "")
-    .trim()
-    .toUpperCase();
-}
-
 function numericInputValue(value: string) {
   const next = value.replace(/[^\d.]/g, "");
   const [whole, ...rest] = next.split(".");
   const normalizedWhole = whole.replace(/^0+(?=\d)/, "");
   return rest.length > 0 ? `${normalizedWhole || "0"}.${rest.join("")}` : normalizedWhole;
-}
-
-function dedupeMemberTransactions<
-  T extends {
-    id: string;
-    type: string;
-    amount: number;
-    ref?: string;
-    loanId?: string;
-    date: string;
-  },
->(rows: T[]) {
-  const seen = new Set<string>();
-  return rows.filter((row) => {
-    const ref = receiptKey(row.ref);
-    const key = ref ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}` : `id|${row.id}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 export const Route = createFileRoute("/portal")({
@@ -406,11 +381,30 @@ function Portal() {
   const displayLoanPaid = useCallback(
     (loan: (typeof loans)[number]) => {
       const receiptBackedTotal = uniqueLoanRepaymentTotals.get(loan.id) ?? 0;
-      return receiptBackedTotal > 0 && receiptBackedTotal < loan.paid
-        ? receiptBackedTotal
-        : loan.paid;
+      return receiptBackedTotal > 0 ? receiptBackedTotal : loan.paid;
     },
     [uniqueLoanRepaymentTotals],
+  );
+  const myCarryoverLoans = carryoverLoans.filter((loan) => loan.memberId === memberId);
+  const liveLoanDisplayStatus = useCallback(
+    (loan: (typeof loans)[number]) => {
+      const displayLoan = { ...loan, paid: displayLoanPaid(loan) };
+      const summary = loanPenaltySummary(displayLoan, myUniqueTx);
+      return trueLoanStatus({
+        storedStatus: loan.status,
+        balance: summary.totalOwedNow,
+        dueDate: summary.dueDate,
+      });
+    },
+    [displayLoanPaid, myUniqueTx],
+  );
+  const repayableLiveLoans = useMemo(
+    () =>
+      myLoans.filter((loan) => {
+        const status = liveLoanDisplayStatus(loan);
+        return status === "active" || status === "defaulted";
+      }),
+    [liveLoanDisplayStatus, myLoans],
   );
 
   const clientAlerts = useMemo<ClientAlert[]>(() => {
@@ -457,30 +451,28 @@ function Portal() {
         });
       });
 
-    myLoans
-      .filter((loan) => loan.status === "active")
-      .forEach((loan) => {
-        if (loan.startDate > today) return;
-        const summary = loanSummary({ ...loan, paid: displayLoanPaid(loan) });
-        if (summary.balance <= 0) return;
-        const dailyDue = summary.dailyCollectionAmount;
-        const paidToday = myUniqueTx
-          .filter(
-            (transaction) =>
-              transaction.type === "loan_repayment" &&
-              transaction.loanId === loan.id &&
-              transaction.date.slice(0, 10) === today,
-          )
-          .reduce((sum, transaction) => sum + transaction.amount, 0);
-        if (paidToday >= dailyDue) return;
-        out.push({
-          id: `daily-loan-${loan.id}-${today}`,
-          kind: "alert",
-          title: "Daily loan repayment not completed",
-          detail: `${loan.id}: ${fmtKES(Math.max(0, dailyDue - paidToday))} still due today`,
-          tab: "loans",
-        });
+    repayableLiveLoans.forEach((loan) => {
+      if (loan.startDate > today) return;
+      const summary = loanPenaltySummary({ ...loan, paid: displayLoanPaid(loan) }, myUniqueTx);
+      if (summary.totalOwedNow <= 0) return;
+      const dailyDue = summary.dailyCollectionAmount;
+      const paidToday = myUniqueTx
+        .filter(
+          (transaction) =>
+            transaction.type === "loan_repayment" &&
+            transaction.loanId === loan.id &&
+            transaction.date.slice(0, 10) === today,
+        )
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      if (paidToday >= dailyDue) return;
+      out.push({
+        id: `daily-loan-${loan.id}-${today}`,
+        kind: "alert",
+        title: "Daily loan repayment not completed",
+        detail: `${loan.id}: ${fmtKES(Math.max(0, dailyDue - paidToday))} still due today`,
+        tab: "loans",
       });
+    });
 
     scopedMpesaReceiptRows
       .filter(
@@ -499,7 +491,15 @@ function Portal() {
       });
 
     return out;
-  }, [clientNotices, displayLoanPaid, member, myLoans, myPen, myUniqueTx, scopedMpesaReceiptRows]);
+  }, [
+    clientNotices,
+    displayLoanPaid,
+    member,
+    myPen,
+    myUniqueTx,
+    repayableLiveLoans,
+    scopedMpesaReceiptRows,
+  ]);
 
   async function downloadClientLetter(notice: ClientNotice) {
     if (notice.documentKind !== "letter") return;
@@ -518,11 +518,9 @@ function Portal() {
     () => clientAlerts.filter((alert) => !clientReadIds.has(alert.id)),
     [clientAlerts, clientReadIds],
   );
-  const myCarryoverLoans = carryoverLoans.filter((loan) => loan.memberId === memberId);
   const liveLoanPaymentNotices = useMemo(
     () =>
-      myLoans
-        .filter((loan) => loan.status === "active" || loan.status === "defaulted")
+      repayableLiveLoans
         .map((loan) => {
           const displayLoan = { ...loan, paid: displayLoanPaid(loan) };
           const summary = loanPenaltySummary(displayLoan, myUniqueTx);
@@ -538,7 +536,7 @@ function Portal() {
           if (byAmount !== 0) return byAmount;
           return left.loan.startDate.localeCompare(right.loan.startDate);
         }),
-    [displayLoanPaid, myLoans, myUniqueTx],
+    [displayLoanPaid, myUniqueTx, repayableLiveLoans],
   );
   const priorityLoanPaymentNotice = liveLoanPaymentNotices[0];
   const announcedClientIdsRef = useRef(new Set<string>());

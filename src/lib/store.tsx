@@ -1670,10 +1670,17 @@ export function loanPenaltySummary(
   const today = (loan.frozenAt || asOfDate).slice(0, 10);
   const totalExpectedCollected = dailyExpected * summary.termDays;
   const payments: { date: string; amount: number }[] = [];
+  const seenPaymentKeys = new Set<string>();
 
   for (const transaction of transactions) {
     if (transaction.type !== "loan_repayment") continue;
     if (transaction.loanId !== loan.id) continue;
+    const ref = String(transaction.ref ?? "")
+      .trim()
+      .toUpperCase();
+    const key = ref ? `${transaction.loanId}|${transaction.amount}|${ref}` : `id|${transaction.id}`;
+    if (seenPaymentKeys.has(key)) continue;
+    seenPaymentKeys.add(key);
     payments.push({
       date: (transaction.createdAt || transaction.date).slice(0, 10),
       amount: transaction.amount,
@@ -1681,7 +1688,7 @@ export function loanPenaltySummary(
   }
 
   const transactionPaid = payments.reduce((sum, payment) => sum + payment.amount, 0);
-  const totalPaid = Math.max(Number(loan.paid ?? 0), transactionPaid);
+  const totalPaid = transactionPaid > 0 ? transactionPaid : Math.max(0, Number(loan.paid ?? 0));
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const ledger = buildLoanDailyLedger({
     startDate: loan.startDate,

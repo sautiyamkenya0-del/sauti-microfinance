@@ -7,7 +7,8 @@ import {
   waiveLoanFollowupPenaltyRecord,
 } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
-import { useStore, fmtKES, loanPenaltySummary, type Transaction } from "@/lib/store";
+import { dedupeMemberTransactions } from "@/lib/transaction-dedupe";
+import { useStore, fmtKES, loanPenaltySummary } from "@/lib/store";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -18,24 +19,6 @@ function daysBetweenDates(from: string, to: string) {
   const end = new Date(`${to.slice(0, 10)}T00:00:00`).getTime();
   if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
   return Math.floor((end - start) / (24 * 60 * 60 * 1000));
-}
-
-function receiptKey(value: unknown) {
-  return String(value ?? "")
-    .trim()
-    .toUpperCase();
-}
-
-function dedupeLoanRepayments(rows: Transaction[]) {
-  const seen = new Set<string>();
-  return rows.filter((row) => {
-    if (row.type !== "loan_repayment") return true;
-    const ref = receiptKey(row.ref);
-    const key = ref ? `${row.type}|${row.loanId ?? ""}|${row.amount}|${ref}` : `id|${row.id}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarryoverLoan[] }) {
@@ -58,7 +41,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
 
   const items = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const uniqueTransactions = dedupeLoanRepayments(transactions);
+    const uniqueTransactions = dedupeMemberTransactions(transactions);
     const uniqueLoanRepaymentTotals = new Map<string, number>();
     uniqueTransactions
       .filter((transaction) => transaction.type === "loan_repayment" && transaction.loanId)
@@ -70,9 +53,7 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
       });
     const displayLoanPaid = (loan: (typeof loans)[number]) => {
       const receiptBackedTotal = uniqueLoanRepaymentTotals.get(loan.id) ?? 0;
-      return receiptBackedTotal > 0 && receiptBackedTotal < loan.paid
-        ? receiptBackedTotal
-        : loan.paid;
+      return receiptBackedTotal > 0 ? receiptBackedTotal : loan.paid;
     };
     const liveItems = loans
       .filter((l) => !["pending", "rejected", "closed"].includes(l.status))

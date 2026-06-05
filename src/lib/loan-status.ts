@@ -6,7 +6,9 @@ export function trueLoanStatus(args: {
   dueDate?: string;
   today?: string;
 }): TrueLoanStatus {
-  const storedStatus = String(args.storedStatus ?? "").trim();
+  const storedStatus = String(args.storedStatus ?? "")
+    .trim()
+    .toLowerCase();
   const balance = Math.max(0, Number(args.balance ?? 0));
   const dueDate = String(args.dueDate ?? "").slice(0, 10);
   const today = String(args.today ?? new Date().toISOString().slice(0, 10)).slice(0, 10);

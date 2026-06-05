@@ -14,6 +14,7 @@ import {
 import { updateLoanRecord, upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { trueLoanStatus, trueLoanStatusLabel, trueLoanStatusTone } from "@/lib/loan-status";
+import { dedupeMemberTransactions } from "@/lib/transaction-dedupe";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -241,6 +242,7 @@ export function LoanBook({
   const [repayAmt, setRepayAmt] = useState(0);
 
   const today = new Date().toISOString().slice(0, 10);
+  const uniqueTransactions = useMemo(() => dedupeMemberTransactions(transactions), [transactions]);
 
   const visible = useMemo(() => {
     const liveLoans =
@@ -264,7 +266,7 @@ export function LoanBook({
       const rowSummary =
         row.kind === "carryover"
           ? summarizeLegacyCarryoverLoan(row.loan, policySettings)
-          : loanPenaltySummary(row.loan, transactions);
+          : loanPenaltySummary(row.loan, uniqueTransactions);
       const balance =
         row.kind === "carryover"
           ? rowSummary.totalOwedNow
@@ -300,7 +302,7 @@ export function LoanBook({
         const rowSummary =
           row.kind === "carryover"
             ? summarizeLegacyCarryoverLoan(row.loan, policySettings)
-            : loanPenaltySummary(row.loan, transactions);
+            : loanPenaltySummary(row.loan, uniqueTransactions);
         return [
           m?.id,
           m?.name,
@@ -332,7 +334,7 @@ export function LoanBook({
     today,
     carryoverLoans,
     policySettings,
-    transactions,
+    uniqueTransactions,
     tableOnly,
   ]);
 
@@ -469,7 +471,7 @@ export function LoanBook({
                 row.kind === "live" ? staff.find((s) => s.id === liveLoan.officerId) : undefined;
               const summary =
                 row.kind === "live"
-                  ? loanPenaltySummary(liveLoan, transactions)
+                  ? loanPenaltySummary(liveLoan, uniqueTransactions)
                   : summarizeLegacyCarryoverLoan(legacyLoan, policySettings);
               const idNum = l.id.replace(/\D/g, "") || l.id;
               const currentBalance =
@@ -1155,6 +1157,11 @@ export function MemberLoanHistory({
                 carryoverExpected > 0
                   ? Math.min(100, Math.round((carryoverPaid / carryoverExpected) * 100))
                   : 0;
+              const displayStatus = trueLoanStatus({
+                storedStatus: l.status,
+                balance: summary.totalOwedNow,
+                dueDate: summary.dueDate,
+              });
               const isEditing = editing?.source === "carryover" && editing.id === l.id;
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
@@ -1162,8 +1169,8 @@ export function MemberLoanHistory({
                     <div className="text-sm font-medium">
                       {l.id} · {fmtKES(l.principal)}
                     </div>
-                    <Badge tone={summary.isFinished ? "success" : "default"}>
-                      {summary.isFinished ? "closed" : l.status} · carryover
+                    <Badge tone={trueLoanStatusTone(displayStatus) as never}>
+                      {trueLoanStatusLabel(displayStatus)} · carryover
                     </Badge>
                   </div>
                   {canEditLoans && (
@@ -1231,6 +1238,11 @@ export function MemberLoanHistory({
                 100,
                 liveExpected > 0 ? Math.round((livePaid / liveExpected) * 100) : 0,
               );
+              const displayStatus = trueLoanStatus({
+                storedStatus: l.status,
+                balance: summary.totalOwedNow,
+                dueDate: summary.dueDate,
+              });
               const isEditing = editing?.source === "live" && editing.id === l.id;
               return (
                 <div key={l.id} className="border border-border rounded-md p-3">
@@ -1238,18 +1250,8 @@ export function MemberLoanHistory({
                     <div className="text-sm font-medium">
                       {l.id} · {fmtKES(l.principal)}
                     </div>
-                    <Badge
-                      tone={
-                        l.status === "active"
-                          ? "default"
-                          : l.status === "closed"
-                            ? "success"
-                            : l.status === "pending"
-                              ? "warning"
-                              : "destructive"
-                      }
-                    >
-                      {l.status}
+                    <Badge tone={trueLoanStatusTone(displayStatus) as never}>
+                      {trueLoanStatusLabel(displayStatus)}
                     </Badge>
                   </div>
                   {canEditLoans && (

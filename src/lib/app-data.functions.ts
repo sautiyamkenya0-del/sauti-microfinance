@@ -703,6 +703,8 @@ function loanBalanceSummary(loan: {
 }
 
 type LoanRepaymentPayment = {
+  id?: string;
+  ref?: string;
   date: string;
   amount: number;
 };
@@ -713,9 +715,22 @@ function loanPaymentDate(row: Record<string, unknown>) {
 }
 
 function mapLoanRepaymentPayments(rows: Record<string, unknown>[]): LoanRepaymentPayment[] {
+  const seen = new Set<string>();
   return rows
     .filter((row) => String(row.type ?? "") === "loan_repayment")
+    .filter((row) => {
+      const ref = String(row.ref ?? "")
+        .trim()
+        .toUpperCase();
+      const amount = Math.max(0, toNumber(row.amount as number | string | null | undefined));
+      const key = ref ? `${String(row.loan_id ?? "")}|${amount}|${ref}` : `id|${row.id ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((row) => ({
+      id: row.id == null ? undefined : String(row.id),
+      ref: row.ref == null ? undefined : String(row.ref),
       date: loanPaymentDate(row),
       amount: Math.max(0, toNumber(row.amount as number | string | null | undefined)),
     }))
@@ -727,7 +742,7 @@ async function fetchLoanRepaymentPayments(runtimeDb: any, loanId: string) {
   const rows = await fetchAllRows<Record<string, unknown>>(() =>
     runtimeDb
       .from("transactions")
-      .select("date, created_at, type, amount")
+      .select("id, ref, loan_id, date, created_at, type, amount")
       .eq("loan_id", loanId)
       .eq("type", "loan_repayment")
       .order("date", { ascending: true }),
@@ -761,7 +776,9 @@ async function liveLoanAccountingSummary(
   const transactionPaid = payments.reduce((sum, payment) => roundMoney(sum + payment.amount), 0);
   const fallbackPaid =
     options?.overridePaid == null
-      ? Math.max(0, toNumber(loan.paid), transactionPaid, Number(options?.fallbackPaid ?? 0))
+      ? transactionPaid > 0
+        ? transactionPaid
+        : Math.max(0, toNumber(loan.paid), Number(options?.fallbackPaid ?? 0))
       : Math.max(0, Number(options.overridePaid) || 0);
   const asOfDate = String(loan.frozen_at ?? options?.asOfDate ?? new Date().toISOString()).slice(
     0,
@@ -13831,7 +13848,7 @@ export const updateCurrentSnapshotRecord = createServerFn({ method: "POST" }).ha
       fetchAllRows<Record<string, unknown>>(() =>
         runtimeDb
           .from("transactions")
-          .select("id, member_id, loan_id, account, date, created_at, type, amount, note")
+          .select("id, member_id, loan_id, account, ref, date, created_at, type, amount, note")
           .order("date", { ascending: true }),
       ),
       fetchAllRows<Record<string, unknown>>(() => runtimeDb.from("loans").select("*")),
