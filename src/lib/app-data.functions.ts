@@ -13289,10 +13289,6 @@ export const upsertMemberCarryoverLoanRecord = createServerFn({ method: "POST" }
     const actor = await requireDirectorActor();
     if (!data.memberId) throw new Error("Member id is required.");
     if (data.principal <= 0) throw new Error("Loan principal must be above zero.");
-    if (data.loanKind === "financial" && ![7, 14, 30, 60, 90].includes(data.termDays)) {
-      throw new Error("Financial carryover loans must use 7, 14, 30, 60, or 90 days.");
-    }
-
     const runtimeDb = (await requireSupabaseAdmin()) as any;
     const policySettings = await loadRuntimePolicySettings(runtimeDb);
     const id = data.id ?? makeId("LLN");

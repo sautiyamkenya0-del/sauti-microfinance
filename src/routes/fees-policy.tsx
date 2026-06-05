@@ -206,6 +206,12 @@ type CarryoverCollectionBreakdown = {
 
 type CarryoverMemberMode = "loan" | "none";
 
+const CARRYOVER_DAILY_COMPLIANCE_OPTIONS = [50, 100] as const;
+
+function normalizeCarryoverDailyCompliance(value?: number | null) {
+  return CARRYOVER_DAILY_COMPLIANCE_OPTIONS.includes(value as 50 | 100) ? Number(value) : 100;
+}
+
 const SCOPES: FeeScope[] = [
   "all",
   "new_only",
@@ -559,10 +565,18 @@ function PolicyCenterPage() {
     (sum, value) => sum + value,
     0,
   );
+  const carryoverLoanPaymentBudget = Math.max(
+    0,
+    lifetimeNetAvailableForCarryover -
+      carryoverFeeTotal -
+      automaticCarryoverDeductions.upfrontSavingsAmount -
+      automaticCarryoverDeductions.upfrontShareAmount,
+  );
   const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
     guidedLoanEntries,
     policySettings,
     todayIso,
+    carryoverLoanPaymentBudget,
   );
   const guidedClosedLoanSummaries = derivedGuidedLoanRows.filter((row) => row.status === "closed");
   const guidedDefaultedLoanSummaries = derivedGuidedLoanRows.filter(
@@ -1212,17 +1226,21 @@ function PolicyCenterPage() {
 
   async function saveCarryoverProfileDraft() {
     if (!selectedClient || carryoverSaving) return;
-    const nextGuidedLoans = derivedGuidedLoanRows.map(({ loan, summary, status }, index) => ({
-      ...loan,
-      memberId: selectedClient.id,
-      label:
-        loan.label || `${guidedLoanKindLabel(loan.loanKind ?? guidedLoanKind)} loan ${index + 1}`,
-      dueDate: loan.dueDate ?? summary.dueDate,
-      closedOn: status === "closed" ? (loan.closedOn ?? summary.dueDate) : undefined,
-      status,
-      finished: status === "closed",
-      loanCycleNumber: index + 1,
-    }));
+    const nextGuidedLoans = derivedGuidedLoanRows.map(({ loan, summary, status }, index) => {
+      const normalizedLoan = normalizeCarryoverLoanCompliancePlan(loan);
+      return {
+        ...normalizedLoan,
+        memberId: selectedClient.id,
+        label:
+          normalizedLoan.label ||
+          `${guidedLoanKindLabel(normalizedLoan.loanKind ?? guidedLoanKind)} loan ${index + 1}`,
+        dueDate: normalizedLoan.dueDate ?? summary.dueDate,
+        closedOn: status === "closed" ? (normalizedLoan.closedOn ?? summary.dueDate) : undefined,
+        status,
+        finished: status === "closed",
+        loanCycleNumber: index + 1,
+      };
+    });
     const nextClosedLoans = nextGuidedLoans.filter((loan) => loan.status === "closed");
     const nextOpenLoans = nextGuidedLoans.filter((loan) => loan.status !== "closed");
 
@@ -1313,10 +1331,11 @@ function PolicyCenterPage() {
 
   async function saveCarryoverLoanDraft() {
     if (!selectedClient) return;
+    const normalizedDraft = normalizeCarryoverLoanCompliancePlan(carryoverLoanDraft);
     const nextDraft =
       carryoverLoanDraft.loanKind === "fuel"
-        ? withCarryoverFuelRows(carryoverLoanDraft, carryoverFuelRows(carryoverLoanDraft))
-        : carryoverLoanDraft;
+        ? withCarryoverFuelRows(normalizedDraft, carryoverFuelRows(normalizedDraft))
+        : normalizedDraft;
     await saveCarryoverLoan({ data: nextDraft });
     await refreshCarryoverDetails(selectedClient.id);
     await refreshAllCarryoverLoans();
@@ -4162,37 +4181,18 @@ function PolicyCenterPage() {
                             }
                           />
                           <Field label="Term days">
-                            {carryoverLoanDraft.loanKind !== "financial" ? (
-                              <input
-                                type="number"
-                                min={1}
-                                value={carryoverLoanDraft.termDays}
-                                onChange={(event) =>
-                                  setCarryoverLoanDraft((current) => ({
-                                    ...current,
-                                    termDays: Math.max(1, Number(event.target.value) || 1),
-                                  }))
-                                }
-                                className="input"
-                              />
-                            ) : (
-                              <select
-                                value={carryoverLoanDraft.termDays}
-                                onChange={(event) =>
-                                  setCarryoverLoanDraft((current) => ({
-                                    ...current,
-                                    termDays: Number(event.target.value),
-                                  }))
-                                }
-                                className="input"
-                              >
-                                {[7, 14, 30, 60, 90].map((days) => (
-                                  <option key={days} value={days}>
-                                    {days} days
-                                  </option>
-                                ))}
-                              </select>
-                            )}
+                            <input
+                              type="number"
+                              min={1}
+                              value={carryoverLoanDraft.termDays}
+                              onChange={(event) =>
+                                setCarryoverLoanDraft((current) => ({
+                                  ...current,
+                                  termDays: Math.max(1, Number(event.target.value) || 1),
+                                }))
+                              }
+                              className="input"
+                            />
                           </Field>
                           <NumberField
                             label="Daily penalty missed days"
@@ -4226,16 +4226,34 @@ function PolicyCenterPage() {
                               }))
                             }
                           />
-                          <NumberField
-                            label="Daily compliance contribution amount"
-                            value={carryoverLoanDraft.dailySavingsAmount}
-                            onChange={(value) =>
-                              setCarryoverLoanDraft((current) => ({
-                                ...current,
-                                dailySavingsAmount: value,
-                              }))
-                            }
-                          />
+                          {carryoverLoanDraft.loanKind === "financial" ? (
+                            <Field label="Daily compliance contribution amount">
+                              <select
+                                value={normalizeCarryoverDailyCompliance(
+                                  carryoverLoanDraft.dailySavingsAmount,
+                                )}
+                                onChange={(event) =>
+                                  setCarryoverLoanDraft((current) => ({
+                                    ...current,
+                                    dailySavingsAmount: Number(event.target.value),
+                                  }))
+                                }
+                                className="input"
+                              >
+                                {CARRYOVER_DAILY_COMPLIANCE_OPTIONS.map((amount) => (
+                                  <option key={amount} value={amount}>
+                                    {amount} KSh / day
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+                          ) : (
+                            <NumberField
+                              label="Daily compliance contribution amount"
+                              value={0}
+                              readOnly
+                            />
+                          )}
                           <CarryoverLoanFeeFields
                             loan={carryoverLoanDraft}
                             summary={carryoverLoanDraftSummary}
@@ -5041,7 +5059,7 @@ function blankCarryoverLoan(memberId: string, cycleNumber: number): LegacyCarryo
     principal: 0,
     interestRatePct: 0,
     termDays: 30,
-    dailySavingsAmount: 0,
+    dailySavingsAmount: 100,
     startDate: new Date().toISOString().slice(0, 10),
     paidToDate: 0,
     status: "active",
@@ -5143,11 +5161,23 @@ function applyGuidedCarryoverLoanKind(
     loanKind: nextKind,
     label: shouldReplaceLabel ? `${guidedLoanKindLabel(nextKind)} carryover` : loan.label,
     interestRatePct: nextKind === "financial" ? loan.interestRatePct : 0,
-    dailySavingsAmount: nextKind === "financial" ? loan.dailySavingsAmount : 0,
+    dailySavingsAmount:
+      nextKind === "financial" ? normalizeCarryoverDailyCompliance(loan.dailySavingsAmount) : 0,
     termDays:
       nextKind === "fuel" || nextKind === "stock" || nextKind === "service"
         ? Math.max(1, Number(loan.termDays) || (nextKind === "fuel" ? 1 : 14))
         : loan.termDays,
+  };
+}
+
+function normalizeCarryoverLoanCompliancePlan(loan: LegacyCarryoverLoan): LegacyCarryoverLoan {
+  if (loan.loanKind === "fuel" || loan.loanKind === "stock" || loan.loanKind === "service") {
+    return { ...loan, dailySavingsAmount: 0 };
+  }
+  return {
+    ...loan,
+    loanKind: "financial",
+    dailySavingsAmount: normalizeCarryoverDailyCompliance(loan.dailySavingsAmount),
   };
 }
 
@@ -5195,7 +5225,7 @@ function deriveGuidedCarryoverLoanRows(
     }
   >();
   const sortedLoans = loans
-    .map((loan, index) => ({ loan, index }))
+    .map((loan, index) => ({ loan: normalizeCarryoverLoanCompliancePlan(loan), index }))
     .sort((left, right) => {
       const byDate = String(left.loan.startDate ?? "").localeCompare(
         String(right.loan.startDate ?? ""),
@@ -5225,7 +5255,8 @@ function deriveGuidedCarryoverLoanRows(
     });
   });
 
-  return loans.map((loan, index) => {
+  return loans.map((rawLoan, index) => {
+    const loan = normalizeCarryoverLoanCompliancePlan(rawLoan);
     const row = derived.get(index);
     if (row) return row;
     const summary = summarizeLegacyCarryoverLoan(loan, policySettings, asOfDate);
@@ -5796,34 +5827,15 @@ function GuidedCarryoverLoanCard({
           onChange={(value) => onChange({ ...loan, principal: value })}
         />
         <Field label="Term days">
-          {loan.loanKind !== "financial" ? (
-            <input
-              type="number"
-              min={1}
-              value={loan.termDays}
-              onChange={(event) =>
-                onChange({ ...loan, termDays: Math.max(1, Number(event.target.value) || 1) })
-              }
-              className="input"
-            />
-          ) : (
-            <select
-              value={loan.termDays}
-              onChange={(event) =>
-                onChange({
-                  ...loan,
-                  termDays: Number(event.target.value),
-                })
-              }
-              className="input"
-            >
-              {[7, 14, 30, 60, 90].map((days) => (
-                <option key={days} value={days}>
-                  {days} days
-                </option>
-              ))}
-            </select>
-          )}
+          <input
+            type="number"
+            min={1}
+            value={loan.termDays}
+            onChange={(event) =>
+              onChange({ ...loan, termDays: Math.max(1, Number(event.target.value) || 1) })
+            }
+            className="input"
+          />
         </Field>
         <NumberField
           label="Daily penalty missed days"
@@ -5835,11 +5847,25 @@ function GuidedCarryoverLoanCard({
           value={summary.dailyPenaltyAmount}
           onChange={(value) => updateFee("dailyPenaltyAmount", Math.max(0, value))}
         />
-        <NumberField
-          label="Daily compliance contribution"
-          value={loan.dailySavingsAmount}
-          onChange={(value) => onChange({ ...loan, dailySavingsAmount: value })}
-        />
+        {loan.loanKind === "financial" ? (
+          <Field label="Daily compliance contribution">
+            <select
+              value={normalizeCarryoverDailyCompliance(loan.dailySavingsAmount)}
+              onChange={(event) =>
+                onChange({ ...loan, dailySavingsAmount: Number(event.target.value) })
+              }
+              className="input"
+            >
+              {CARRYOVER_DAILY_COMPLIANCE_OPTIONS.map((amount) => (
+                <option key={amount} value={amount}>
+                  {amount} KSh / day
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <NumberField label="Daily compliance contribution" value={0} readOnly />
+        )}
         <Field label="Start date">
           <input
             type="date"
