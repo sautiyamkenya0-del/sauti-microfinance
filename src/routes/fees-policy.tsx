@@ -5215,7 +5215,9 @@ function deriveGuidedCarryoverLoanRows(
   loans: LegacyCarryoverLoan[],
   policySettings: Parameters<typeof summarizeLegacyCarryoverLoan>[1],
   asOfDate: string,
+  paymentBudget = 0,
 ) {
+  let remainingPaymentBudget = Math.max(0, Number(paymentBudget) || 0);
   const derived = new Map<
     number,
     {
@@ -5235,7 +5237,17 @@ function deriveGuidedCarryoverLoanRows(
     });
 
   sortedLoans.forEach(({ loan, index }) => {
-    const paidLoan = { ...loan, paidToDate: Math.max(0, Number(loan.paidToDate) || 0) };
+    const unpaidSummary = summarizeLegacyCarryoverLoan(
+      { ...loan, paidToDate: 0 },
+      policySettings,
+      asOfDate,
+    );
+    const autoPaidToDate = Math.min(
+      remainingPaymentBudget,
+      Math.max(0, unpaidSummary.totalExpectedCollected),
+    );
+    remainingPaymentBudget = Math.max(0, remainingPaymentBudget - autoPaidToDate);
+    const paidLoan = { ...loan, paidToDate: autoPaidToDate };
     const summary = summarizeLegacyCarryoverLoan(paidLoan, policySettings, asOfDate);
     const status =
       summary.totalOwedNow <= 0
