@@ -94,13 +94,12 @@ function Policies() {
                 fixed transaction fees from the Policy Center band table.
               </li>
               <li>
-                {SBC_FEES.penaltyDailyPct}% penalty on daily arrears if not cleared by the second
-                day, unless a justified reason is communicated and the arrears are settled the next
-                day.
+                {SBC_FEES.penaltyDailyPct}% penalty on the unpaid amount expected by the current
+                day, including the daily compliance contribution.
               </li>
               <li>
-                Compounded default penalty of {SBC_FEES.defaultPenaltyPct}% daily after the due
-                date.
+                Default penalty of {SBC_FEES.defaultPenaltyPct}% on the remaining unpaid balance
+                after the due date.
               </li>
               <li>Collateral joint registration fee is separate and may be added or deducted.</li>
               <li>

@@ -669,6 +669,7 @@ function loanBalanceSummary(loan: {
   term_days?: number | null;
   term_months?: number | null;
   paid?: number | string | null;
+  daily_savings_amount?: number | string | null;
   loan_kind?: string | null;
   supplier_payload?: Record<string, unknown> | null;
   processing_fee_amount?: number | string | null;
@@ -764,7 +765,9 @@ async function liveLoanAccountingSummary(
   const base = loanBalanceSummary(loan as any);
   const loanKind = normalizeLoanKindValue(loan.loan_kind);
   const supplierBacked = loanKind === "fuel" || loanKind === "stock" || loanKind === "service";
-  const dailySavingsAmount = supplierBacked ? 0 : base.approved <= 5000 ? 50 : 100;
+  const dailySavingsAmount = supplierBacked
+    ? 0
+    : dailyComplianceAmountForLoan(base.approved, loan.daily_savings_amount);
   const roundOffStep = Math.max(5, settings.percentages.roundOffStep || ROUNDING_BASE);
   const dailyInstallment = roundUpKES(
     (base.total + dailySavingsAmount * base.termDays) / Math.max(1, base.termDays),
