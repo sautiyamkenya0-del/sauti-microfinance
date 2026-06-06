@@ -297,6 +297,7 @@ function ReportsPage() {
     transactions: reportReceiptRows,
     loans,
     carryoverLoans,
+    carryoverProfiles,
     penalties,
     sharePrice,
     policySettings,
@@ -1758,8 +1759,9 @@ function transactionNoteIncludes(note: unknown, ...needles: string[]) {
 
 function isPurposePoolTransaction(transaction: { note?: unknown; type?: string }) {
   return (
-    transaction.type === "fee_payment" &&
-    transactionNoteIncludes(transaction.note, "purpose pool")
+    transaction.type === "purpose_pool" ||
+    (transaction.type === "fee_payment" &&
+      transactionNoteIncludes(transaction.note, "purpose pool"))
   );
 }
 
@@ -1785,6 +1787,7 @@ const REPORT_TRANSACTION_TYPES = new Set<StoreTransaction["type"]>([
   "petty_cash",
   "investor_contribution",
   "fee_payment",
+  "purpose_pool",
   "mpesa_unallocated",
   "staff_payroll",
 ]);
@@ -1998,6 +2001,7 @@ function buildReconciledMemberBooks(args: {
   transactions: ReturnType<typeof useStore>["transactions"];
   loans: ReturnType<typeof useStore>["loans"];
   carryoverLoans: LegacyCarryoverLoan[];
+  carryoverProfiles: LegacyCarryoverProfile[];
   penalties: ReturnType<typeof useStore>["penalties"];
   sharePrice: number;
   policySettings: ReturnType<typeof useStore>["policySettings"];
@@ -2025,6 +2029,10 @@ function buildReconciledMemberBooks(args: {
     carryoverLoansByMember.set(loan.memberId, group);
   }
 
+  const carryoverProfilesByMember = new Map(
+    args.carryoverProfiles.map((profile) => [profile.memberId, profile]),
+  );
+
   const penaltiesByMember = new Map<string, typeof args.penalties>();
   for (const penalty of args.penalties) {
     const group = penaltiesByMember.get(penalty.memberId) ?? [];
@@ -2043,6 +2051,7 @@ function buildReconciledMemberBooks(args: {
           transaction.type === "loan_repayment" ||
           transaction.type === "share_purchase" ||
           transaction.type === "fee_payment" ||
+          transaction.type === "purpose_pool" ||
           transaction.type === "investor_contribution"
         ) {
           return sum + amount;
@@ -2053,8 +2062,17 @@ function buildReconciledMemberBooks(args: {
         return sum;
       }, 0),
     );
+    const carryoverProfile = carryoverProfilesByMember.get(member.id);
+    const carryoverBreakdown = objectValue(carryoverProfile?.collectionBreakdown);
+    const carryoverLifetimeNet = reportMoney(
+      Math.max(
+        numberValue(carryoverProfile?.totalCollected),
+        numberValue(carryoverBreakdown.totalDepositsRecorded),
+      ),
+    );
+    const effectiveLifetimeNet = Math.max(lifetimeNet, carryoverLifetimeNet);
 
-    let remaining = lifetimeNet;
+    let remaining = effectiveLifetimeNet;
     const take = (amount: number) => {
       const value = Math.min(remaining, Math.max(0, reportMoney(amount)));
       remaining = reportMoney(remaining - value);
@@ -2105,7 +2123,7 @@ function buildReconciledMemberBooks(args: {
     const purposePool = take(remaining);
 
     books.set(member.id, {
-      lifetimeNet,
+      lifetimeNet: effectiveLifetimeNet,
       savings,
       shares,
       fees,

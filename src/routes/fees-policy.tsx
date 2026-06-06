@@ -586,10 +586,12 @@ function PolicyCenterPage() {
     carryoverProfile.penaltiesOutstanding > 0 ||
     carryoverProfile.penaltiesWaivedTotal > 0 ||
     carryoverBreakdown.purposePoolBalance > 0;
+  const automaticCarryoverDeductionLoans =
+    carryoverLoanInputs.length > 0 ? carryoverLoanInputs : carryoverLoans;
   const automaticCarryoverDeductions = deriveAutomaticCarryoverDeductions({
     available: carryoverHasDraftData ? lifetimeNetAvailableForCarryover : 0,
     member: selectedClient ?? undefined,
-    loans: carryoverLoanInputs.length > 0 ? carryoverLoanInputs : carryoverLoans,
+    loans: automaticCarryoverDeductionLoans,
     membershipAmount,
     cardAmount,
     stickerAmount,
@@ -605,12 +607,16 @@ function PolicyCenterPage() {
     (sum, value) => sum + value,
     0,
   );
+  const upfrontHeldOutsideLoanCycle = automaticCarryoverDeductionLoans.some(
+    (loan) => Number(loan.principal ?? 0) > 5000 && !carryoverLoanIncludesUpfront(loan),
+  );
+  const upfrontHeldOutBeforeLoans = upfrontHeldOutsideLoanCycle
+    ? automaticCarryoverDeductions.upfrontSavingsAmount +
+      automaticCarryoverDeductions.upfrontShareAmount
+    : 0;
   const carryoverLoanPaymentBudget = Math.max(
     0,
-    lifetimeNetAvailableForCarryover -
-      carryoverFeeTotal -
-      automaticCarryoverDeductions.upfrontSavingsAmount -
-      automaticCarryoverDeductions.upfrontShareAmount,
+    lifetimeNetAvailableForCarryover - carryoverFeeTotal - upfrontHeldOutBeforeLoans,
   );
   const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
     guidedLoanEntries,
@@ -656,14 +662,25 @@ function PolicyCenterPage() {
     automaticCarryoverDeductions.upfrontShareUnits,
   );
   const effectiveCarryoverShareValue = effectiveCarryoverShareUnits * sharePrice;
-  const derivedCarryoverAllocatedTotal =
+  const grossCarryoverLoanCollections =
+    carryoverMemberMode === "loan" || guidedLoanEntries.length > 0 || carryoverLoans.length > 0;
+  const carryoverSubAllocationTotal =
     effectiveCarryoverSavingsBalance +
     effectiveCarryoverShareValue +
+    carryoverBreakdown.purposePoolBalance;
+  const carryoverBaseAllocatedTotal =
     carryoverFeeTotal +
     carryoverLoanRepaymentsRecorded +
     carryoverProfile.investmentBalance +
-    carryoverBreakdown.purposePoolBalance +
     carryoverProfile.otherCollectedTotal;
+  const carryoverSubAllocationCountedTotal = grossCarryoverLoanCollections
+    ? Math.min(
+        carryoverSubAllocationTotal,
+        Math.max(0, lifetimeNetAvailableForCarryover - carryoverBaseAllocatedTotal),
+      )
+    : carryoverSubAllocationTotal;
+  const derivedCarryoverAllocatedTotal =
+    carryoverBaseAllocatedTotal + carryoverSubAllocationCountedTotal;
   const derivedCarryoverTotalCollected = carryoverHasDraftData
     ? lifetimeNetAvailableForCarryover
     : 0;
@@ -5408,6 +5425,14 @@ function deriveAutomaticCarryoverDeductions({
   };
 }
 
+function carryoverLoanIncludesUpfront(loan: LegacyCarryoverLoan) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  return feeBreakdown.productMeta?.includeUpfrontInLoan !== false;
+}
+
 function allocateComplianceContribution(
   amount: number,
   savingsThreshold: number,
@@ -5852,6 +5877,7 @@ function GuidedCarryoverLoanCard({
     0,
     Number(feeBreakdown.cashThroughCycleOverrideAmount ?? 0) || 0,
   );
+  const upfrontIncludedInLoan = carryoverLoanIncludesUpfront(loan);
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -6077,6 +6103,34 @@ function GuidedCarryoverLoanCard({
         <MetricCard label="Due-date penalty" value={fmtKES(summary.overduePenalty)} />
       </div>
       <div
+        className={`mt-4 rounded-xl border p-4 ${
+          upfrontIncludedInLoan ? "border-primary bg-primary/5" : "border-border bg-background/40"
+        }`}
+      >
+        <button
+          type="button"
+          aria-pressed={upfrontIncludedInLoan}
+          onClick={() => updateProductMeta({ includeUpfrontInLoan: !upfrontIncludedInLoan })}
+          className="flex w-full items-start justify-between gap-3 text-left"
+        >
+          <span>
+            <span className="block text-sm font-medium">Premium upfront in loan</span>
+            <span className="mt-1 block text-xs font-normal text-muted-foreground">
+              Count upfront savings and shares inside this loan cycle.
+            </span>
+          </span>
+          <span
+            className={`inline-flex h-7 min-w-14 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
+              upfrontIncludedInLoan
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-background text-muted-foreground"
+            }`}
+          >
+            {upfrontIncludedInLoan ? "On" : "Off"}
+          </span>
+        </button>
+      </div>
+      <div
         className={`mt-4 space-y-3 rounded-xl border p-4 ${
           cashThroughCycleOverrideEnabled
             ? "border-primary bg-primary/5"
@@ -6156,6 +6210,22 @@ function CarryoverLoanFeeFields({
       ),
     });
   };
+  const updateProductMeta = (nextMeta: Record<string, unknown>) => {
+    onChange({
+      ...loan,
+      feeBreakdown: normalizeLegacyCarryoverLoanFeeBreakdown(
+        {
+          ...feeBreakdown,
+          productMeta: {
+            ...(feeBreakdown.productMeta ?? {}),
+            ...nextMeta,
+          },
+        },
+        loan.loanCycleNumber,
+      ),
+    });
+  };
+  const upfrontIncludedInLoan = carryoverLoanIncludesUpfront(loan);
 
   return (
     <div
@@ -6217,6 +6287,27 @@ function CarryoverLoanFeeFields({
         />
         Waive subscriptions
       </label>
+      <button
+        type="button"
+        aria-pressed={upfrontIncludedInLoan}
+        onClick={() => updateProductMeta({ includeUpfrontInLoan: !upfrontIncludedInLoan })}
+        className={`flex min-h-10 items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-sm ${
+          upfrontIncludedInLoan
+            ? "border-primary bg-primary/5 text-foreground"
+            : "border-border bg-background/50 text-muted-foreground"
+        }`}
+      >
+        <span>Premium upfront in loan</span>
+        <span
+          className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${
+            upfrontIncludedInLoan
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-border bg-background"
+          }`}
+        >
+          {upfrontIncludedInLoan ? "On" : "Off"}
+        </span>
+      </button>
       <MetricCard label="One-time fees" value={fmtKES(summary.oneTimeFees)} />
       <MetricCard label="Loan fees" value={fmtKES(summary.loanServiceFees)} />
       <MetricCard
