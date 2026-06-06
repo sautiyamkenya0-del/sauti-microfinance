@@ -1010,6 +1010,59 @@ export const listMemberSelfServiceWorkspaceRecord = createServerFn({ method: "GE
     };
   });
 
+export const listMemberPortalDocketBalancesRecord = createServerFn({ method: "GET" })
+  .inputValidator((data: { memberId?: string } | undefined) => ({
+    memberId: data?.memberId?.trim() || undefined,
+  }))
+  .handler(async ({ data }) => {
+    const session = await requireSignedInSession();
+    let targetMemberId = data.memberId ?? "";
+    if (session.authMode === "member") {
+      const member = await requireMemberActor();
+      targetMemberId = member.id;
+    } else {
+      await requireStaffActor();
+    }
+    if (!targetMemberId) {
+      return {
+        withdrawableSavings: 0,
+        complianceSavings: 0,
+        loanSavings: 0,
+      };
+    }
+
+    const supabaseAdmin = requireSupabaseAdmin();
+    const [memberResult, docketResult] = await Promise.all([
+      supabaseAdmin
+        .from("members")
+        .select("savings_balance")
+        .eq("id", targetMemberId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("member_docket_balances")
+        .select("docket, amount")
+        .eq("member_id", targetMemberId)
+        .in("docket", ["withdrawable_savings", "loan_savings"]),
+    ]);
+
+    if (memberResult.error) throw new Error(memberResult.error.message);
+    if (docketResult.error && !isMissingRelationError(docketResult.error)) {
+      throw new Error(docketResult.error.message);
+    }
+
+    const rows = docketResult.error ? [] : ((docketResult.data ?? []) as DbRow[]);
+    const balanceFor = (docket: string) =>
+      rows
+        .filter((row) => readText(row.docket) === docket)
+        .reduce((sum, row) => sum + readNumber(row.amount), 0);
+
+    return {
+      withdrawableSavings: balanceFor("withdrawable_savings"),
+      complianceSavings: readNumber((memberResult.data as DbRow | null)?.savings_balance),
+      loanSavings: balanceFor("loan_savings"),
+    };
+  });
+
 export const listPerformanceTargets = createServerFn({ method: "POST" }).handler(async () => {
   await requireStaffActor();
   const supabaseAdmin = requireSupabaseAdmin();

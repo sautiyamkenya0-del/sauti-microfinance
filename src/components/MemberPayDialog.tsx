@@ -25,7 +25,15 @@ type Props = {
   onClose: () => void;
 };
 
-type Purpose = "savings" | "loan" | "shares" | "investment" | "fees" | "upfront";
+type Purpose =
+  | "savings"
+  | "withdrawable"
+  | "loan_savings"
+  | "loan"
+  | "shares"
+  | "investment"
+  | "fees"
+  | "upfront";
 
 /**
  * STK Push prompt - sends a real Daraja prompt to the member's phone.
@@ -154,6 +162,8 @@ export function MemberPayDialog({
   const purposeOptions: { value: Purpose; label: string; disabled?: boolean }[] = useMemo(() => {
     const opts: { value: Purpose; label: string; disabled?: boolean }[] = [
       { value: "savings", label: "Daily compliance contribution" },
+      { value: "withdrawable", label: "Withdrawable savings" },
+      { value: "loan_savings", label: "Loan savings" },
       { value: "loan", label: "Loan repayment", disabled: !activeLoan },
       { value: "shares", label: "Buy shares" },
       { value: "fees", label: "Mandatory fees" },
@@ -175,7 +185,11 @@ export function MemberPayDialog({
 
   const accountToken =
     purpose === "savings"
-      ? "DAILY"
+      ? "DAI"
+      : purpose === "withdrawable"
+        ? "WDS"
+        : purpose === "loan_savings"
+          ? "LS"
       : purpose === "shares"
         ? "SHARE"
         : purpose === "investment"
@@ -351,6 +365,12 @@ export function MemberPayDialog({
             {member.category === "both" && (
               <p className="text-xs text-muted-foreground">
                 Member-plus-investor accounts still follow the normal member payment flow first.
+              </p>
+            )}
+            {purpose === "loan_savings" && (
+              <p className="text-xs text-muted-foreground">
+                Loan savings opens after your daily compliance contribution and share thresholds are
+                met, and when no active loan is blocking protected savings.
               </p>
             )}
           </div>

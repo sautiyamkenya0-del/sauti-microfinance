@@ -10,7 +10,9 @@ import {
   businessPermanenceLabel,
   fmtKES,
   joinName,
+  loanPricingPreview,
   loanPenaltySummary,
+  loanProductTypeForAmount,
   loanSummary,
   memberIsServiceOnly,
   memberNeedsSticker,
@@ -49,6 +51,7 @@ import { trueLoanStatus, trueLoanStatusLabel, trueLoanStatusTone } from "@/lib/l
 import { createMemberLoanApplicationRecord, listMpesaReceiptAudit } from "@/lib/app-data.functions";
 import {
   listClientNotices,
+  listMemberPortalDocketBalancesRecord,
   listMemberSelfServiceWorkspaceRecord,
   listPortalCarryoverLoans,
   listSupplierWorkspaceRecord,
@@ -88,10 +91,12 @@ type ClientAlert = {
 };
 
 type PortalPaymentIntent = {
-  purpose: "savings" | "loan" | "shares" | "investment" | "fees";
+  purpose: "savings" | "withdrawable" | "loan_savings" | "loan" | "shares" | "investment" | "fees";
   amount?: number;
   loanId?: string;
 };
+
+type LoanRequestPreview = ReturnType<typeof loanPricingPreview>;
 
 function noticeKind(value?: string): ClientAlert["kind"] {
   return value === "alert" || value === "warning" ? value : "info";
@@ -218,6 +223,7 @@ function Portal() {
   const loadSupplierWorkspace = useServerFn(listSupplierWorkspaceRecord);
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const createMemberLoanApplication = useServerFn(createMemberLoanApplicationRecord);
+  const loadMemberDocketBalances = useServerFn(listMemberPortalDocketBalancesRecord);
   const navigate = useNavigate();
 
   const [phone, setPhone] = useState(member?.phone ?? "");
@@ -338,6 +344,25 @@ function Portal() {
     staleTime: 30000,
     refetchOnWindowFocus: false,
   });
+  const { data: memberDocketBalances } = useQuery({
+    queryKey: ["portal-member-docket-balances", memberId, shouldPassMemberId],
+    queryFn: () =>
+      loadMemberDocketBalances({ data: shouldPassMemberId ? { memberId } : { memberId } }),
+    enabled: !!memberId,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+  const savingsDockets = useMemo(
+    () => ({
+      withdrawableSavings: Math.max(0, Number((memberDocketBalances as any)?.withdrawableSavings ?? 0)),
+      complianceSavings: Math.max(
+        0,
+        Number((memberDocketBalances as any)?.complianceSavings ?? member?.savingsBalance ?? 0),
+      ),
+      loanSavings: Math.max(0, Number((memberDocketBalances as any)?.loanSavings ?? 0)),
+    }),
+    [member?.savingsBalance, memberDocketBalances],
+  );
   const scopedMpesaReceiptRows = useMemo(
     () =>
       (mpesaReceiptRows as any[])
@@ -406,6 +431,17 @@ function Portal() {
       }),
     [liveLoanDisplayStatus, myLoans],
   );
+  const loanRequestPrincipal = Math.max(0, Number(loanRequestAmount) || 0);
+  const loanRequestTermDays = Math.max(1, Number(loanRequestDays) || 30);
+  const loanRequestPreview = useMemo(() => {
+    if (loanRequestPrincipal <= 0) return null;
+    return loanPricingPreview({
+      loanKind: loanRequestKind,
+      loanType: loanProductTypeForAmount(loanRequestPrincipal),
+      netAmount: loanRequestPrincipal,
+      termDays: loanRequestTermDays,
+    });
+  }, [loanRequestKind, loanRequestPrincipal, loanRequestTermDays]);
 
   const clientAlerts = useMemo<ClientAlert[]>(() => {
     if (!member) return [];
@@ -580,8 +616,8 @@ function Portal() {
 
   async function submitLoanApplication() {
     if (!member) return;
-    const amount = Math.max(0, Number(loanRequestAmount) || 0);
-    const days = Math.max(1, Number(loanRequestDays) || 30);
+    const amount = loanRequestPrincipal;
+    const days = loanRequestPreview?.termDays ?? loanRequestTermDays;
     if (amount <= 0) return toast.error("Enter the loan amount.");
     if (!loanRequestPurpose.trim()) return toast.error("Enter the loan purpose.");
     const result = await createMemberLoanApplication({
@@ -980,13 +1016,27 @@ function Portal() {
                   ) : null)}
                 {!isStaffView && (
                   <Section title="Make a payment">
-                    <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                       <PaymentAction
                         icon={PiggyBank}
                         title="Daily contribution"
                         detail="Prompt your registered phone for savings."
                         amount="Any amount"
                         onClick={() => openPayment({ purpose: "savings", amount: 100 })}
+                      />
+                      <PaymentAction
+                        icon={Wallet}
+                        title="Withdrawable savings"
+                        detail="Keep money in the withdrawable savings docket."
+                        amount="Custom"
+                        onClick={() => openPayment({ purpose: "withdrawable" })}
+                      />
+                      <PaymentAction
+                        icon={ShieldCheck}
+                        title="Loan savings"
+                        detail="Build your loan savings after compliance is met."
+                        amount="Custom"
+                        onClick={() => openPayment({ purpose: "loan_savings" })}
                       />
                       <PaymentAction
                         icon={Banknote}
@@ -1040,15 +1090,53 @@ function Portal() {
                     </div>
                   </Section>
                 )}
-                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <Section title="My savings dockets">
+                  <div className="grid gap-3 p-5 md:grid-cols-3">
+                    <SavingsDocketTile
+                      icon={Wallet}
+                      title="Withdrawable savings"
+                      value={fmtKES(savingsDockets.withdrawableSavings)}
+                      detail="Available in the withdrawable savings docket."
+                      actionLabel={!isStaffView ? "Prompt top-up" : undefined}
+                      onAction={
+                        !isStaffView ? () => openPayment({ purpose: "withdrawable" }) : undefined
+                      }
+                    />
+                    <SavingsDocketTile
+                      icon={PiggyBank}
+                      title="Compliance savings"
+                      value={fmtKES(savingsDockets.complianceSavings)}
+                      detail={
+                        savingsDockets.complianceSavings < 1000
+                          ? "Below mandatory 1,000 threshold."
+                          : "Daily compliance contribution is above 1,000."
+                      }
+                      actionLabel={!isStaffView ? "Prompt top-up" : undefined}
+                      onAction={!isStaffView ? () => openPayment({ purpose: "savings" }) : undefined}
+                    />
+                    <SavingsDocketTile
+                      icon={ShieldCheck}
+                      title="Loan savings"
+                      value={fmtKES(savingsDockets.loanSavings)}
+                      detail="Dedicated loan savings / multiplier savings balance."
+                      actionLabel={!isStaffView ? "Prompt top-up" : undefined}
+                      onAction={
+                        !isStaffView ? () => openPayment({ purpose: "loan_savings" }) : undefined
+                      }
+                    />
+                  </div>
+                </Section>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <StatCard
                     label="Daily compliance contribution"
-                    value={fmtKES(member.savingsBalance)}
+                    value={fmtKES(savingsDockets.complianceSavings)}
                     hint={
-                      member.savingsBalance < 1000 ? "Below mandatory 1,000" : "Above threshold"
+                      savingsDockets.complianceSavings < 1000
+                        ? "Below mandatory 1,000"
+                        : "Above threshold"
                     }
                     icon={<PiggyBank className="h-5 w-5" />}
-                    tone={member.savingsBalance < 1000 ? "destructive" : "success"}
+                    tone={savingsDockets.complianceSavings < 1000 ? "destructive" : "success"}
                   />
                   <StatCard
                     label="Shares"
@@ -1407,6 +1495,9 @@ function Portal() {
                             placeholder="Purpose"
                             className="rounded-md border border-border bg-muted px-3 py-2 text-sm sm:col-span-3"
                           />
+                          <div className="sm:col-span-3">
+                            <LoanApplicationPreview preview={loanRequestPreview} />
+                          </div>
                           <div className="sm:col-span-3">
                             <button
                               onClick={() => void submitLoanApplication()}
@@ -1979,19 +2070,24 @@ function Portal() {
                           placeholder="Days"
                           className="rounded-md border border-border bg-card px-3 py-2 text-sm"
                         />
-                        <button
-                          type="button"
-                          onClick={() => void submitLoanApplication()}
-                          className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                        >
-                          Apply
-                        </button>
                         <input
                           value={loanRequestPurpose}
                           onChange={(event) => setLoanRequestPurpose(event.target.value)}
                           placeholder="Purpose"
                           className="rounded-md border border-border bg-card px-3 py-2 text-sm sm:col-span-4"
                         />
+                        <div className="sm:col-span-4">
+                          <LoanApplicationPreview preview={loanRequestPreview} />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <button
+                            type="button"
+                            onClick={() => void submitLoanApplication()}
+                            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                          >
+                            Apply
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -2175,6 +2271,110 @@ function LoanPaymentCallout({
           Pay now
         </button>
       </div>
+    </div>
+  );
+}
+
+function LoanApplicationPreview({ preview }: { preview: LoanRequestPreview | null }) {
+  if (!preview) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+        Enter an amount to see total payable, daily repayment, and compliance collection.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-primary/25 bg-primary/5 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-primary">
+            Loan computation preview
+          </div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            {preview.termDays} day(s) at {preview.ratePct}% interest
+          </div>
+        </div>
+        <div className="rounded-md bg-card px-3 py-2 text-right">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Daily repayment
+          </div>
+          <div className="font-display text-lg font-semibold">
+            {fmtKES(preview.dailyInclusive)}
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Amount requested" value={fmtKES(preview.netAmount)} />
+        <Stat label="Net disbursable" value={fmtKES(preview.netDisbursedAmount)} />
+        <Stat label="Financed principal" value={fmtKES(preview.financedPrincipal)} />
+        <Stat label="Interest" value={fmtKES(preview.interest)} />
+        <Stat label="Total payable" value={fmtKES(preview.totalRepayment)} tone="warning" />
+        <Stat label="Loan only / day" value={fmtKES(preview.dailyLoanInstallment)} />
+        <Stat
+          label="Compliance / day"
+          value={fmtKES(preview.dailySavingsAmount)}
+          tone={preview.dailySavingsAmount > 0 ? "success" : undefined}
+        />
+        <Stat
+          label="Grand total collected"
+          value={fmtKES(preview.grandTotalCollected)}
+          tone="success"
+        />
+      </div>
+      <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <div className="text-muted-foreground">Compliance after finish</div>
+          <div className="mt-0.5 font-medium">{fmtKES(preview.totalSavingsAccrued)}</div>
+        </div>
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <div className="text-muted-foreground">Financed charges</div>
+          <div className="mt-0.5 font-medium">{fmtKES(preview.totalFinancedCharges)}</div>
+        </div>
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <div className="text-muted-foreground">Upfront charges</div>
+          <div className="mt-0.5 font-medium">{fmtKES(preview.totalUpfrontCharges)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SavingsDocketTile({
+  icon: Icon,
+  title,
+  value,
+  detail,
+  actionLabel,
+  onAction,
+}: {
+  icon: LucideIcon;
+  title: string;
+  value: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background p-4">
+      <div className="flex items-start justify-between gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </span>
+        {onAction && actionLabel ? (
+          <button
+            type="button"
+            onClick={onAction}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+          >
+            <Smartphone className="h-3.5 w-3.5" />
+            {actionLabel}
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-4 text-xs text-muted-foreground">{title}</div>
+      <div className="mt-1 font-display text-2xl font-semibold">{value}</div>
+      <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
     </div>
   );
 }
