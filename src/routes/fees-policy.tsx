@@ -3794,28 +3794,47 @@ function PolicyCenterPage() {
                       label="Lifetime net used"
                       value={fmtKES(derivedCarryoverTotalCollected)}
                     />
-                    <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4 md:col-span-2">
-                      <label className="flex items-start gap-2 text-sm font-medium">
-                        <input
-                          type="checkbox"
-                          checked={cashThroughCycleOverrideEnabled}
-                          onChange={(event) =>
-                            setCarryoverProfile((current) => ({
-                              ...current,
-                              collectionBreakdown: {
-                                ...readCarryoverBreakdown(current.collectionBreakdown),
-                                cashThroughCycleOverrideEnabled: event.target.checked,
-                              },
-                            }))
-                          }
-                        />
+                    <div
+                      className={`space-y-3 rounded-xl border p-4 md:col-span-2 ${
+                        cashThroughCycleOverrideEnabled
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-muted/20"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={cashThroughCycleOverrideEnabled}
+                        onClick={() =>
+                          setCarryoverProfile((current) => ({
+                            ...current,
+                            collectionBreakdown: {
+                              ...readCarryoverBreakdown(current.collectionBreakdown),
+                              cashThroughCycleOverrideEnabled: !readCarryoverBreakdown(
+                                current.collectionBreakdown,
+                              ).cashThroughCycleOverrideEnabled,
+                            },
+                          }))
+                        }
+                        className="flex w-full items-start justify-between gap-3 text-left"
+                      >
                         <span>
-                          <span className="block">Cash through cycle override</span>
-                          <span className="block text-xs font-normal text-muted-foreground">
+                          <span className="block text-sm font-medium">
+                            Cash through cycle override
+                          </span>
+                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
                             Use the entered cash amount as the carryover loan deduction.
                           </span>
                         </span>
-                      </label>
+                        <span
+                          className={`inline-flex h-7 min-w-14 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
+                            cashThroughCycleOverrideEnabled
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-background text-muted-foreground"
+                          }`}
+                        >
+                          {cashThroughCycleOverrideEnabled ? "On" : "Off"}
+                        </span>
+                      </button>
                       {cashThroughCycleOverrideEnabled && (
                         <div className="grid gap-3 sm:grid-cols-2">
                           <NumberField
