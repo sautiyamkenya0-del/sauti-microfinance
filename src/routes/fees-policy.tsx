@@ -608,7 +608,7 @@ function PolicyCenterPage() {
     0,
   );
   const upfrontHeldOutsideLoanCycle = automaticCarryoverDeductionLoans.some(
-    (loan) => Number(loan.principal ?? 0) > 5000 && !carryoverLoanIncludesUpfront(loan),
+    (loan) => carryoverLoanUpfrontBasisAmount(loan) > 5000 && !carryoverLoanIncludesUpfront(loan),
   );
   const upfrontHeldOutBeforeLoans = upfrontHeldOutsideLoanCycle
     ? automaticCarryoverDeductions.upfrontSavingsAmount +
@@ -3804,6 +3804,10 @@ function PolicyCenterPage() {
                       value={fmtKES(derivedCarryoverTotalCollected)}
                     />
                     <MetricCard
+                      label="Upfront charged on"
+                      value={fmtKES(automaticCarryoverDeductions.upfrontBasisAmount)}
+                    />
+                    <MetricCard
                       label="Automatic upfront savings"
                       value={fmtKES(automaticCarryoverDeductions.upfrontSavingsAmount)}
                     />
@@ -5396,8 +5400,9 @@ function deriveAutomaticCarryoverDeductions({
   feeBuckets.card = consume(cardAmount);
   feeBuckets.sticker = member && memberNeedsSticker(member) ? consume(stickerAmount) : 0;
 
-  const premiumLoan = loans.find((loan) => Number(loan.principal ?? 0) > 5000);
-  const upfront = premiumLoan ? upfrontRequirementForAmount(premiumLoan.principal) : undefined;
+  const premiumLoan = loans.find((loan) => carryoverLoanUpfrontBasisAmount(loan) > 5000);
+  const upfrontBasisAmount = premiumLoan ? carryoverLoanUpfrontBasisAmount(premiumLoan) : 0;
+  const upfront = premiumLoan ? upfrontRequirementForAmount(upfrontBasisAmount) : undefined;
   const upfrontSavingsAmount = consume(upfront?.savingsAmount ?? 0);
   const upfrontShareTarget = consume(upfront?.sharesAmount ?? 0);
   const upfrontShareUnits =
@@ -5410,6 +5415,7 @@ function deriveAutomaticCarryoverDeductions({
     upfrontSavingsAmount,
     upfrontShareUnits,
     upfrontShareAmount,
+    upfrontBasisAmount,
     firstUpfrontRequired: Boolean(upfront && upfront.total > 0),
     membershipFeePaid: membershipAmount <= 0 || feeBuckets.membership >= membershipAmount,
     cardFeePaid: cardAmount <= 0 || feeBuckets.card >= cardAmount,
@@ -5431,6 +5437,46 @@ function carryoverLoanIncludesUpfront(loan: LegacyCarryoverLoan) {
     loan.loanCycleNumber,
   );
   return feeBreakdown.productMeta?.includeUpfrontInLoan !== false;
+}
+
+function carryoverLoanUpfrontBasisAmount(loan: LegacyCarryoverLoan) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  const productMeta = feeBreakdown.productMeta ?? {};
+  const appliedAmount = parseCarryoverMoneyAmount(
+    productMeta.upfrontAppliedAmount ?? productMeta.appliedAmountForUpfront ?? 0,
+  );
+  return Math.max(0, appliedAmount > 0 ? appliedAmount : parseCarryoverMoneyAmount(loan.principal));
+}
+
+function carryoverLoanStoredUpfrontAppliedAmount(loan: LegacyCarryoverLoan) {
+  const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+    loan.feeBreakdown,
+    loan.loanCycleNumber,
+  );
+  return parseCarryoverMoneyAmount(
+    feeBreakdown.productMeta?.upfrontAppliedAmount ??
+      feeBreakdown.productMeta?.appliedAmountForUpfront ??
+      0,
+  );
+}
+
+function promptCarryoverUpfrontAppliedAmount(loan: LegacyCarryoverLoan, fallbackAmount: number) {
+  if (typeof window === "undefined") return fallbackAmount;
+  const prompted = window.prompt(
+    "Amount applied for upfront",
+    `${fallbackAmount || loan.principal || 0}`,
+  );
+  if (prompted === null) return undefined;
+  return parseCarryoverMoneyAmount(prompted);
+}
+
+function parseCarryoverMoneyAmount(value: unknown) {
+  const parsed =
+    typeof value === "string" ? Number(value.replace(/,/g, "").trim()) : Number(value ?? 0);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
 function allocateComplianceContribution(
@@ -5878,6 +5924,21 @@ function GuidedCarryoverLoanCard({
     Number(feeBreakdown.cashThroughCycleOverrideAmount ?? 0) || 0,
   );
   const upfrontIncludedInLoan = carryoverLoanIncludesUpfront(loan);
+  const upfrontBasisAmount = carryoverLoanUpfrontBasisAmount(loan);
+  const upfrontRequirement = upfrontRequirementForAmount(upfrontBasisAmount);
+  const toggleUpfrontIncluded = (nextIncluded: boolean) => {
+    const hasStoredAppliedAmount = carryoverLoanStoredUpfrontAppliedAmount(loan) > 0;
+    let nextAppliedAmount = upfrontBasisAmount;
+    if (nextIncluded && !hasStoredAppliedAmount) {
+      const promptedAmount = promptCarryoverUpfrontAppliedAmount(loan, upfrontBasisAmount);
+      if (promptedAmount === undefined) return;
+      nextAppliedAmount = promptedAmount;
+    }
+    updateProductMeta({
+      includeUpfrontInLoan: nextIncluded,
+      upfrontAppliedAmount: nextAppliedAmount,
+    });
+  };
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -6110,13 +6171,13 @@ function GuidedCarryoverLoanCard({
         <button
           type="button"
           aria-pressed={upfrontIncludedInLoan}
-          onClick={() => updateProductMeta({ includeUpfrontInLoan: !upfrontIncludedInLoan })}
+          onClick={() => toggleUpfrontIncluded(!upfrontIncludedInLoan)}
           className="flex w-full items-start justify-between gap-3 text-left"
         >
           <span>
             <span className="block text-sm font-medium">Premium upfront in loan</span>
             <span className="mt-1 block text-xs font-normal text-muted-foreground">
-              Count upfront savings and shares inside this loan cycle.
+              Count upfront savings and shares inside this loan cycle using the amount applied.
             </span>
           </span>
           <span
@@ -6129,6 +6190,17 @@ function GuidedCarryoverLoanCard({
             {upfrontIncludedInLoan ? "On" : "Off"}
           </span>
         </button>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <NumberField
+            label="Amount applied for upfront"
+            value={upfrontBasisAmount}
+            onChange={(value) => updateProductMeta({ upfrontAppliedAmount: Math.max(0, value) })}
+          />
+          <MetricCard
+            label="Upfront deducted from basis"
+            value={fmtKES(upfrontRequirement.total)}
+          />
+        </div>
       </div>
       <div
         className={`mt-4 space-y-3 rounded-xl border p-4 ${
@@ -6226,6 +6298,20 @@ function CarryoverLoanFeeFields({
     });
   };
   const upfrontIncludedInLoan = carryoverLoanIncludesUpfront(loan);
+  const upfrontBasisAmount = carryoverLoanUpfrontBasisAmount(loan);
+  const toggleUpfrontIncluded = (nextIncluded: boolean) => {
+    const hasStoredAppliedAmount = carryoverLoanStoredUpfrontAppliedAmount(loan) > 0;
+    let nextAppliedAmount = upfrontBasisAmount;
+    if (nextIncluded && !hasStoredAppliedAmount) {
+      const promptedAmount = promptCarryoverUpfrontAppliedAmount(loan, upfrontBasisAmount);
+      if (promptedAmount === undefined) return;
+      nextAppliedAmount = promptedAmount;
+    }
+    updateProductMeta({
+      includeUpfrontInLoan: nextIncluded,
+      upfrontAppliedAmount: nextAppliedAmount,
+    });
+  };
 
   return (
     <div
@@ -6279,6 +6365,11 @@ function CarryoverLoanFeeFields({
         value={feeBreakdown.subscriptionMonths ?? 0}
         onChange={(value) => updateFee("subscriptionMonths", Math.max(0, Math.floor(value)))}
       />
+      <NumberField
+        label="Amount applied for upfront"
+        value={upfrontBasisAmount}
+        onChange={(value) => updateProductMeta({ upfrontAppliedAmount: Math.max(0, value) })}
+      />
       <label className="flex items-center gap-2 rounded-md border border-border bg-background/50 px-3 py-2 text-sm">
         <input
           type="checkbox"
@@ -6290,7 +6381,7 @@ function CarryoverLoanFeeFields({
       <button
         type="button"
         aria-pressed={upfrontIncludedInLoan}
-        onClick={() => updateProductMeta({ includeUpfrontInLoan: !upfrontIncludedInLoan })}
+        onClick={() => toggleUpfrontIncluded(!upfrontIncludedInLoan)}
         className={`flex min-h-10 items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-sm ${
           upfrontIncludedInLoan
             ? "border-primary bg-primary/5 text-foreground"
