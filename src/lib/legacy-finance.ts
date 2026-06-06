@@ -57,6 +57,8 @@ export type LegacyCarryoverLoanFeeBreakdown = {
   dailyPenaltyDays?: number;
   dailyPenaltyAmount?: number;
   dueDatePenaltyDays?: number;
+  cashThroughCycleOverrideEnabled?: boolean;
+  cashThroughCycleOverrideAmount?: number;
   productMeta?: Record<string, unknown>;
 };
 
@@ -314,6 +316,8 @@ export function normalizeLegacyCarryoverLoanFeeBreakdown(
     dailyPenaltyDays: wholeDaysValue(source.dailyPenaltyDays),
     dailyPenaltyAmount: moneyValue(source.dailyPenaltyAmount),
     dueDatePenaltyDays: wholeDaysValue(source.dueDatePenaltyDays),
+    cashThroughCycleOverrideEnabled: source.cashThroughCycleOverrideEnabled === true,
+    cashThroughCycleOverrideAmount: moneyValue(source.cashThroughCycleOverrideAmount),
     productMeta:
       source.productMeta && typeof source.productMeta === "object"
         ? (source.productMeta as Record<string, unknown>)

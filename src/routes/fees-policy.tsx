@@ -201,8 +201,6 @@ type CarryoverFeeBuckets = {
 type CarryoverCollectionBreakdown = {
   totalDepositsRecorded: number;
   purposePoolBalance: number;
-  cashThroughCycleOverrideEnabled: boolean;
-  cashThroughCycleOverrideAmount: number;
   feeBuckets: CarryoverFeeBuckets;
   preCarryoverLiveState?: Record<string, unknown>;
 };
@@ -570,11 +568,6 @@ function PolicyCenterPage() {
   );
   const carryoverLoanDraftFuelRows = carryoverFuelRows(carryoverLoanDraft);
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
-  const cashThroughCycleOverrideEnabled = carryoverBreakdown.cashThroughCycleOverrideEnabled;
-  const cashThroughCycleOverrideAmount = Math.max(
-    0,
-    carryoverBreakdown.cashThroughCycleOverrideAmount,
-  );
   const lifetimeNetAvailableForCarryover = Math.max(
     0,
     selectedClientNet,
@@ -592,8 +585,7 @@ function PolicyCenterPage() {
     carryoverProfile.otherCollectedTotal > 0 ||
     carryoverProfile.penaltiesOutstanding > 0 ||
     carryoverProfile.penaltiesWaivedTotal > 0 ||
-    carryoverBreakdown.purposePoolBalance > 0 ||
-    carryoverBreakdown.cashThroughCycleOverrideEnabled;
+    carryoverBreakdown.purposePoolBalance > 0;
   const automaticCarryoverDeductions = deriveAutomaticCarryoverDeductions({
     available: carryoverHasDraftData ? lifetimeNetAvailableForCarryover : 0,
     member: selectedClient ?? undefined,
@@ -613,16 +605,13 @@ function PolicyCenterPage() {
     (sum, value) => sum + value,
     0,
   );
-  const calculatedCarryoverLoanPaymentBudget = Math.max(
+  const carryoverLoanPaymentBudget = Math.max(
     0,
     lifetimeNetAvailableForCarryover -
       carryoverFeeTotal -
       automaticCarryoverDeductions.upfrontSavingsAmount -
       automaticCarryoverDeductions.upfrontShareAmount,
   );
-  const carryoverLoanPaymentBudget = cashThroughCycleOverrideEnabled
-    ? cashThroughCycleOverrideAmount
-    : calculatedCarryoverLoanPaymentBudget;
   const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
     guidedLoanEntries,
     policySettings,
@@ -3777,6 +3766,9 @@ function PolicyCenterPage() {
                                 index={index}
                                 loan={loan}
                                 summary={summary}
+                                calculatedPaidToDate={
+                                  derivedGuidedLoanRows[index]?.calculatedPaidToDate ?? 0
+                                }
                                 onChange={(nextLoan) =>
                                   setGuidedLoanEntries((current) =>
                                     current.map((item, itemIndex) =>
@@ -3794,75 +3786,6 @@ function PolicyCenterPage() {
                       label="Lifetime net used"
                       value={fmtKES(derivedCarryoverTotalCollected)}
                     />
-                    <div
-                      className={`space-y-3 rounded-xl border p-4 md:col-span-2 ${
-                        cashThroughCycleOverrideEnabled
-                          ? "border-primary bg-primary/5"
-                          : "border-border bg-muted/20"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={cashThroughCycleOverrideEnabled}
-                        onClick={() =>
-                          setCarryoverProfile((current) => ({
-                            ...current,
-                            collectionBreakdown: {
-                              ...readCarryoverBreakdown(current.collectionBreakdown),
-                              cashThroughCycleOverrideEnabled: !readCarryoverBreakdown(
-                                current.collectionBreakdown,
-                              ).cashThroughCycleOverrideEnabled,
-                            },
-                          }))
-                        }
-                        className="flex w-full items-start justify-between gap-3 text-left"
-                      >
-                        <span>
-                          <span className="block text-sm font-medium">
-                            Cash through cycle override
-                          </span>
-                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
-                            Use the entered cash amount as the carryover loan deduction.
-                          </span>
-                        </span>
-                        <span
-                          className={`inline-flex h-7 min-w-14 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
-                            cashThroughCycleOverrideEnabled
-                              ? "border-primary bg-primary text-primary-foreground"
-                              : "border-border bg-background text-muted-foreground"
-                          }`}
-                        >
-                          {cashThroughCycleOverrideEnabled ? "On" : "Off"}
-                        </span>
-                      </button>
-                      {cashThroughCycleOverrideEnabled && (
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <NumberField
-                            label="Override amount"
-                            value={cashThroughCycleOverrideAmount}
-                            onChange={(value) =>
-                              setCarryoverProfile((current) => ({
-                                ...current,
-                                collectionBreakdown: {
-                                  ...readCarryoverBreakdown(current.collectionBreakdown),
-                                  cashThroughCycleOverrideAmount: Math.max(0, value),
-                                },
-                              }))
-                            }
-                          />
-                          <div className="rounded-lg border border-border bg-background/50 p-3 text-sm">
-                            <MetricRow
-                              label="Calculated"
-                              value={fmtKES(calculatedCarryoverLoanPaymentBudget)}
-                            />
-                            <MetricRow
-                              label="Deducting"
-                              value={fmtKES(carryoverLoanPaymentBudget)}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
                     <MetricCard
                       label="Automatic upfront savings"
                       value={fmtKES(automaticCarryoverDeductions.upfrontSavingsAmount)}
@@ -5355,6 +5278,7 @@ function deriveGuidedCarryoverLoanRows(
       loan: LegacyCarryoverLoan;
       summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
       status: "closed" | "defaulted" | "active";
+      calculatedPaidToDate: number;
     }
   >();
   const sortedLoans = loans
@@ -5373,10 +5297,18 @@ function deriveGuidedCarryoverLoanRows(
       policySettings,
       asOfDate,
     );
-    const autoPaidToDate = Math.min(
+    const calculatedPaidToDate = Math.min(
       remainingPaymentBudget,
       Math.max(0, unpaidSummary.totalExpectedCollected),
     );
+    const feeBreakdown = normalizeLegacyCarryoverLoanFeeBreakdown(
+      loan.feeBreakdown,
+      loan.loanCycleNumber,
+    );
+    const autoPaidToDate =
+      feeBreakdown.cashThroughCycleOverrideEnabled === true
+        ? Math.max(0, feeBreakdown.cashThroughCycleOverrideAmount ?? 0)
+        : calculatedPaidToDate;
     remainingPaymentBudget = Math.max(0, remainingPaymentBudget - autoPaidToDate);
     const paidLoan = { ...loan, paidToDate: autoPaidToDate };
     const summary = summarizeLegacyCarryoverLoan(paidLoan, policySettings, asOfDate);
@@ -5395,6 +5327,7 @@ function deriveGuidedCarryoverLoanRows(
       },
       summary,
       status,
+      calculatedPaidToDate,
     });
   });
 
@@ -5409,7 +5342,12 @@ function deriveGuidedCarryoverLoanRows(
         : summary.dueDate < asOfDate || loan.status === "defaulted"
           ? "defaulted"
           : "active";
-    return { loan: { ...loan, status, finished: status === "closed" }, summary, status };
+    return {
+      loan: { ...loan, status, finished: status === "closed" },
+      summary,
+      status,
+      calculatedPaidToDate: Math.max(0, loan.paidToDate),
+    };
   });
 }
 
@@ -5510,8 +5448,6 @@ function defaultCarryoverBreakdown(): CarryoverCollectionBreakdown {
   return {
     totalDepositsRecorded: 0,
     purposePoolBalance: 0,
-    cashThroughCycleOverrideEnabled: false,
-    cashThroughCycleOverrideAmount: 0,
     feeBuckets: defaultCarryoverFeeBuckets(),
   };
 }
@@ -5527,11 +5463,6 @@ function readCarryoverBreakdown(
   return {
     totalDepositsRecorded: Number(next.totalDepositsRecorded ?? 0) || 0,
     purposePoolBalance: Number(next.purposePoolBalance ?? 0) || 0,
-    cashThroughCycleOverrideEnabled: next.cashThroughCycleOverrideEnabled === true,
-    cashThroughCycleOverrideAmount: Math.max(
-      0,
-      Number(next.cashThroughCycleOverrideAmount ?? 0) || 0,
-    ),
     preCarryoverLiveState:
       next.preCarryoverLiveState && typeof next.preCarryoverLiveState === "object"
         ? (next.preCarryoverLiveState as Record<string, unknown>)
@@ -5864,12 +5795,14 @@ function GuidedCarryoverLoanCard({
   index,
   loan,
   summary,
+  calculatedPaidToDate,
   onChange,
 }: {
   status: "closed" | "defaulted" | "active";
   index: number;
   loan: LegacyCarryoverLoan;
   summary: ReturnType<typeof summarizeLegacyCarryoverLoan>;
+  calculatedPaidToDate: number;
   onChange: (loan: LegacyCarryoverLoan) => void;
 }) {
   const title =
@@ -5914,6 +5847,11 @@ function GuidedCarryoverLoanCard({
     });
   };
   const fuelRows = carryoverFuelRows(loan);
+  const cashThroughCycleOverrideEnabled = feeBreakdown.cashThroughCycleOverrideEnabled === true;
+  const cashThroughCycleOverrideAmount = Math.max(
+    0,
+    Number(feeBreakdown.cashThroughCycleOverrideAmount ?? 0) || 0,
+  );
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-4">
@@ -6123,6 +6061,51 @@ function GuidedCarryoverLoanCard({
         />
         <MetricCard label="Daily penalty" value={fmtKES(summary.arrearsPenalty)} />
         <MetricCard label="Due-date penalty" value={fmtKES(summary.overduePenalty)} />
+      </div>
+      <div
+        className={`mt-4 space-y-3 rounded-xl border p-4 ${
+          cashThroughCycleOverrideEnabled
+            ? "border-primary bg-primary/5"
+            : "border-border bg-background/40"
+        }`}
+      >
+        <button
+          type="button"
+          aria-pressed={cashThroughCycleOverrideEnabled}
+          onClick={() =>
+            updateFee("cashThroughCycleOverrideEnabled", !cashThroughCycleOverrideEnabled)
+          }
+          className="flex w-full items-start justify-between gap-3 text-left"
+        >
+          <span>
+            <span className="block text-sm font-medium">Cash through cycle override</span>
+            <span className="mt-1 block text-xs font-normal text-muted-foreground">
+              Use a manual cash-through-cycle amount for this loan only.
+            </span>
+          </span>
+          <span
+            className={`inline-flex h-7 min-w-14 items-center justify-center rounded-md border px-2 text-xs font-semibold ${
+              cashThroughCycleOverrideEnabled
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-background text-muted-foreground"
+            }`}
+          >
+            {cashThroughCycleOverrideEnabled ? "On" : "Off"}
+          </span>
+        </button>
+        {cashThroughCycleOverrideEnabled && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <NumberField
+              label="Override amount"
+              value={cashThroughCycleOverrideAmount}
+              onChange={(value) => updateFee("cashThroughCycleOverrideAmount", Math.max(0, value))}
+            />
+            <div className="rounded-lg border border-border bg-background/50 p-3 text-sm">
+              <MetricRow label="Calculated" value={fmtKES(calculatedPaidToDate)} />
+              <MetricRow label="Deducting" value={fmtKES(loan.paidToDate)} />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
