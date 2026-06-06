@@ -462,12 +462,15 @@ export function summarizeLegacyCarryoverLoan(
   const overduePenalty = ledger.defaultPenaltyAmount;
   const penaltyWaivedAmount = Math.max(0, Number(loan.penaltyWaivedAmount ?? 0));
   const estimatedPenaltyNow = Math.max(0, ledger.totalPenalty - penaltyWaivedAmount);
-  const totalOwedNow = Math.max(0, totalExpectedCollected + estimatedPenaltyNow - ledger.totalPaid);
-  const defaultedAmount = Math.max(
-    0,
-    ledger.scheduledCollectedToDate + estimatedPenaltyNow - ledger.totalPaid,
-  );
+  const cashThroughCycleOverrideEnabled = feeBreakdown.cashThroughCycleOverrideEnabled === true;
+  const totalOwedNow = cashThroughCycleOverrideEnabled
+    ? 0
+    : Math.max(0, totalExpectedCollected + estimatedPenaltyNow - ledger.totalPaid);
+  const defaultedAmount = cashThroughCycleOverrideEnabled
+    ? 0
+    : Math.max(0, ledger.scheduledCollectedToDate + estimatedPenaltyNow - ledger.totalPaid);
   const autoStopped =
+    !cashThroughCycleOverrideEnabled &&
     daysPastDue > 0 &&
     DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
     totalOwedNow >= DEFAULT_DEFAULTED_AMOUNT_STOP_CAP;
@@ -495,26 +498,26 @@ export function summarizeLegacyCarryoverLoan(
     totalSavingsAccrued,
     totalExpectedCollected,
     scheduledCollectedToDate,
-    arrears,
-    balance,
+    arrears: cashThroughCycleOverrideEnabled ? 0 : arrears,
+    balance: cashThroughCycleOverrideEnabled ? 0 : balance,
     dueDate,
     elapsedDays,
-    daysPastDue,
-    dailyPenaltyDays,
-    dailyPenaltyAmount,
+    daysPastDue: cashThroughCycleOverrideEnabled ? 0 : daysPastDue,
+    dailyPenaltyDays: cashThroughCycleOverrideEnabled ? 0 : dailyPenaltyDays,
+    dailyPenaltyAmount: cashThroughCycleOverrideEnabled ? 0 : dailyPenaltyAmount,
     priorPenaltyAmount,
-    dueDatePenaltyDays,
-    dailyPenaltyBase: dailyInclusive,
-    calculatedArrearsPenalty,
-    dueDatePenaltyBase,
-    arrearsPenalty,
-    overduePenalty,
-    estimatedPenaltyNow,
+    dueDatePenaltyDays: cashThroughCycleOverrideEnabled ? 0 : dueDatePenaltyDays,
+    dailyPenaltyBase: cashThroughCycleOverrideEnabled ? 0 : dailyInclusive,
+    calculatedArrearsPenalty: cashThroughCycleOverrideEnabled ? 0 : calculatedArrearsPenalty,
+    dueDatePenaltyBase: cashThroughCycleOverrideEnabled ? 0 : dueDatePenaltyBase,
+    arrearsPenalty: cashThroughCycleOverrideEnabled ? 0 : arrearsPenalty,
+    overduePenalty: cashThroughCycleOverrideEnabled ? 0 : overduePenalty,
+    estimatedPenaltyNow: cashThroughCycleOverrideEnabled ? 0 : estimatedPenaltyNow,
     totalOwedNow,
     defaultedAmount,
     autoStopped,
     autoStoppedAt: autoStopped ? ledger.autoStoppedAt : undefined,
-    paidPct,
+    paidPct: cashThroughCycleOverrideEnabled ? 100 : paidPct,
     isFinished,
     penaltyWaivedAmount,
     frozenAsOf,

@@ -6047,16 +6047,30 @@ function GuidedCarryoverLoanCard({
         <MetricCard label="Loan repayment total" value={fmtKES(summary.totalRepayment)} />
         <MetricCard
           label={status === "closed" ? "Saved as paid" : "Paid to date"}
-          value={fmtKES(status === "closed" ? summary.totalExpectedCollected : loan.paidToDate)}
+          value={fmtKES(
+            cashThroughCycleOverrideEnabled || status !== "closed"
+              ? loan.paidToDate
+              : summary.totalExpectedCollected,
+          )}
         />
         <MetricCard
           label="Daily compliance contribution accrued"
           value={fmtKES(summary.totalSavingsAccrued)}
         />
         <MetricCard
-          label={status === "closed" ? "Cash through cycle" : "Owed now"}
+          label={
+            cashThroughCycleOverrideEnabled
+              ? "Owed now"
+              : status === "closed"
+                ? "Cash through cycle"
+                : "Owed now"
+          }
           value={fmtKES(
-            status === "closed" ? summary.totalExpectedCollected : summary.totalOwedNow,
+            cashThroughCycleOverrideEnabled
+              ? 0
+              : status === "closed"
+                ? summary.totalExpectedCollected
+                : summary.totalOwedNow,
           )}
         />
         <MetricCard label="Daily penalty" value={fmtKES(summary.arrearsPenalty)} />
