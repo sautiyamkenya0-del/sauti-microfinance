@@ -201,6 +201,8 @@ type CarryoverFeeBuckets = {
 type CarryoverCollectionBreakdown = {
   totalDepositsRecorded: number;
   purposePoolBalance: number;
+  cashThroughCycleOverrideEnabled: boolean;
+  cashThroughCycleOverrideAmount: number;
   feeBuckets: CarryoverFeeBuckets;
   preCarryoverLiveState?: Record<string, unknown>;
 };
@@ -568,6 +570,11 @@ function PolicyCenterPage() {
   );
   const carryoverLoanDraftFuelRows = carryoverFuelRows(carryoverLoanDraft);
   const carryoverBreakdown = readCarryoverBreakdown(carryoverProfile.collectionBreakdown);
+  const cashThroughCycleOverrideEnabled = carryoverBreakdown.cashThroughCycleOverrideEnabled;
+  const cashThroughCycleOverrideAmount = Math.max(
+    0,
+    carryoverBreakdown.cashThroughCycleOverrideAmount,
+  );
   const lifetimeNetAvailableForCarryover = Math.max(
     0,
     selectedClientNet,
@@ -585,7 +592,8 @@ function PolicyCenterPage() {
     carryoverProfile.otherCollectedTotal > 0 ||
     carryoverProfile.penaltiesOutstanding > 0 ||
     carryoverProfile.penaltiesWaivedTotal > 0 ||
-    carryoverBreakdown.purposePoolBalance > 0;
+    carryoverBreakdown.purposePoolBalance > 0 ||
+    carryoverBreakdown.cashThroughCycleOverrideEnabled;
   const automaticCarryoverDeductions = deriveAutomaticCarryoverDeductions({
     available: carryoverHasDraftData ? lifetimeNetAvailableForCarryover : 0,
     member: selectedClient ?? undefined,
@@ -605,13 +613,16 @@ function PolicyCenterPage() {
     (sum, value) => sum + value,
     0,
   );
-  const carryoverLoanPaymentBudget = Math.max(
+  const calculatedCarryoverLoanPaymentBudget = Math.max(
     0,
     lifetimeNetAvailableForCarryover -
       carryoverFeeTotal -
       automaticCarryoverDeductions.upfrontSavingsAmount -
       automaticCarryoverDeductions.upfrontShareAmount,
   );
+  const carryoverLoanPaymentBudget = cashThroughCycleOverrideEnabled
+    ? cashThroughCycleOverrideAmount
+    : calculatedCarryoverLoanPaymentBudget;
   const derivedGuidedLoanRows = deriveGuidedCarryoverLoanRows(
     guidedLoanEntries,
     policySettings,
@@ -980,7 +991,7 @@ function PolicyCenterPage() {
             : editingFee.key === "monthly_member_subscription" ||
                 editingFee.key === "annual_member_subscription"
               ? "loan_holders"
-            : editingFee.scope,
+              : editingFee.scope,
     } satisfies FeePolicy;
     if (nextFee.scope === "selected_members" && (nextFee.selectedMemberIds?.length ?? 0) === 0) {
       return toast.error("Pick at least one member for a selected-members fee.");
@@ -1611,7 +1622,10 @@ function PolicyCenterPage() {
                 <StatCard label="Card" value={fmtKES(cardAmount)} />
                 <StatCard label="Sticker (financial)" value={fmtKES(stickerAmount)} />
                 <StatCard label="Fuel buffer (locomotive)" value={fmtKES(fuelBufferFeeAmount)} />
-                <StatCard label="Monthly (loan holders)" value={fmtKES(monthlySubscriptionAmount)} />
+                <StatCard
+                  label="Monthly (loan holders)"
+                  value={fmtKES(monthlySubscriptionAmount)}
+                />
                 <StatCard label="Annual (loan holders)" value={fmtKES(annualSubscriptionAmount)} />
               </div>
               <div className="overflow-x-auto border-t border-border">
@@ -3780,6 +3794,56 @@ function PolicyCenterPage() {
                       label="Lifetime net used"
                       value={fmtKES(derivedCarryoverTotalCollected)}
                     />
+                    <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4 md:col-span-2">
+                      <label className="flex items-start gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={cashThroughCycleOverrideEnabled}
+                          onChange={(event) =>
+                            setCarryoverProfile((current) => ({
+                              ...current,
+                              collectionBreakdown: {
+                                ...readCarryoverBreakdown(current.collectionBreakdown),
+                                cashThroughCycleOverrideEnabled: event.target.checked,
+                              },
+                            }))
+                          }
+                        />
+                        <span>
+                          <span className="block">Cash through cycle override</span>
+                          <span className="block text-xs font-normal text-muted-foreground">
+                            Use the entered cash amount as the carryover loan deduction.
+                          </span>
+                        </span>
+                      </label>
+                      {cashThroughCycleOverrideEnabled && (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <NumberField
+                            label="Override amount"
+                            value={cashThroughCycleOverrideAmount}
+                            onChange={(value) =>
+                              setCarryoverProfile((current) => ({
+                                ...current,
+                                collectionBreakdown: {
+                                  ...readCarryoverBreakdown(current.collectionBreakdown),
+                                  cashThroughCycleOverrideAmount: Math.max(0, value),
+                                },
+                              }))
+                            }
+                          />
+                          <div className="rounded-lg border border-border bg-background/50 p-3 text-sm">
+                            <MetricRow
+                              label="Calculated"
+                              value={fmtKES(calculatedCarryoverLoanPaymentBudget)}
+                            />
+                            <MetricRow
+                              label="Deducting"
+                              value={fmtKES(carryoverLoanPaymentBudget)}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     <MetricCard
                       label="Automatic upfront savings"
                       value={fmtKES(automaticCarryoverDeductions.upfrontSavingsAmount)}
@@ -5427,6 +5491,8 @@ function defaultCarryoverBreakdown(): CarryoverCollectionBreakdown {
   return {
     totalDepositsRecorded: 0,
     purposePoolBalance: 0,
+    cashThroughCycleOverrideEnabled: false,
+    cashThroughCycleOverrideAmount: 0,
     feeBuckets: defaultCarryoverFeeBuckets(),
   };
 }
@@ -5442,6 +5508,11 @@ function readCarryoverBreakdown(
   return {
     totalDepositsRecorded: Number(next.totalDepositsRecorded ?? 0) || 0,
     purposePoolBalance: Number(next.purposePoolBalance ?? 0) || 0,
+    cashThroughCycleOverrideEnabled: next.cashThroughCycleOverrideEnabled === true,
+    cashThroughCycleOverrideAmount: Math.max(
+      0,
+      Number(next.cashThroughCycleOverrideAmount ?? 0) || 0,
+    ),
     preCarryoverLiveState:
       next.preCarryoverLiveState && typeof next.preCarryoverLiveState === "object"
         ? (next.preCarryoverLiveState as Record<string, unknown>)
