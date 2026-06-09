@@ -50,6 +50,10 @@ const OUTFLOWS: ReadonlyArray<string> = [
   "staff_payroll",
 ];
 
+function displayTypeLabel(value?: string | null, fallback?: string | null) {
+  return String(fallback ?? value ?? "transaction").replace(/_/g, " ");
+}
+
 function isInternalSyntheticTransaction(transaction: { by?: string; note?: string }) {
   const note = String(transaction.note ?? "")
     .trim()
@@ -114,6 +118,7 @@ function TxPage() {
             date: transaction.date,
             createdAt: transaction.createdAt,
             type: transaction.type,
+            typeLabel: displayTypeLabel(transaction.type),
             amount: transaction.amount,
             memberId: resolvedMember?.id ?? transaction.memberId,
             loanId: transaction.loanId,
@@ -124,6 +129,8 @@ function TxPage() {
             displayName: transaction.payerName ?? resolvedMember?.name ?? transaction.note ?? "-",
             direction: OUTFLOWS.includes(transaction.type) ? "out" : "in",
             status: undefined as string | undefined,
+            allocations: [] as any[],
+            allocationCount: 0,
             isMpesaAudit: false,
           };
         }),
@@ -137,6 +144,7 @@ function TxPage() {
         date: String(row.exactReceivedAt ?? row.createdAt ?? "").slice(0, 10),
         createdAt: row.exactReceivedAt ?? row.createdAt ?? undefined,
         type: row.type,
+        typeLabel: row.typeLabel ?? displayTypeLabel(row.type),
         amount: Number(row.originalAmount ?? row.amount ?? 0),
         memberId: row.memberId ?? undefined,
         loanId: undefined,
@@ -147,6 +155,8 @@ function TxPage() {
         displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
         direction: row.direction === "out" ? "out" : "in",
         status: row.status ?? undefined,
+        allocations: Array.isArray(row.allocations) ? row.allocations : [],
+        allocationCount: Number(row.allocationCount ?? 0),
         isMpesaAudit: true,
       })),
     [mpesaAuditRows],
@@ -186,6 +196,7 @@ function TxPage() {
             transaction.account,
             transaction.ref,
             transaction.type,
+            transaction.typeLabel,
             transaction.note,
             transaction.by,
           ]
@@ -412,6 +423,11 @@ function TxPage() {
                 ) : null}
                 {list.map((transaction) => {
                   const staffMember = staff.find((item) => item.id === transaction.by);
+                  const allocationDetails = Array.isArray(transaction.allocations)
+                    ? transaction.allocations.filter(
+                        (allocation: any) => Number(allocation.amount ?? 0) > 0,
+                      )
+                    : [];
                   const tone =
                     transaction.type === "mpesa_unallocated"
                       ? "warning"
@@ -431,7 +447,24 @@ function TxPage() {
                         {fmtKES(transaction.amount)}
                       </td>
                       <td className="px-5 py-3">
-                        <Badge tone={tone}>{transaction.type.replace(/_/g, " ")}</Badge>
+                        <Badge tone={tone}>
+                          {displayTypeLabel(transaction.type, transaction.typeLabel)}
+                        </Badge>
+                        {transaction.isMpesaAudit && allocationDetails.length > 0 ? (
+                          <div className="mt-2 space-y-1 text-[11px] leading-snug text-muted-foreground">
+                            {allocationDetails.slice(0, 4).map((allocation: any) => (
+                              <div key={allocation.id ?? `${allocation.type}-${allocation.amount}`}>
+                                {fmtKES(Number(allocation.amount ?? 0))} -{" "}
+                                {displayTypeLabel(allocation.type, allocation.typeLabel)}
+                                {allocation.loanId ? ` (${allocation.loanId})` : ""}
+                                {allocation.note ? `: ${allocation.note}` : ""}
+                              </div>
+                            ))}
+                            {allocationDetails.length > 4 ? (
+                              <div>+{allocationDetails.length - 4} more allocation(s)</div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-5 py-3 font-mono text-xs">{transaction.account}</td>
                       <td className="px-5 py-3 font-mono text-xs">

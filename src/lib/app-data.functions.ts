@@ -3878,7 +3878,8 @@ async function nextPrefixedId(
     | "appraisals"
     | "field_visits"
     | "followups"
-    | "round_off",
+    | "round_off"
+    | "suppliers",
   prefix: string,
   minimum: number,
 ) {
@@ -4194,19 +4195,37 @@ function mpesaRawAccountBalance(raw: Record<string, unknown> | null | undefined)
 function mpesaDisplayTypeLabel(value?: string | null) {
   switch (String(value ?? "").trim()) {
     case "deposit":
-      return "deposit";
+      return "savings deposit / wallet top-up";
+    case "loan_savings":
+      return "loan savings / multiplier savings";
     case "share_purchase":
       return "share purchase";
     case "loan_repayment":
       return "loan repayment";
+    case "carryover_loan_repayment":
+      return "carryover loan repayment";
     case "fee_payment":
       return "fee payment";
+    case "membership_fee":
+      return "membership fee";
+    case "card_fee":
+      return "membership card fee";
+    case "sticker_fee":
+      return "sticker fee";
+    case "monthly_member_subscription":
+      return "monthly member subscription";
+    case "annual_member_subscription":
+      return "annual member subscription";
     case "investor_contribution":
       return "investor contribution";
     case "purpose_pool":
       return "purpose pool";
+    case "service_payment":
+      return "service wallet payment";
+    case "round_off":
+      return "round-off reserve";
     case "mpesa_unallocated":
-      return "mpesa unallocated";
+      return "M-Pesa unallocated";
     case "withdrawal":
       return "withdrawal";
     case "loan_disbursement":
@@ -12182,9 +12201,10 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
     });
     if (memberError) throw new Error(memberError.message);
 
-    const id = makeId("SUP");
+    const id = await nextPrefixedId("suppliers", "SUP", 1);
     const { error } = await runtimeDb.from("suppliers").insert({
       id,
+      supplier_number: id,
       name: supplierName,
       kind: supplierKind,
       member_id: memberId,
@@ -12235,6 +12255,7 @@ export const createSupplierRecord = createServerFn({ method: "POST" })
       details: {
         ...data,
         memberId,
+        supplierNumber: id,
         supplierName,
         supplierKind,
       },

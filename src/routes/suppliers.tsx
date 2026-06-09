@@ -1026,6 +1026,9 @@ function SuppliersPage() {
                         <td className="px-5 py-3 font-medium">
                           {supplier.name}
                           <div className="text-xs text-muted-foreground">
+                            Supplier No: {supplier.supplier_number || supplier.id}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
                             Login account: {supplier.member_id || "Pending"}
                           </div>
                         </td>
