@@ -9,7 +9,10 @@ import { AppHeader } from "@/components/AppHeader";
 import { MemberSearchSelect } from "@/components/MemberSearchSelect";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Badge, DirectorOnly, Section, StatCard } from "@/components/ui-bits";
-import { listMpesaReceiptAudit } from "@/lib/app-data.functions";
+import {
+  allocateUnallocatedMpesaReceiptRecord,
+  listMpesaReceiptAudit,
+} from "@/lib/app-data.functions";
 import { membershipIdCandidates } from "@/lib/membership";
 import { fmtKES, useStore } from "@/lib/store";
 
@@ -54,6 +57,17 @@ function displayTypeLabel(value?: string | null, fallback?: string | null) {
   return String(fallback ?? value ?? "transaction").replace(/_/g, " ");
 }
 
+function conciseAllocationLabels(allocations: any[]) {
+  return Array.from(
+    new Set(
+      allocations
+        .filter((allocation: any) => Number(allocation.amount ?? 0) > 0)
+        .map((allocation: any) => displayTypeLabel(allocation.type, allocation.typeLabel))
+        .filter(Boolean),
+    ),
+  );
+}
+
 function isInternalSyntheticTransaction(transaction: { by?: string; note?: string }) {
   const note = String(transaction.note ?? "")
     .trim()
@@ -68,13 +82,23 @@ function isInternalSyntheticTransaction(transaction: { by?: string; note?: strin
 function TxPage() {
   const { appMode, transactions, members, staff, reloadAppData, resolveMpesaAccount } = useStore();
   const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
+  const allocateReceipt = useServerFn(allocateUnallocatedMpesaReceiptRecord);
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [memberFilter, setMemberFilter] = useState("");
   const [query, setQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isAllocating, setIsAllocating] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const [allocationTarget, setAllocationTarget] = useState<null | {
+    id: string;
+    displayName: string;
+    amount: number;
+    ref?: string;
+    payerName?: string;
+  }>(null);
+  const [allocationMemberId, setAllocationMemberId] = useState("");
 
   const {
     data: mpesaAuditRows = [],
@@ -127,6 +151,7 @@ function TxPage() {
             note: transaction.note,
             account: transaction.account ?? transaction.memberId ?? "-",
             displayName: transaction.payerName ?? resolvedMember?.name ?? transaction.note ?? "-",
+            payerName: transaction.payerName ?? undefined,
             direction: OUTFLOWS.includes(transaction.type) ? "out" : "in",
             status: undefined as string | undefined,
             allocations: [] as any[],
@@ -153,6 +178,7 @@ function TxPage() {
         note: row.note ?? undefined,
         account: row.account ?? row.memberId ?? "-",
         displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
+        payerName: row.payerName ?? undefined,
         direction: row.direction === "out" ? "out" : "in",
         status: row.status ?? undefined,
         allocations: Array.isArray(row.allocations) ? row.allocations : [],
@@ -258,6 +284,35 @@ function TxPage() {
       toast.error(error instanceof Error ? error.message : "Failed to refresh transactions.");
     } finally {
       setIsSyncing(false);
+    }
+  }
+
+  async function handleAllocateReceipt() {
+    if (!allocationTarget) return;
+    if (!allocationMemberId) {
+      toast.error("Choose the member to allocate this payment to.");
+      return;
+    }
+    setIsAllocating(true);
+    try {
+      await allocateReceipt({
+        data: {
+          receiptId: allocationTarget.id,
+          memberId: allocationMemberId,
+          mpesaRef: allocationTarget.ref,
+          amount: allocationTarget.amount,
+          payerName: allocationTarget.payerName,
+        },
+      });
+      await reloadAppData();
+      await refetchMpesaAudit();
+      toast.success("M-Pesa receipt allocated.");
+      setAllocationTarget(null);
+      setAllocationMemberId("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to allocate receipt.");
+    } finally {
+      setIsAllocating(false);
     }
   }
 
@@ -409,12 +464,13 @@ function TxPage() {
                   <th className="px-5 py-3 text-left">Ref (M-Pesa)</th>
                   <th className="px-5 py-3 text-left">Date / Time</th>
                   <th className="px-5 py-3 text-left">By</th>
+                  <th className="px-5 py-3 text-left">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {list.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
                       {mpesaAuditLoading
                         ? "Loading original M-Pesa receipts..."
                         : "No transactions found for the selected filters."}
@@ -428,6 +484,7 @@ function TxPage() {
                         (allocation: any) => Number(allocation.amount ?? 0) > 0,
                       )
                     : [];
+                  const allocationLabels = conciseAllocationLabels(allocationDetails);
                   const tone =
                     transaction.type === "mpesa_unallocated"
                       ? "warning"
@@ -451,18 +508,11 @@ function TxPage() {
                           {displayTypeLabel(transaction.type, transaction.typeLabel)}
                         </Badge>
                         {transaction.isMpesaAudit && allocationDetails.length > 0 ? (
-                          <div className="mt-2 space-y-1 text-[11px] leading-snug text-muted-foreground">
-                            {allocationDetails.slice(0, 4).map((allocation: any) => (
-                              <div key={allocation.id ?? `${allocation.type}-${allocation.amount}`}>
-                                {fmtKES(Number(allocation.amount ?? 0))} -{" "}
-                                {displayTypeLabel(allocation.type, allocation.typeLabel)}
-                                {allocation.loanId ? ` (${allocation.loanId})` : ""}
-                                {allocation.note ? `: ${allocation.note}` : ""}
-                              </div>
-                            ))}
-                            {allocationDetails.length > 4 ? (
-                              <div>+{allocationDetails.length - 4} more allocation(s)</div>
-                            ) : null}
+                          <div className="mt-2 text-[11px] leading-snug text-muted-foreground">
+                            {allocationLabels.slice(0, 3).join(", ")}
+                            {allocationLabels.length > 3
+                              ? `, +${allocationLabels.length - 3} more`
+                              : ""}
                           </div>
                         ) : null}
                       </td>
@@ -480,6 +530,30 @@ function TxPage() {
                             : transaction.by
                           : (staffMember?.name ?? transaction.by)}
                       </td>
+                      <td className="px-5 py-3">
+                        {transaction.isMpesaAudit &&
+                        transaction.direction === "in" &&
+                        transaction.status === "unallocated" ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAllocationTarget({
+                                id: transaction.id,
+                                displayName: transaction.displayName,
+                                amount: transaction.amount,
+                                ref: transaction.ref,
+                                payerName: transaction.payerName,
+                              });
+                              setAllocationMemberId("");
+                            }}
+                            className="rounded-md border border-primary/40 px-3 py-1 text-xs font-medium text-primary hover:bg-primary/5"
+                          >
+                            Allocate
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -487,6 +561,55 @@ function TxPage() {
             </table>
           </div>
         </Section>
+        {allocationTarget ? (
+          <div
+            className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+            onClick={() => {
+              if (!isAllocating) setAllocationTarget(null);
+            }}
+          >
+            <div
+              className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="font-display text-lg font-semibold">Allocate M-Pesa receipt</h3>
+              <div className="mt-2 text-sm text-muted-foreground">
+                {allocationTarget.displayName} - {fmtKES(allocationTarget.amount)}
+                {allocationTarget.ref ? ` - ${allocationTarget.ref}` : ""}
+              </div>
+              <div className="mt-5">
+                <MemberSearchSelect
+                  members={members}
+                  value={allocationMemberId}
+                  onChange={setAllocationMemberId}
+                  placeholder="Search who to allocate this money to"
+                  emptyLabel="Choose member"
+                  describeMember={(member) =>
+                    `${member.id} - ${member.name} - ${member.phone ?? ""}`
+                  }
+                />
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAllocationTarget(null)}
+                  disabled={isAllocating}
+                  className="rounded-md px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAllocateReceipt}
+                  disabled={isAllocating || !allocationMemberId}
+                  className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isAllocating ? "Allocating..." : "Allocate"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     </>
   );

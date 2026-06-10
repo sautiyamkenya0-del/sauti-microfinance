@@ -1553,6 +1553,7 @@ async function findExistingMpesaTransaction(args: {
   account: string;
   amount?: number;
   mpesaRef?: string;
+  ignoreUnallocated?: boolean;
 }) {
   const ref = args.mpesaRef?.trim();
   if (!ref) return null;
@@ -1569,14 +1570,17 @@ async function findExistingMpesaTransaction(args: {
     query = query.eq("amount", args.amount);
   }
 
-  const { data, error } = await query.limit(1);
+  const { data, error } = await query.limit(args.ignoreUnallocated ? 10 : 1);
   if (error) throw new Error(error.message);
-  return (data?.[0] ?? null) as {
+  const rows = (data ?? []) as Array<{
     id: string;
     type: string;
     member_id?: string | null;
     amount?: number;
-  } | null;
+  }>;
+  return (args.ignoreUnallocated
+    ? rows.find((row) => row.type !== "mpesa_unallocated")
+    : rows[0]) ?? null;
 }
 
 async function createProcessedMpesaLedgerLink(args: {
@@ -1969,6 +1973,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   eventId?: string;
   forceUnallocated?: boolean;
   fallbackNote?: string;
+  replaceUnallocated?: boolean;
 }) {
   const supabaseAdmin = await requireSupabaseAdmin();
   const accountContext = parseMpesaAccountDocket(args.account);
@@ -2155,6 +2160,7 @@ export async function applyMpesaPaymentToDatabase(args: {
   const existingReceipt = await findExistingMpesaTransaction({
     account: norm,
     mpesaRef: args.mpesaRef,
+    ignoreUnallocated: args.replaceUnallocated,
   });
   if (existingReceipt?.id) {
     await markMpesaEventProcessed(args.eventId, String(existingReceipt.id));
@@ -5516,6 +5522,133 @@ export const listMpesaReceiptAudit = createServerFn({ method: "POST" })
     );
 
     return rows;
+  });
+
+export const allocateUnallocatedMpesaReceiptRecord = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      receiptId?: string;
+      memberId?: string;
+      mpesaRef?: string;
+      amount?: number;
+      payerName?: string;
+    }) => ({
+      receiptId: String(data?.receiptId ?? "").trim(),
+      memberId: String(data?.memberId ?? "").trim(),
+      mpesaRef:
+        String(data?.mpesaRef ?? "")
+          .trim()
+          .toUpperCase() || undefined,
+      amount: Number(data?.amount ?? 0),
+      payerName: String(data?.payerName ?? "").trim() || undefined,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireStaffActor();
+    if (!data.memberId) throw new Error("Choose the member to allocate this payment to.");
+
+    const supabaseAdmin = await requireSupabaseAdmin();
+    const member = await findMemberByMembershipInput(data.memberId);
+    if (!member) throw new Error("That member could not be found.");
+
+    let event:
+      | {
+          id: string;
+          amount?: number | string | null;
+          mpesa_ref?: string | null;
+          payer_name?: string | null;
+          transaction_id?: string | null;
+        }
+      | null = null;
+
+    if (data.receiptId && !data.receiptId.startsWith("allocation-receipt-")) {
+      const { data: eventRow, error: eventError } = await supabaseAdmin
+        .from("mpesa_events")
+        .select("id, amount, mpesa_ref, payer_name, transaction_id")
+        .eq("id", data.receiptId)
+        .eq("kind", "confirmation")
+        .maybeSingle();
+      if (eventError) throw new Error(eventError.message);
+      event = eventRow as typeof event;
+    }
+
+    const mpesaRef =
+      String(event?.mpesa_ref ?? data.mpesaRef ?? "")
+        .trim()
+        .toUpperCase() || undefined;
+    const amount = toNumber(event?.amount ?? data.amount);
+    if (!mpesaRef && !event?.id) throw new Error("This receipt is missing an M-Pesa reference.");
+    if (amount <= 0) throw new Error("This receipt does not have a positive amount to allocate.");
+
+    const unallocatedIds = new Set<string>();
+    if (event?.transaction_id) unallocatedIds.add(String(event.transaction_id));
+
+    let txQuery = supabaseAdmin
+      .from("transactions")
+      .select("id, amount")
+      .eq("by_staff", MPESA_SYSTEM_STAFF_ID)
+      .eq("type", "mpesa_unallocated");
+    if (mpesaRef) txQuery = txQuery.eq("ref", mpesaRef);
+    const { data: existingTransactions, error: existingTransactionsError } = await txQuery;
+    if (existingTransactionsError) throw new Error(existingTransactionsError.message);
+
+    for (const row of existingTransactions ?? []) {
+      if (toNumber((row as any).amount) === amount) unallocatedIds.add(String((row as any).id));
+    }
+
+    if (unallocatedIds.size === 0) {
+      throw new Error("This receipt is not currently marked as unallocated.");
+    }
+
+    const unallocatedIdList = Array.from(unallocatedIds);
+    if (event?.id) {
+      const { error: eventUpdateError } = await supabaseAdmin
+        .from("mpesa_events")
+        .update({
+          account: member.id,
+          processed: false,
+          transaction_id: null,
+        })
+        .eq("id", event.id);
+      if (eventUpdateError) throw new Error(eventUpdateError.message);
+    }
+
+    const result = await applyMpesaPaymentToDatabase({
+      account: member.id,
+      amount,
+      payerName: String(event?.payer_name ?? data.payerName ?? "").trim() || undefined,
+      mpesaRef,
+      eventId: event?.id,
+      replaceUnallocated: true,
+    });
+
+    const { error: allocationDeleteError } = await (supabaseAdmin as any)
+      .from("mpesa_receipt_allocations")
+      .delete()
+      .in("transaction_id", unallocatedIdList);
+    if (allocationDeleteError) throw new Error(allocationDeleteError.message);
+
+    const { error: transactionDeleteError } = await supabaseAdmin
+      .from("transactions")
+      .delete()
+      .in("id", unallocatedIdList);
+    if (transactionDeleteError) throw new Error(transactionDeleteError.message);
+
+    await auditAction({
+      actor,
+      action: "mpesa.receipt_manual_allocated",
+      targetType: "mpesa_receipt",
+      targetId: event?.id ?? mpesaRef ?? data.receiptId,
+      summary: `${actor.name} manually allocated M-Pesa receipt ${mpesaRef ?? data.receiptId} to ${member.id}`,
+      details: {
+        memberId: member.id,
+        amount,
+        mpesaRef: mpesaRef ?? null,
+        removedUnallocatedTransactionIds: unallocatedIdList,
+      },
+    });
+
+    return result;
   });
 
 export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "POST" }).handler(

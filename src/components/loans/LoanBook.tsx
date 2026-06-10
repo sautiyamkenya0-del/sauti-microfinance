@@ -11,10 +11,15 @@ import {
   type Loan,
   type LoanKind,
 } from "@/lib/store";
-import { updateLoanRecord, upsertMemberCarryoverLoanRecord } from "@/lib/app-data.functions";
+import {
+  listMpesaReceiptAudit,
+  updateLoanRecord,
+  upsertMemberCarryoverLoanRecord,
+} from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { trueLoanStatus, trueLoanStatusLabel, trueLoanStatusTone } from "@/lib/loan-status";
 import { dedupeMemberTransactions } from "@/lib/transaction-dedupe";
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -36,6 +41,18 @@ type Filter =
   | "overdue";
 
 type ProductFilter = "all" | LoanKind;
+
+type LoanHistoryTarget = { source: "live" | "carryover"; id: string } | null;
+
+type LoanDistributionRow = {
+  id: string;
+  dateTime: string;
+  ref: string;
+  payer: string;
+  paidAmount: number;
+  loanAmount: number;
+  allocations: any[];
+};
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All Loans" },
@@ -61,6 +78,20 @@ function loanKindLabel(kind?: LoanKind) {
   if (kind === "stock") return "Stock";
   if (kind === "service") return "Service";
   return "Financial";
+}
+
+function allocationTypeLabel(value?: string | null, fallback?: string | null) {
+  const raw = String(fallback ?? value ?? "allocation").trim();
+  const labels: Record<string, string> = {
+    carryover_loan_repayment: "carryover loan repayment",
+    loan_repayment: "loan repayment",
+    purpose_pool: "purpose pool",
+    loan_savings: "loan savings",
+    share_purchase: "share purchase",
+    fee_payment: "fee payment",
+    deposit: "savings deposit / wallet top-up",
+  };
+  return labels[raw] ?? raw.replace(/_/g, " ");
 }
 
 function termDaysOf(l: Loan): number {
@@ -234,12 +265,22 @@ export function LoanBook({
 }) {
   const { loans, members, staff, transactions, currentUser, recordTransaction, policySettings } =
     useStore();
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const [filter, setFilter] = useState<Filter>("all");
   const [productFilter, setProductFilter] = useState<ProductFilter>("all");
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
   const [repayFor, setRepayFor] = useState<string | null>(null);
   const [repayAmt, setRepayAmt] = useState(0);
+  const [historyFor, setHistoryFor] = useState<LoanHistoryTarget>(null);
+
+  const { data: mpesaAuditRows = [], isLoading: mpesaAuditLoading } = useQuery({
+    queryKey: ["mpesa-receipt-audit", "loan-book-history"],
+    queryFn: () => fetchMpesaAudit({ data: {} }),
+    enabled: Boolean(historyFor),
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
 
   const today = new Date().toISOString().slice(0, 10);
   const uniqueTransactions = useMemo(() => dedupeMemberTransactions(transactions), [transactions]);
@@ -355,6 +396,89 @@ export function LoanBook({
     ],
     [carryoverLoans, loans, members],
   );
+
+  const selectedHistoryLoan = useMemo(() => {
+    if (!historyFor) return null;
+    if (historyFor.source === "live") {
+      const loan = loans.find((item) => item.id === historyFor.id);
+      if (!loan) return null;
+      const member = members.find((item) => item.id === loan.memberId);
+      return {
+        source: "live" as const,
+        id: loan.id,
+        memberId: loan.memberId,
+        memberName: member?.name ?? loan.memberId,
+        cycle: liveLoanCycleNumber(loan, loans),
+        label: loanKindLabel(loan.loanKind ?? "financial"),
+      };
+    }
+    const loan = carryoverLoans.find((item) => item.id === historyFor.id);
+    if (!loan) return null;
+    const member = members.find((item) => item.id === loan.memberId);
+    return {
+      source: "carryover" as const,
+      id: loan.id,
+      memberId: loan.memberId,
+      memberName: member?.name ?? loan.memberId,
+      cycle: loan.loanCycleNumber,
+      label: `${loanKindLabel(loan.loanKind ?? "financial")} carryover`,
+    };
+  }, [carryoverLoans, historyFor, loans, members]);
+
+  const selectedLoanDistribution = useMemo(() => {
+    if (!historyFor) return [];
+
+    const receiptRows = (mpesaAuditRows as any[]).flatMap((row) => {
+      const allocations = Array.isArray(row.allocations)
+        ? row.allocations.filter((allocation: any) => Number(allocation.amount ?? 0) > 0)
+        : [];
+      const loanAllocations = allocations.filter(
+        (allocation: any) => String(allocation.loanId ?? "") === historyFor.id,
+      );
+      if (loanAllocations.length === 0) return [];
+      return [
+        {
+          id: String(row.id),
+          dateTime: row.exactReceivedAt ?? row.createdAt ?? row.date ?? "",
+          ref: row.mpesaRef ?? row.ref ?? "-",
+          payer: row.memberName ?? row.payerName ?? row.account ?? "-",
+          paidAmount: Number(row.originalAmount ?? row.amount ?? 0),
+          loanAmount: loanAllocations.reduce(
+            (sum: number, allocation: any) => sum + Number(allocation.amount ?? 0),
+            0,
+          ),
+          allocations,
+        },
+      ];
+    });
+
+    const manualRows = uniqueTransactions
+      .filter((transaction) => transaction.by !== "MPESA" && transaction.loanId === historyFor.id)
+      .map((transaction) => ({
+        id: transaction.id,
+        dateTime: transaction.createdAt ?? transaction.date,
+        ref: transaction.ref ?? transaction.id,
+        payer:
+          members.find((member) => member.id === transaction.memberId)?.name ??
+          transaction.memberId ??
+          "-",
+        paidAmount: Number(transaction.amount ?? 0),
+        loanAmount: Number(transaction.amount ?? 0),
+        allocations: [
+          {
+            id: transaction.id,
+            amount: transaction.amount,
+            type: transaction.type,
+            typeLabel: allocationTypeLabel(transaction.type),
+            loanId: transaction.loanId,
+          },
+        ],
+      }));
+
+    return [...receiptRows, ...manualRows].sort((a, b) =>
+      String(b.dateTime).localeCompare(String(a.dateTime)),
+    );
+  }, [historyFor, members, mpesaAuditRows, uniqueTransactions]);
 
   const empty = loans.length === 0 && carryoverLoans.length === 0;
 
@@ -571,7 +695,7 @@ export function LoanBook({
                   </td>
                   <td className="px-5 py-3">
                     <button
-                      onClick={() => m && onSelectMember(m.id)}
+                      onClick={() => setHistoryFor({ source: row.kind, id: l.id })}
                       className="text-xs px-3 py-1 rounded-md border border-primary/40 text-primary hover:bg-primary/5"
                     >
                       View
@@ -587,6 +711,19 @@ export function LoanBook({
       {!tableOnly && currentUser.role !== "loan_officer" && (
         <FuelRecordsPanel records={fuelRecords} />
       )}
+
+      {historyFor ? (
+        <LoanDistributionHistoryModal
+          loan={selectedHistoryLoan}
+          rows={selectedLoanDistribution}
+          loading={mpesaAuditLoading}
+          onClose={() => setHistoryFor(null)}
+          onOpenMember={() => {
+            if (selectedHistoryLoan) onSelectMember(selectedHistoryLoan.memberId);
+            setHistoryFor(null);
+          }}
+        />
+      ) : null}
 
       {repayFor && (
         <div
@@ -636,6 +773,149 @@ export function LoanBook({
         </div>
       )}
     </Section>
+  );
+}
+
+function LoanDistributionHistoryModal({
+  loan,
+  rows,
+  loading,
+  onClose,
+  onOpenMember,
+}: {
+  loan: {
+    id: string;
+    memberId: string;
+    memberName: string;
+    cycle: number;
+    label: string;
+  } | null;
+  rows: LoanDistributionRow[];
+  loading: boolean;
+  onClose: () => void;
+  onOpenMember: () => void;
+}) {
+  const totalApplied = rows.reduce((sum, row) => sum + row.loanAmount, 0);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-xl border border-border bg-card shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div>
+            <h3 className="font-display text-lg font-semibold">Transaction distribution history</h3>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {loan
+                ? `${loan.memberName} - ${loan.label} loan ${loan.id} - cycle ${loan.cycle}`
+                : "Loan record"}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {loan ? (
+              <button
+                type="button"
+                onClick={onOpenMember}
+                className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+              >
+                Open member
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-3 py-1.5 text-xs font-medium hover:bg-muted"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4 overflow-y-auto p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md border border-border bg-muted/30 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Payments
+              </div>
+              <div className="mt-1 text-lg font-semibold">{rows.length}</div>
+            </div>
+            <div className="rounded-md border border-border bg-muted/30 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Applied to this loan
+              </div>
+              <div className="mt-1 text-lg font-semibold">{fmtKES(totalApplied)}</div>
+            </div>
+            <div className="rounded-md border border-border bg-muted/30 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Loan cycle
+              </div>
+              <div className="mt-1 text-lg font-semibold">{loan?.cycle ?? "-"}</div>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="rounded-md border border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              Loading receipt allocations...
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="rounded-md border border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              No payment distribution has been recorded for this loan yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="min-w-[900px] w-full text-xs">
+                <thead className="bg-muted/50 text-muted-foreground uppercase">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Date / Time</th>
+                    <th className="px-3 py-2 text-left">Ref</th>
+                    <th className="px-3 py-2 text-left">Paid By</th>
+                    <th className="px-3 py-2 text-right">Receipt</th>
+                    <th className="px-3 py-2 text-right">This Loan</th>
+                    <th className="px-3 py-2 text-left">Distribution</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map((row) => (
+                    <tr key={row.id} className="align-top">
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {row.dateTime ? new Date(row.dateTime).toLocaleString() : "-"}
+                      </td>
+                      <td className="px-3 py-2 font-mono">{row.ref}</td>
+                      <td className="px-3 py-2">{row.payer}</td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {fmtKES(row.paidAmount)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold text-primary">
+                        {fmtKES(row.loanAmount)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="space-y-1">
+                          {row.allocations.map((allocation: any) => {
+                            const isThisLoan = loan?.id
+                              ? String(allocation.loanId ?? "") === loan.id
+                              : false;
+                            return (
+                              <div
+                                key={allocation.id ?? `${allocation.type}-${allocation.amount}`}
+                                className={isThisLoan ? "font-semibold text-foreground" : ""}
+                              >
+                                {fmtKES(Number(allocation.amount ?? 0))} -{" "}
+                                {allocationTypeLabel(allocation.type, allocation.typeLabel)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
