@@ -1429,11 +1429,8 @@ export function MemberLoanHistory({
           <div className="space-y-2">
             {memberCarryoverLoans.map((l) => {
               const summary = summarizeLegacyCarryoverLoan(l, policySettings);
-              const carryoverExpected = Math.max(
-                summary.totalExpectedCollected,
-                summary.totalRepayment,
-              );
-              const carryoverPaid = Math.min(Math.max(0, l.paidToDate), carryoverExpected);
+              const carryoverExpected = Math.max(summary.totalExpectedCollected, summary.totalPaid);
+              const carryoverPaid = Math.min(Math.max(0, summary.totalPaid), carryoverExpected);
               const pct =
                 carryoverExpected > 0
                   ? Math.min(100, Math.round((carryoverPaid / carryoverExpected) * 100))

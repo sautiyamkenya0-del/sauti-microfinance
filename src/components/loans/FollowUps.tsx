@@ -180,6 +180,8 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           outstanding: summary.balance,
           totalDue: summary.totalOwedNow,
           penalties: summary.estimatedPenaltyNow,
+          totalPaid: summary.totalPaid,
+          totalExpectedCollected: summary.totalExpectedCollected,
           dailyPenalties,
           dueDatePenalties,
           waivedPenalties,

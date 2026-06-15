@@ -474,7 +474,8 @@ export function summarizeLegacyCarryoverLoan(
     daysPastDue > 0 &&
     DEFAULT_DEFAULTED_AMOUNT_STOP_CAP > 0 &&
     totalOwedNow >= DEFAULT_DEFAULTED_AMOUNT_STOP_CAP;
-  const paidPct = totalExpectedCollected > 0 ? (paidToDate / totalExpectedCollected) * 100 : 0;
+  const totalPaid = ledger.totalPaid;
+  const paidPct = totalExpectedCollected > 0 ? (totalPaid / totalExpectedCollected) * 100 : 0;
   const isFinished = totalOwedNow <= 0;
 
   return {
@@ -497,6 +498,7 @@ export function summarizeLegacyCarryoverLoan(
     roundOff: Math.max(0, dailyInclusive - rawDailyInclusive),
     totalSavingsAccrued,
     totalExpectedCollected,
+    totalPaid,
     scheduledCollectedToDate,
     arrears: cashThroughCycleOverrideEnabled ? 0 : arrears,
     balance: cashThroughCycleOverrideEnabled ? 0 : balance,
