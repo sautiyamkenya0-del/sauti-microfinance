@@ -1257,6 +1257,7 @@ export function MemberLoanHistory({
             productChargeAmount: editDraft.productChargeAmount,
             manualPenaltyAmount: editDraft.manualPenaltyAmount,
             penaltyWaivedAmount: editDraft.penaltyWaivedAmount,
+            dailySavingsAmount: editDraft.dailySavingsAmount,
           },
         });
         await reloadAppData();
@@ -1747,13 +1748,11 @@ function LoanEditPanel({
           value={draft.productChargeAmount}
           onChange={(v) => set("productChargeAmount", v)}
         />
-        {source === "carryover" && (
-          <EditNumber
-            label="Daily compliance"
-            value={draft.dailySavingsAmount}
-            onChange={(v) => set("dailySavingsAmount", v)}
-          />
-        )}
+        <EditNumber
+          label="Daily compliance"
+          value={draft.dailySavingsAmount}
+          onChange={(v) => set("dailySavingsAmount", v)}
+        />
         <label className="block">
           <span className="text-[10px] uppercase text-muted-foreground">Status</span>
           <select

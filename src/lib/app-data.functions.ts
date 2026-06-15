@@ -4063,6 +4063,7 @@ async function repairLoanStartDatesFromAppraisals(
   runtimeDb: any,
   loanRows: any[],
   appraisalRows: any[],
+  transactionRows: any[] = [],
 ) {
   const latestAppraisalByLoan = new Map<string, string>();
   for (const appraisal of appraisalRows) {
@@ -4071,6 +4072,15 @@ async function repairLoanStartDatesFromAppraisals(
     if (!loanId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     const current = latestAppraisalByLoan.get(loanId);
     if (!current || date > current) latestAppraisalByLoan.set(loanId, date);
+  }
+  const firstDisbursementByLoan = new Map<string, string>();
+  for (const transaction of transactionRows) {
+    if (String(transaction.type ?? "") !== "loan_disbursement") continue;
+    const loanId = String(transaction.loan_id ?? "").trim();
+    const date = String(transaction.date ?? transaction.created_at ?? "").slice(0, 10);
+    if (!loanId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const current = firstDisbursementByLoan.get(loanId);
+    if (!current || date < current) firstDisbursementByLoan.set(loanId, date);
   }
 
   await Promise.all(
@@ -4081,13 +4091,15 @@ async function repairLoanStartDatesFromAppraisals(
 
       const appraisalDate = latestAppraisalByLoan.get(loanId);
       const disbursementCompletedAt = String(loan.disbursement_completed_at ?? "").slice(0, 10);
-      const expectedStart = laterIsoDate(
-        loan.start_date,
-        appraisalDate ? collectionStartDateForDisbursement(appraisalDate) : undefined,
-        disbursementCompletedAt
-          ? collectionStartDateForDisbursement(disbursementCompletedAt)
-          : undefined,
-      );
+      const disbursementDate =
+        firstDisbursementByLoan.get(loanId) ||
+        (/^\d{4}-\d{2}-\d{2}$/.test(disbursementCompletedAt) ? disbursementCompletedAt : "");
+      const expectedStart = disbursementDate
+        ? collectionStartDateForDisbursement(disbursementDate)
+        : laterIsoDate(
+            loan.start_date,
+            appraisalDate ? collectionStartDateForDisbursement(appraisalDate) : undefined,
+          );
       if (!expectedStart || expectedStart === String(loan.start_date ?? "").slice(0, 10)) return;
 
       const { error } = await runtimeDb
@@ -5017,7 +5029,12 @@ async function buildAppData(version?: string) {
     if (!memberResult.data) return base;
     const loanRows = loansResult.data ?? [];
     const appraisalRows = appraisalsResult.data ?? [];
-    await repairLoanStartDatesFromAppraisals(supabaseAdmin, loanRows, appraisalRows);
+    await repairLoanStartDatesFromAppraisals(
+      supabaseAdmin,
+      loanRows,
+      appraisalRows,
+      transactionRows,
+    );
 
     return {
       ...base,
@@ -5115,7 +5132,12 @@ async function buildAppData(version?: string) {
   );
   const loanRows = loansResult.data ?? [];
   const appraisalRows = appraisalsResult.data ?? [];
-  await repairLoanStartDatesFromAppraisals(supabaseAdmin, loanRows, appraisalRows);
+  await repairLoanStartDatesFromAppraisals(
+    supabaseAdmin,
+    loanRows,
+    appraisalRows,
+    transactionRows,
+  );
 
   return {
     ...base,
@@ -8512,6 +8534,8 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_days: termDays,
       term_months: termMonths,
+      daily_savings_amount:
+        data.dailySavingsAmount ?? Number(existingLoan.daily_savings_amount ?? 0),
       start_date: data.startDate ?? existingLoan.start_date,
       paid: data.paid ?? Number(existingLoan.paid ?? 0),
       purpose: data.purpose ?? existingLoan.purpose ?? null,
@@ -8572,6 +8596,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
         termDays,
         manualPenaltyAmount: data.manualPenaltyAmount ?? null,
         productChargeAmount: data.productChargeAmount ?? null,
+        dailySavingsAmount: data.dailySavingsAmount ?? null,
       },
     });
     return { ok: true };

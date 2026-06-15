@@ -2,23 +2,56 @@ import { Section, StatCard, Badge } from "@/components/ui-bits";
 import {
   createStaffMemoRecord,
   freezeLoanFollowupRecord,
+  listMpesaReceiptAudit,
   unfreezeLoanFollowupRecord,
   unwaiveLoanFollowupPenaltyRecord,
   waiveLoanFollowupPenaltyRecord,
 } from "@/lib/app-data.functions";
 import { summarizeLegacyCarryoverLoan, type LegacyCarryoverLoan } from "@/lib/legacy-finance";
 import { dedupeMemberTransactions } from "@/lib/transaction-dedupe";
-import { useStore, fmtKES, loanPenaltySummary } from "@/lib/store";
+import { useStore, fmtKES, loanPenaltySummary, type Loan, type Transaction } from "@/lib/store";
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Bell, Phone, Building2, Home as HomeIcon, MapPin } from "lucide-react";
+import { Bell, Phone, Building2, Home as HomeIcon, MapPin, ReceiptText, X } from "lucide-react";
 
 function daysBetweenDates(from: string, to: string) {
   const start = new Date(`${from.slice(0, 10)}T00:00:00`).getTime();
   const end = new Date(`${to.slice(0, 10)}T00:00:00`).getTime();
   if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
   return Math.floor((end - start) / (24 * 60 * 60 * 1000));
+}
+
+function dateFromDateTime(value?: string | null) {
+  const raw = String(value ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
+}
+
+function receiptLoanRepayments(rows: any[]) {
+  return rows.flatMap((row): Transaction[] => {
+    const allocations = Array.isArray(row.allocations) ? row.allocations : [];
+    const paidAt = row.exactReceivedAt ?? row.createdAt ?? row.date;
+    return allocations
+      .filter(
+        (allocation: any) =>
+          String(allocation.type ?? "") === "loan_repayment" &&
+          String(allocation.loanId ?? "").trim() &&
+          Number(allocation.amount ?? 0) > 0,
+      )
+      .map((allocation: any) => ({
+        id: `mpesa-allocation-${allocation.id}`,
+        date: dateFromDateTime(paidAt),
+        createdAt: paidAt,
+        type: "loan_repayment" as const,
+        amount: Number(allocation.amount ?? 0),
+        memberId: String(allocation.memberId ?? row.memberId ?? ""),
+        loanId: String(allocation.loanId ?? ""),
+        ref: row.mpesaRef ?? row.ref,
+        by: "MPESA",
+        note: allocation.note ?? row.note,
+      }));
+  });
 }
 
 export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarryoverLoan[] }) {
@@ -33,15 +66,27 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
     reloadAppData,
   } = useStore();
   const sendNotice = useServerFn(createStaffMemoRecord);
+  const fetchMpesaAudit = useServerFn(listMpesaReceiptAudit);
   const waiveLoanPenalty = useServerFn(waiveLoanFollowupPenaltyRecord);
   const unwaiveLoanPenalty = useServerFn(unwaiveLoanFollowupPenaltyRecord);
   const freezeLoan = useServerFn(freezeLoanFollowupRecord);
   const unfreezeLoan = useServerFn(unfreezeLoanFollowupRecord);
   const [query, setQuery] = useState("");
+  const [historyLoanId, setHistoryLoanId] = useState<string | null>(null);
+  const { data: mpesaAuditRows = [] } = useQuery({
+    queryKey: ["followups-mpesa-repayment-audit"],
+    queryFn: () => fetchMpesaAudit({ data: {} }),
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+  const accountingTransactions = useMemo(
+    () => dedupeMemberTransactions([...transactions, ...receiptLoanRepayments(mpesaAuditRows)]),
+    [mpesaAuditRows, transactions],
+  );
 
   const items = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const uniqueTransactions = dedupeMemberTransactions(transactions);
+    const uniqueTransactions = accountingTransactions;
     const uniqueLoanRepaymentTotals = new Map<string, number>();
     uniqueTransactions
       .filter((transaction) => transaction.type === "loan_repayment" && transaction.loanId)
@@ -72,11 +117,11 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
         const outstanding = summary.totalOwedNow;
         const elapsedScheduledDays =
           l.startDate <= today ? Math.max(0, daysBetweenDates(l.startDate, today) + 1) : 0;
-        const moneyMissedDays =
-          dailyInstallment > 0 ? Math.ceil(missedDailyAmount / dailyInstallment) : 0;
         const daysMissed = Math.min(
           elapsedScheduledDays,
-          Math.max(summary.skippedPaymentDays, moneyMissedDays),
+          summary.repaymentLedger.filter(
+            (row) => row.scheduledInstallment > 0 && row.dailyBalance > 0,
+          ).length,
         );
         const daysPastDue = summary.daysPastDue;
         return {
@@ -94,6 +139,9 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           daysMissed,
           daysPastDue: Math.max(daysPastDue, daysAfterFinalDueDate),
           dueDate: summary.dueDate,
+          repaymentLedger: summary.repaymentLedger,
+          totalPaid: summary.totalPaid,
+          totalExpectedCollected: summary.totalExpectedCollected,
           frozen: Boolean(l.frozenAt),
           autoStopped: summary.autoStopped,
           include:
@@ -173,10 +221,14 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
       if (byDueDate !== 0) return byDueDate;
       return String(b.loan.id ?? "").localeCompare(String(a.loan.id ?? ""));
     });
-  }, [carryoverLoans, loans, members, policySettings, query, transactions]);
+  }, [accountingTransactions, carryoverLoans, loans, members, policySettings, query]);
 
   const totalDefaulted = items.reduce((s, i) => s + i.defaulted, 0);
   const totalDue = items.reduce((s, i) => s + i.totalDue, 0);
+  const historyItem = items.find(
+    (item): item is typeof item & { loanKind: "live"; loan: Loan } =>
+      item.loanKind === "live" && item.loan.id === historyLoanId,
+  );
 
   async function sendPaymentReminder(args: {
     memberId: string;
@@ -311,6 +363,14 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
                     >
                       <Bell className="h-3 w-3" /> Send Reminder
                     </button>
+                    {loanKind === "live" ? (
+                      <button
+                        onClick={() => setHistoryLoanId(loan.id)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 hover:bg-muted"
+                      >
+                        <ReceiptText className="h-3 w-3" /> Repayment History
+                      </button>
+                    ) : null}
                     <button className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md hover:bg-muted">
                       <Building2 className="h-3 w-3" /> Record Business Visit
                     </button>
@@ -490,6 +550,133 @@ export function FollowUps({ carryoverLoans = [] }: { carryoverLoans?: LegacyCarr
           )}
         </div>
       </Section>
+      {historyItem ? (
+        <RepaymentHistoryPanel item={historyItem} onClose={() => setHistoryLoanId(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+function RepaymentHistoryPanel({
+  item,
+  onClose,
+}: {
+  item: {
+    member: { name: string; id: string; phone?: string };
+    loan: Loan;
+    dailyInstallment: number;
+    repaymentLedger?: ReturnType<typeof loanPenaltySummary>["repaymentLedger"];
+    totalPaid?: number;
+    totalExpectedCollected?: number;
+    outstanding: number;
+    dueDate: string;
+  };
+  onClose: () => void;
+}) {
+  const rows = item.repaymentLedger ?? [];
+  const paidDays = rows.filter(
+    (row) => row.paidToday >= row.expectedToday && row.expectedToday > 0,
+  );
+  const shortDays = rows.filter((row) => row.expectedToday > 0 && row.dailyBalance > 0);
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-5xl overflow-y-auto border-l border-border bg-card p-5 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-display text-xl font-semibold">Loan Repayment History</h3>
+            <p className="text-xs text-muted-foreground">
+              {item.member.name} · {item.member.id} · Loan {item.loan.id} · final due {item.dueDate}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-border p-2 hover:bg-muted"
+            aria-label="Close repayment history"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+          <Cell label="Daily Expected" v={fmtKES(item.dailyInstallment)} />
+          <Cell label="Expected Total" v={fmtKES(item.totalExpectedCollected ?? 0)} />
+          <Cell label="Paid So Far" v={fmtKES(item.totalPaid ?? 0)} />
+          <Cell label="Short Days" v={String(shortDays.length)} tone="warning" />
+          <Cell label="Outstanding" v={fmtKES(item.outstanding)} tone="destructive" />
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-md border border-border">
+          <table className="min-w-[980px] w-full text-xs">
+            <thead className="bg-muted/60 text-[10px] uppercase text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 text-left">Day</th>
+                <th className="px-3 py-2 text-left">Date</th>
+                <th className="px-3 py-2 text-right">Opening arrears</th>
+                <th className="px-3 py-2 text-right">Expected today</th>
+                <th className="px-3 py-2 text-right">Paid today</th>
+                <th className="px-3 py-2 text-right">Short / over</th>
+                <th className="px-3 py-2 text-right">Penalty</th>
+                <th className="px-3 py-2 text-right">Total paid</th>
+                <th className="px-3 py-2 text-right">Balance</th>
+                <th className="px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">
+                    No scheduled repayment days have started yet.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => {
+                  const short = Math.max(0, row.dailyBalance);
+                  const over = Math.max(0, row.paidToday - row.expectedToday);
+                  const status =
+                    row.scheduledInstallment <= 0
+                      ? "After term"
+                      : short > 0
+                        ? "Short"
+                        : row.paidToday > 0
+                          ? "Paid"
+                          : "No payment";
+                  return (
+                    <tr key={`${row.date}-${row.dayNumber}`}>
+                      <td className="px-3 py-2">{row.dayNumber}</td>
+                      <td className="px-3 py-2">{row.date}</td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.openingCarryForward)}</td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.expectedToday)}</td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.paidToday)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {short > 0 ? fmtKES(short) : over > 0 ? `+${fmtKES(over)}` : fmtKES(0)}
+                      </td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.penalty)}</td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.totalPaid)}</td>
+                      <td className="px-3 py-2 text-right">{fmtKES(row.totalBalance)}</td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          tone={short > 0 ? "warning" : row.paidToday > 0 ? "success" : "default"}
+                        >
+                          {status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-3 text-xs text-muted-foreground">
+          Paid days: {paidDays.length}. A short day means the amount paid that day did not clear
+          that day's expected amount plus any carried arrears.
+        </div>
+      </div>
     </div>
   );
 }
