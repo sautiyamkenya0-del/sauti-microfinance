@@ -1748,7 +1748,7 @@ function LoanEditPanel({
           value={draft.productChargeAmount}
           onChange={(v) => set("productChargeAmount", v)}
         />
-        <EditNumber
+        <EditCompliancePlan
           label="Daily compliance"
           value={draft.dailySavingsAmount}
           onChange={(v) => set("dailySavingsAmount", v)}
@@ -1818,6 +1818,31 @@ function EditNumber({
         onChange={(event) => onChange(Number(event.target.value))}
         className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
       />
+    </label>
+  );
+}
+
+function EditCompliancePlan({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const normalized = Number(value) <= 50 ? 50 : 100;
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase text-muted-foreground">{label}</span>
+      <select
+        value={String(normalized)}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-1 w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+      >
+        <option value="50">Ksh 50 / day</option>
+        <option value="100">Ksh 100 / day</option>
+      </select>
     </label>
   );
 }

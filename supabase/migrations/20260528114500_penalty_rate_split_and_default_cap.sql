@@ -6,7 +6,7 @@ set value = jsonb_set(
     '5'::jsonb,
     true
   ),
-  '{de
+  '{defaultPenaltyPct}',
   '2'::jsonb,
   true
 )

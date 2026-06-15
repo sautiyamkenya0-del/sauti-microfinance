@@ -141,6 +141,11 @@ function dailyComplianceAmountForLoan(amount: number, stored?: unknown) {
   return amount <= 5000 ? 50 : 100;
 }
 
+function normalizeDailyCompliancePlan(value: number | string | null | undefined) {
+  const amount = toNumber(value);
+  return amount <= 50 ? 50 : 100;
+}
+
 function asJsonObject(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -7361,7 +7366,7 @@ export const createLoanRecord = createServerFn({ method: "POST" })
       dailySavingsAmount:
         data?.dailySavingsAmount == null
           ? undefined
-          : Math.max(0, Number(data.dailySavingsAmount ?? 0)),
+          : normalizeDailyCompliancePlan(data.dailySavingsAmount),
       processingFeeMode: data?.processingFeeMode === "upfront" ? "upfront" : "financed",
       insuranceFeeMode: data?.insuranceFeeMode === "upfront" ? "upfront" : "financed",
       disbursementStatus:
@@ -8444,7 +8449,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       dailySavingsAmount:
         data?.dailySavingsAmount == null
           ? undefined
-          : Math.max(0, Number(data.dailySavingsAmount ?? 0)),
+          : normalizeDailyCompliancePlan(data.dailySavingsAmount),
       supplierPayloadPatch: asJsonObject(data?.supplierPayloadPatch),
       applicationLoanPatch: asJsonObject(data?.applicationLoanPatch),
       applicationApplicantPatch: asJsonObject(data?.applicationApplicantPatch),
@@ -8476,6 +8481,10 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
     );
     const termMonths = termPeriodsForLoanKind(loanKind, termDays, existingTermMonths);
     const approvedAmount = data.approvedAmount ?? data.principal;
+    const dailySavingsAmount =
+      data.dailySavingsAmount == null
+        ? Number(existingLoan.daily_savings_amount ?? 0)
+        : normalizeDailyCompliancePlan(data.dailySavingsAmount);
     const supplierPayload = asJsonObject(existingLoan.supplier_payload);
     const applicationPayload = asJsonObject(supplierPayload.application);
     const applicationLoan = asJsonObject(applicationPayload.loan);
@@ -8534,8 +8543,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
       rate: pricing.ratePct,
       term_days: termDays,
       term_months: termMonths,
-      daily_savings_amount:
-        data.dailySavingsAmount ?? Number(existingLoan.daily_savings_amount ?? 0),
+      daily_savings_amount: dailySavingsAmount,
       start_date: data.startDate ?? existingLoan.start_date,
       paid: data.paid ?? Number(existingLoan.paid ?? 0),
       purpose: data.purpose ?? existingLoan.purpose ?? null,
@@ -8596,7 +8604,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
         termDays,
         manualPenaltyAmount: data.manualPenaltyAmount ?? null,
         productChargeAmount: data.productChargeAmount ?? null,
-        dailySavingsAmount: data.dailySavingsAmount ?? null,
+        dailySavingsAmount: data.dailySavingsAmount == null ? null : dailySavingsAmount,
       },
     });
     return { ok: true };

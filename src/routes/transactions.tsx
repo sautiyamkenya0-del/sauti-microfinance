@@ -164,27 +164,30 @@ function TxPage() {
 
   const mpesaRows = useMemo(
     () =>
-      mpesaAuditRows.map((row: any) => ({
-        id: row.id,
-        date: String(row.exactReceivedAt ?? row.createdAt ?? "").slice(0, 10),
-        createdAt: row.exactReceivedAt ?? row.createdAt ?? undefined,
-        type: row.type,
-        typeLabel: row.typeLabel ?? displayTypeLabel(row.type),
-        amount: Number(row.originalAmount ?? row.amount ?? 0),
-        memberId: row.memberId ?? undefined,
-        loanId: undefined,
-        ref: row.mpesaRef ?? undefined,
-        by: row.direction === "out" ? "M-Pesa Payout" : "MPESA",
-        note: row.note ?? undefined,
-        account: row.account ?? row.memberId ?? "-",
-        displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
-        payerName: row.payerName ?? undefined,
-        direction: row.direction === "out" ? "out" : "in",
-        status: row.status ?? undefined,
-        allocations: Array.isArray(row.allocations) ? row.allocations : [],
-        allocationCount: Number(row.allocationCount ?? 0),
-        isMpesaAudit: true,
-      })),
+      mpesaAuditRows.map((row: any) => {
+        const type = String(row.type ?? "");
+        return {
+          id: row.id,
+          date: String(row.exactReceivedAt ?? row.createdAt ?? "").slice(0, 10),
+          createdAt: row.exactReceivedAt ?? row.createdAt ?? undefined,
+          type,
+          typeLabel: row.typeLabel ?? displayTypeLabel(type),
+          amount: Number(row.originalAmount ?? row.amount ?? 0),
+          memberId: row.memberId ?? undefined,
+          loanId: undefined,
+          ref: row.mpesaRef ?? undefined,
+          by: row.direction === "out" ? "M-Pesa Payout" : "MPESA",
+          note: row.note ?? undefined,
+          account: row.account ?? row.memberId ?? "-",
+          displayName: row.memberName ?? row.payerName ?? row.note ?? "-",
+          payerName: row.payerName ?? undefined,
+          direction: row.direction === "out" ? "out" : "in",
+          status: type === "mpesa_unallocated" ? "unallocated" : (row.status ?? undefined),
+          allocations: Array.isArray(row.allocations) ? row.allocations : [],
+          allocationCount: Number(row.allocationCount ?? 0),
+          isMpesaAudit: true,
+        };
+      }),
     [mpesaAuditRows],
   );
 
@@ -485,6 +488,11 @@ function TxPage() {
                       )
                     : [];
                   const allocationLabels = conciseAllocationLabels(allocationDetails);
+                  const canAllocateMpesaReceipt =
+                    transaction.isMpesaAudit &&
+                    transaction.direction === "in" &&
+                    (transaction.status === "unallocated" ||
+                      transaction.type === "mpesa_unallocated");
                   const tone =
                     transaction.type === "mpesa_unallocated"
                       ? "warning"
@@ -531,9 +539,7 @@ function TxPage() {
                           : (staffMember?.name ?? transaction.by)}
                       </td>
                       <td className="px-5 py-3">
-                        {transaction.isMpesaAudit &&
-                        transaction.direction === "in" &&
-                        transaction.status === "unallocated" ? (
+                        {canAllocateMpesaReceipt ? (
                           <button
                             type="button"
                             onClick={() => {
