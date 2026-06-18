@@ -183,14 +183,12 @@ export function buildLoanDailyLedger(args: {
     const paidToday = money(paymentsByDate.get(date));
     cumulativePaid = roundMoney(cumulativePaid + paidToday);
     const dailyBalance = roundMoney(expectedToday - paidToday);
-    const unpaidToday = Math.max(0, dailyBalance);
+    const scheduledShortfall = Math.max(0, roundMoney(scheduledInstallment - paidToday));
     const totalBalanceBeforePenalty = Math.max(0, roundMoney(totalExpected - cumulativePaid));
     const penaltyRatePct = isDefaultPhase ? defaultPenaltyPct : penaltyPct;
-    const penaltyBase = isDefaultPhase ? totalBalanceBeforePenalty : unpaidToday;
+    const penaltyBase = isDefaultPhase ? totalBalanceBeforePenalty : scheduledShortfall;
     const penalty =
-      penaltyBase > 0 && penaltyRatePct > 0
-        ? penaltyCeil(penaltyBase * (penaltyRatePct / 100))
-        : 0;
+      penaltyBase > 0 && penaltyRatePct > 0 ? penaltyCeil(penaltyBase * (penaltyRatePct / 100)) : 0;
     if (penalty > 0) {
       penaltyDays += 1;
       if (isDefaultPhase) {

@@ -90,8 +90,39 @@ function allocationTypeLabel(value?: string | null, fallback?: string | null) {
     share_purchase: "share purchase",
     fee_payment: "fee payment",
     deposit: "savings deposit / wallet top-up",
+    monthly_member_subscription: "monthly member subscription",
+    annual_member_subscription: "annual member subscription",
   };
   return labels[raw] ?? raw.replace(/_/g, " ");
+}
+
+const LOAN_COLLECTION_CREDIT_TYPES = new Set([
+  "deposit",
+  "share_purchase",
+  "loan_savings",
+  "monthly_member_subscription",
+  "annual_member_subscription",
+]);
+
+function loanCollectionCreditAmount(allocations: any[], loanId: string) {
+  const loanRepaymentAmount = allocations
+    .filter(
+      (allocation: any) =>
+        String(allocation.loanId ?? "") === loanId &&
+        String(allocation.type ?? "") === "loan_repayment",
+    )
+    .reduce((sum: number, allocation: any) => sum + Number(allocation.amount ?? 0), 0);
+  if (loanRepaymentAmount <= 0) return 0;
+  const supplementalAmount = allocations
+    .filter((allocation: any) => {
+      const allocationLoanId = String(allocation.loanId ?? "").trim();
+      return (
+        LOAN_COLLECTION_CREDIT_TYPES.has(String(allocation.type ?? "")) &&
+        (!allocationLoanId || allocationLoanId === loanId)
+      );
+    })
+    .reduce((sum: number, allocation: any) => sum + Number(allocation.amount ?? 0), 0);
+  return loanRepaymentAmount + supplementalAmount;
 }
 
 function termDaysOf(l: Loan): number {
@@ -432,10 +463,8 @@ export function LoanBook({
       const allocations = Array.isArray(row.allocations)
         ? row.allocations.filter((allocation: any) => Number(allocation.amount ?? 0) > 0)
         : [];
-      const loanAllocations = allocations.filter(
-        (allocation: any) => String(allocation.loanId ?? "") === historyFor.id,
-      );
-      if (loanAllocations.length === 0) return [];
+      const loanAmount = loanCollectionCreditAmount(allocations, historyFor.id);
+      if (loanAmount <= 0) return [];
       return [
         {
           id: String(row.id),
@@ -443,10 +472,7 @@ export function LoanBook({
           ref: row.mpesaRef ?? row.ref ?? "-",
           payer: row.memberName ?? row.payerName ?? row.account ?? "-",
           paidAmount: Number(row.originalAmount ?? row.amount ?? 0),
-          loanAmount: loanAllocations.reduce(
-            (sum: number, allocation: any) => sum + Number(allocation.amount ?? 0),
-            0,
-          ),
+          loanAmount,
           allocations,
         },
       ];

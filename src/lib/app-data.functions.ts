@@ -715,6 +715,14 @@ type LoanRepaymentPayment = {
   amount: number;
 };
 
+const LOAN_COLLECTION_CREDIT_ALLOCATION_TYPES = new Set([
+  "deposit",
+  "share_purchase",
+  "loan_savings",
+  "monthly_member_subscription",
+  "annual_member_subscription",
+]);
+
 function loanPaymentDate(row: Record<string, unknown>) {
   const raw = String(row.created_at ?? row.date ?? new Date().toISOString()).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
@@ -753,7 +761,80 @@ async function fetchLoanRepaymentPayments(runtimeDb: any, loanId: string) {
       .eq("type", "loan_repayment")
       .order("date", { ascending: true }),
   );
-  return mapLoanRepaymentPayments(rows);
+  const transactionPayments = mapLoanRepaymentPayments(rows);
+
+  let allocationRows: Record<string, unknown>[] = [];
+  try {
+    const loanAllocationRows = await fetchAllRows<Record<string, unknown>>(() =>
+      runtimeDb
+        .from("mpesa_receipt_allocations")
+        .select("id, mpesa_ref, member_id, loan_id, allocation_type, amount, created_at")
+        .eq("loan_id", loanId)
+        .eq("allocation_type", "loan_repayment")
+        .order("created_at", { ascending: true }),
+    );
+    const receiptRefs = Array.from(
+      new Set(
+        loanAllocationRows
+          .map((row) =>
+            String(row.mpesa_ref ?? "")
+              .trim()
+              .toUpperCase(),
+          )
+          .filter(Boolean),
+      ),
+    );
+    if (receiptRefs.length > 0) {
+      allocationRows = await fetchAllRows<Record<string, unknown>>(() =>
+        runtimeDb
+          .from("mpesa_receipt_allocations")
+          .select("id, mpesa_ref, member_id, loan_id, allocation_type, amount, created_at")
+          .in("mpesa_ref", receiptRefs)
+          .order("created_at", { ascending: true }),
+      );
+    }
+  } catch (error: any) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+
+  const allocationPaymentsByRef = new Map<string, LoanRepaymentPayment>();
+  for (const row of allocationRows) {
+    const ref = String(row.mpesa_ref ?? "")
+      .trim()
+      .toUpperCase();
+    if (!ref) continue;
+    const allocationType = String(row.allocation_type ?? "").trim();
+    const allocationLoanId = String(row.loan_id ?? "").trim();
+    const countsForLoan =
+      allocationLoanId === loanId ||
+      (!allocationLoanId && LOAN_COLLECTION_CREDIT_ALLOCATION_TYPES.has(allocationType));
+    if (!countsForLoan) continue;
+    if (
+      allocationType !== "loan_repayment" &&
+      !LOAN_COLLECTION_CREDIT_ALLOCATION_TYPES.has(allocationType)
+    ) {
+      continue;
+    }
+    const amount = Math.max(0, toNumber(row.amount as number | string | null | undefined));
+    if (amount <= 0) continue;
+    const existing = allocationPaymentsByRef.get(ref);
+    allocationPaymentsByRef.set(ref, {
+      id: existing?.id ?? `mpesa-allocation-credit-${ref}`,
+      ref,
+      date: existing?.date ?? loanPaymentDate(row),
+      amount: roundMoney((existing?.amount ?? 0) + amount),
+    });
+  }
+
+  const allocationRefs = new Set(allocationPaymentsByRef.keys());
+  const nonAllocationPayments = transactionPayments.filter((payment) => {
+    const ref = String(payment.ref ?? "")
+      .trim()
+      .toUpperCase();
+    return !ref || !allocationRefs.has(ref);
+  });
+
+  return [...nonAllocationPayments, ...allocationPaymentsByRef.values()];
 }
 
 async function liveLoanAccountingSummary(
@@ -1583,9 +1664,10 @@ async function findExistingMpesaTransaction(args: {
     member_id?: string | null;
     amount?: number;
   }>;
-  return (args.ignoreUnallocated
-    ? rows.find((row) => row.type !== "mpesa_unallocated")
-    : rows[0]) ?? null;
+  return (
+    (args.ignoreUnallocated ? rows.find((row) => row.type !== "mpesa_unallocated") : rows[0]) ??
+    null
+  );
 }
 
 async function createProcessedMpesaLedgerLink(args: {
@@ -5137,12 +5219,7 @@ async function buildAppData(version?: string) {
   );
   const loanRows = loansResult.data ?? [];
   const appraisalRows = appraisalsResult.data ?? [];
-  await repairLoanStartDatesFromAppraisals(
-    supabaseAdmin,
-    loanRows,
-    appraisalRows,
-    transactionRows,
-  );
+  await repairLoanStartDatesFromAppraisals(supabaseAdmin, loanRows, appraisalRows, transactionRows);
 
   return {
     ...base,
@@ -5578,15 +5655,13 @@ export const allocateUnallocatedMpesaReceiptRecord = createServerFn({ method: "P
     const member = await findMemberByMembershipInput(data.memberId);
     if (!member) throw new Error("That member could not be found.");
 
-    let event:
-      | {
-          id: string;
-          amount?: number | string | null;
-          mpesa_ref?: string | null;
-          payer_name?: string | null;
-          transaction_id?: string | null;
-        }
-      | null = null;
+    let event: {
+      id: string;
+      amount?: number | string | null;
+      mpesa_ref?: string | null;
+      payer_name?: string | null;
+      transaction_id?: string | null;
+    } | null = null;
 
     if (data.receiptId && !data.receiptId.startsWith("allocation-receipt-")) {
       const { data: eventRow, error: eventError } = await supabaseAdmin

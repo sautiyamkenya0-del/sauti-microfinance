@@ -28,18 +28,60 @@ function dateFromDateTime(value?: string | null) {
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
 }
 
+const LOAN_COLLECTION_CREDIT_TYPES = new Set([
+  "deposit",
+  "share_purchase",
+  "loan_savings",
+  "monthly_member_subscription",
+  "annual_member_subscription",
+]);
+
 function receiptLoanRepayments(rows: any[]) {
   return rows.flatMap((row): Transaction[] => {
     const allocations = Array.isArray(row.allocations) ? row.allocations : [];
     const paidAt = row.exactReceivedAt ?? row.createdAt ?? row.date;
-    return allocations
-      .filter(
-        (allocation: any) =>
-          String(allocation.type ?? "") === "loan_repayment" &&
-          String(allocation.loanId ?? "").trim() &&
-          Number(allocation.amount ?? 0) > 0,
-      )
-      .map((allocation: any) => ({
+    const loanAllocations = allocations.filter(
+      (allocation: any) =>
+        String(allocation.type ?? "") === "loan_repayment" &&
+        String(allocation.loanId ?? "").trim() &&
+        Number(allocation.amount ?? 0) > 0,
+    );
+    const linkedLoanIds = new Set(
+      loanAllocations.map((allocation: any) => String(allocation.loanId ?? "").trim()),
+    );
+    const supplementalCredit = linkedLoanIds.size
+      ? allocations
+          .filter((allocation: any) => {
+            const type = String(allocation.type ?? "");
+            const loanId = String(allocation.loanId ?? "").trim();
+            return (
+              LOAN_COLLECTION_CREDIT_TYPES.has(type) &&
+              (!loanId || linkedLoanIds.has(loanId)) &&
+              Number(allocation.amount ?? 0) > 0
+            );
+          })
+          .reduce((sum: number, allocation: any) => sum + Number(allocation.amount ?? 0), 0)
+      : 0;
+    const primaryLoanId = String(loanAllocations[0]?.loanId ?? "").trim();
+    const supplementalTransaction =
+      supplementalCredit > 0 && primaryLoanId
+        ? [
+            {
+              id: `mpesa-collection-credit-${row.id}`,
+              date: dateFromDateTime(paidAt),
+              createdAt: paidAt,
+              type: "loan_repayment" as const,
+              amount: supplementalCredit,
+              memberId: String(loanAllocations[0]?.memberId ?? row.memberId ?? ""),
+              loanId: primaryLoanId,
+              ref: row.mpesaRef ?? row.ref,
+              by: "MPESA",
+              note: "Loan collection credit from receipt compliance and subscription split",
+            },
+          ]
+        : [];
+    return [
+      ...loanAllocations.map((allocation: any) => ({
         id: `mpesa-allocation-${allocation.id}`,
         date: dateFromDateTime(paidAt),
         createdAt: paidAt,
@@ -50,7 +92,9 @@ function receiptLoanRepayments(rows: any[]) {
         ref: row.mpesaRef ?? row.ref,
         by: "MPESA",
         note: allocation.note ?? row.note,
-      }));
+      })),
+      ...supplementalTransaction,
+    ];
   });
 }
 
