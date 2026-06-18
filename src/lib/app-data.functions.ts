@@ -5771,6 +5771,14 @@ export const triggerPurposePoolRedistributionRecord = createServerFn({ method: "
   },
 );
 
+async function resolveExistingStaffId(runtimeDb: any, staffId?: string | null) {
+  const id = String(staffId ?? "").trim();
+  if (!id) return null;
+  const { data, error } = await runtimeDb.from("staff").select("id").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.id ?? null;
+}
+
 export const createMemberRecord = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
@@ -5891,7 +5899,10 @@ export const createMemberRecord = createServerFn({ method: "POST" })
     const lastName =
       [data.secondName, data.thirdName].filter(Boolean).join(" ").trim() || undefined;
     const hasShop = data.businessPermanence === "permanent";
-    const fieldOfficerId = data.fieldOfficerId ?? actor.id;
+    const fieldOfficerId = await resolveExistingStaffId(
+      supabaseAdmin,
+      data.fieldOfficerId ?? actor.id,
+    );
     const investorOnly = memberCategory === "investor" && !memberTags.includes("member");
     const serviceOnly = memberTags.includes("service") && !memberTags.includes("member");
     const shares = investorOnly ? 0 : data.shares;
@@ -6188,6 +6199,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
           );
     }
 
+    const fieldOfficerId = await resolveExistingStaffId(supabaseAdmin, data.fieldOfficerId);
     const memberPayload = {
       name: data.name,
       phone,
@@ -6213,7 +6225,7 @@ export const updateMemberRecord = createServerFn({ method: "POST" })
       business_permanence: data.businessPermanence ?? null,
       business_address: data.businessAddress ?? null,
       vehicle_plate: data.vehiclePlate ?? null,
-      field_officer_id: data.fieldOfficerId ?? null,
+      field_officer_id: fieldOfficerId,
       member_category: memberCategory,
       member_tags: memberTags,
       is_investor: memberTags.includes("investor") || isInvestorCategory(memberCategory),
