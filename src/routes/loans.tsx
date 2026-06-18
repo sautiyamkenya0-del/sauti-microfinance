@@ -127,7 +127,8 @@ export const Route = createFileRoute("/loans")({
 });
 
 function LoansHub() {
-  const { appMode, currentUser, memberLoanCount, members, loans, policySettings } = useStore();
+  const { appMode, currentUser, memberLoanCount, members, loans, policySettings, reloadAppData } =
+    useStore();
   const loadCarryoverLoans = useServerFn(listAllCarryoverLoans);
   const saveCarryoverLoan = useServerFn(upsertMemberCarryoverLoanRecord);
   const [tab, setTab] = useState<Tab>("book");
@@ -144,6 +145,10 @@ function LoansHub() {
         toast.error(error?.message ?? "Failed to load carryover loan records.");
       });
   }, [loadCarryoverLoans]);
+
+  const refreshLoanWorkspace = useCallback(async () => {
+    await Promise.all([reloadAppData(), refreshCarryoverLoans()]);
+  }, [refreshCarryoverLoans, reloadAppData]);
 
   useEffect(() => {
     void refreshCarryoverLoans();
@@ -421,7 +426,7 @@ function LoansHub() {
             memberId={historyMemberId}
             carryoverLoans={carryoverLoans}
             onClose={() => setHistoryMemberId(null)}
-            onCarryoverChanged={refreshCarryoverLoans}
+            onLoansChanged={refreshLoanWorkspace}
             onNewLoan={(id) => {
               setSelectedMemberId(id);
               setHistoryMemberId(null);

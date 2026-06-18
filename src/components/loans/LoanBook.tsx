@@ -1194,12 +1194,15 @@ export function MemberLoanHistory({
   carryoverLoans = [],
   onClose,
   onNewLoan,
+  onLoansChanged,
   onCarryoverChanged,
 }: {
   memberId: string;
   carryoverLoans?: LegacyCarryoverLoan[];
   onClose: () => void;
   onNewLoan: (memberId: string, isFirstTime: boolean) => void;
+  onLoansChanged?: () => Promise<unknown>;
+  /** @deprecated Use onLoansChanged so live and carryover edits refresh the same workspace data. */
   onCarryoverChanged?: () => Promise<unknown>;
 }) {
   const updateLiveLoan = useServerFn(updateLoanRecord);
@@ -1286,7 +1289,7 @@ export function MemberLoanHistory({
             dailySavingsAmount: editDraft.dailySavingsAmount,
           },
         });
-        await reloadAppData();
+        await (onLoansChanged ?? reloadAppData)();
       } else {
         const loan = memberCarryoverLoans.find((item) => item.id === editing.id);
         if (!loan) throw new Error("Carryover loan not found.");
@@ -1322,8 +1325,7 @@ export function MemberLoanHistory({
             notes: loan.notes,
           },
         });
-        await onCarryoverChanged?.();
-        await reloadAppData();
+        await (onLoansChanged ?? onCarryoverChanged ?? reloadAppData)();
       }
       toast.success("Loan details updated");
       setEditing(null);

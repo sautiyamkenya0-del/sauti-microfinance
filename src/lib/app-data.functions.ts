@@ -929,7 +929,9 @@ function nextLiveLoanStatus(
   summary: { totalOwedNow: number; dueDate: string },
   asOfDate: string = new Date().toISOString().slice(0, 10),
 ): "pending" | "active" | "closed" | "defaulted" | "rejected" {
-  if (currentStatus === "pending" || currentStatus === "rejected") return currentStatus;
+  if (currentStatus === "pending" || currentStatus === "rejected" || currentStatus === "closed") {
+    return currentStatus;
+  }
   if (summary.totalOwedNow <= 0) return "closed";
   if (summary.dueDate < asOfDate || currentStatus === "defaulted") return "defaulted";
   return "active";
@@ -8627,7 +8629,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
         data.penaltyWaivedAmount ?? Number(existingLoan.penalty_waived_amount ?? 0),
     };
     const currentStatus = data.status ?? String(existingLoan.status ?? "active");
-    if (currentStatus === "pending" || currentStatus === "rejected") {
+    if (currentStatus === "pending" || currentStatus === "rejected" || currentStatus === "closed") {
       updatePatch.status = currentStatus;
     }
 
@@ -8638,7 +8640,7 @@ export const updateLoanRecord = createServerFn({ method: "POST" })
     if (updateError) throw new Error(updateError.message);
 
     const updatedLoan = { ...existingLoan, ...updatePatch };
-    if (currentStatus !== "pending" && currentStatus !== "rejected") {
+    if (currentStatus !== "pending" && currentStatus !== "rejected" && currentStatus !== "closed") {
       const summary = await liveLoanAccountingSummary(runtimeDb, updatedLoan, policySettings, {
         fallbackPaid: data.paid,
       });
